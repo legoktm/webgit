@@ -20,7 +20,7 @@ thread_local! {
 }
 
 fn is_session_cacheable(url: &str) -> bool {
-    url.ends_with("/packed-refs")
+    url.ends_with("/packed-refs") || url.ends_with(".pack")
 }
 
 thread_local! {
