@@ -119,8 +119,6 @@ dependencies = [
 [[package]]
 name = "git-async"
 version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c4a751194e46f152b5bb329cb3143ee007f2c032d712a4453b508109abaf6670"
 dependencies = [
  "accessory",
  "chrono",
