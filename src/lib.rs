@@ -403,7 +403,6 @@ async fn handle_route(
         Some(Route::Summary) => {
             hide_path_bar(doc);
             set_active_tab(doc, "#!/summary");
-            output.set_inner_html("<p class=\"msg\">Loading\u{2026}</p>");
             render_summary(head_commit, repo, clone_url, &output).await;
         }
         Some(Route::Tree(path)) => {
@@ -429,6 +428,31 @@ async fn handle_route(
 }
 
 // ---------------------------------------------------------------------------
+// Fetch-stats formatting
+// ---------------------------------------------------------------------------
+
+fn format_bytes(b: u64) -> String {
+    if b < 1_024 {
+        format!("{} B", b)
+    } else if b < 1_024 * 1_024 {
+        format!("{} KB", b / 1_024)
+    } else {
+        format!("{:.1} MB", b as f64 / (1_024.0 * 1_024.0))
+    }
+}
+
+fn format_stats(label: &str, reqs: u32, bytes: u64) -> String {
+    format!("{}: {} requests, {}", label, reqs, format_bytes(bytes))
+}
+
+fn set_stats_loaded(doc: &Document) {
+    let (reqs, bytes) = fetch::fetch_stats();
+    if let Some(el) = doc.get_element_by_id("fetch-stats") {
+        el.set_text_content(Some(&format_stats("Loaded", reqs, bytes)));
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Initial repo load
 // ---------------------------------------------------------------------------
 
@@ -438,10 +462,13 @@ async fn load_repo(url: String, doc: Document) {
         None => return,
     };
 
-    output.set_inner_html(&format!(
-        "<p class=\"msg\">Opening repo at <code>{}</code>\u{2026}</p>",
-        url
-    ));
+    // Register live progress updates on the persistent stats bar.
+    let stats_el = doc.get_element_by_id("fetch-stats");
+    fetch::reset_and_watch(Box::new(move |reqs, bytes| {
+        if let Some(el) = &stats_el {
+            el.set_text_content(Some(&format_stats("Loading\u{2026}", reqs, bytes)));
+        }
+    }));
 
     let dir = HttpDirectory::new(url.clone());
     let repo = match Repo::<HttpFilesystem>::open(dir).await {
@@ -465,8 +492,6 @@ async fn load_repo(url: String, doc: Document) {
         }
         Ok(h) => h,
     };
-
-    output.set_inner_html("<p class=\"msg\">Loading\u{2026}</p>");
 
     let commit = match head.peel_to_commit(&repo).await {
         Ok(Some(c)) => c,
@@ -543,6 +568,7 @@ async fn load_repo(url: String, doc: Document) {
         &doc,
     )
     .await;
+    set_stats_loaded(&doc);
 
     // hashchange listener.
     let doc_c = doc.clone();
@@ -563,6 +589,7 @@ async fn load_repo(url: String, doc: Document) {
         let clone_url = Rc::clone(&clone_url_c);
         wasm_bindgen_futures::spawn_local(async move {
             handle_route(hash, &head_commit, &root_tree, &repo, &clone_url, &doc).await;
+            set_stats_loaded(&doc);
         });
     });
 

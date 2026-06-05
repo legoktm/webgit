@@ -194,7 +194,18 @@ code {
     border-radius: 2px;
 }
 
-/* ── Path breadcrumb bar ─────────────────────────────────────── */
+/* ── Fetch stats bar ────────────────────────────────────────────── */
+#fetch-stats {
+    background: var(--bg-nav);
+    border-bottom: 1px solid var(--border);
+    padding: 0.2rem 1rem;
+    font-size: 0.8rem;
+    font-family: var(--mono);
+    color: var(--text-dim);
+    min-height: 1.4rem; /* reserve space so the layout doesn't jump */
+}
+
+/* ── Path breadcrumb bar ─────────────────────────────────────────── */
 #path-bar {
     background: var(--bg-nav);
     border-bottom: 1px solid var(--border);
