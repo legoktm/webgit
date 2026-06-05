@@ -1,5 +1,6 @@
 use git_async::file_system::FileSystemError;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{Request, RequestInit, RequestMode, Response};
@@ -10,6 +11,18 @@ use web_sys::{Request, RequestInit, RequestMode, Response};
 
 type ProgressFn = Box<dyn Fn(u32, u64, u64)>;
 
+// ---------------------------------------------------------------------------
+// Session-scoped URL cache (avoids re-fetching stable files like packed-refs)
+// ---------------------------------------------------------------------------
+
+thread_local! {
+    static SESSION_CACHE: RefCell<HashMap<String, Vec<u8>>> = RefCell::new(HashMap::new());
+}
+
+fn is_session_cacheable(url: &str) -> bool {
+    url.ends_with("/packed-refs")
+}
+
 thread_local! {
     /// (request_count, total_bytes, cached_bytes)
     static STATS: RefCell<(u32, u64, u64)> = const { RefCell::new((0, 0, 0)) };
@@ -19,6 +32,7 @@ thread_local! {
 /// Reset the counters to zero and register a callback that is invoked after
 /// every fetch or cache hit with `(request_count, total_bytes, cached_bytes)`.
 pub(crate) fn reset_and_watch(f: Box<dyn Fn(u32, u64, u64)>) {
+    SESSION_CACHE.with(|c| c.borrow_mut().clear());
     STATS.with(|s| *s.borrow_mut() = (0, 0, 0));
     ON_PROGRESS.with(|cb| *cb.borrow_mut() = Some(f));
 }
@@ -69,6 +83,14 @@ async fn send(url: &str) -> Result<Response, FileSystemError> {
 }
 
 pub(crate) async fn fetch_bytes(url: &str) -> Result<Vec<u8>, FileSystemError> {
+    if is_session_cacheable(url) {
+        let hit = SESSION_CACHE.with(|c| c.borrow().get(url).cloned());
+        if let Some(bytes) = hit {
+            record_cache_hit(bytes.len() as u64);
+            return Ok(bytes);
+        }
+    }
+
     let resp = send(url).await?;
     if resp.status() == 404 {
         fire_progress(1, 0);
@@ -82,6 +104,9 @@ pub(crate) async fn fetch_bytes(url: &str) -> Result<Vec<u8>, FileSystemError> {
     .map_err(|e| FileSystemError::Other(Box::new(e.as_string().unwrap_or_default())))?;
     let bytes = js_sys::Uint8Array::new(&array_buffer).to_vec();
     fire_progress(1, bytes.len() as u64);
+    if is_session_cacheable(url) {
+        SESSION_CACHE.with(|c| c.borrow_mut().insert(url.to_string(), bytes.clone()));
+    }
     Ok(bytes)
 }
 

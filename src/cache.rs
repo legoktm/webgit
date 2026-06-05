@@ -2,7 +2,7 @@ use crate::fs::HttpFilesystem;
 use git_async::Repo;
 use git_async::error::{Error as GitError, GResult};
 use git_async::object::{Commit, Object, ObjectId, ObjectType, RawObject};
-use git_async::reference::{Ref, RefName};
+use git_async::reference::{Ref, RefName, RefTarget};
 use std::collections::BTreeSet;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
@@ -10,8 +10,9 @@ use wasm_bindgen_futures::JsFuture;
 use web_sys::{IdbDatabase, IdbOpenDbRequest, IdbRequest, IdbTransactionMode};
 
 const DB_NAME: &str = "webgit";
-const DB_VERSION: u32 = 1;
-const STORE: &str = "objects";
+const DB_VERSION: u32 = 2;
+const STORE_OBJECTS: &str = "objects";
+const STORE_TAG_REFS: &str = "tag_refs";
 
 // ---------------------------------------------------------------------------
 // CachingRepo
@@ -20,10 +21,11 @@ const STORE: &str = "objects";
 pub(crate) struct CachingRepo {
     inner: Repo<HttpFilesystem>,
     db: Option<IdbDatabase>,
+    repo_url: String,
 }
 
 impl CachingRepo {
-    pub(crate) async fn open(inner: Repo<HttpFilesystem>) -> Self {
+    pub(crate) async fn open(inner: Repo<HttpFilesystem>, repo_url: String) -> Self {
         let db = open_db()
             .await
             .inspect_err(|e| {
@@ -33,7 +35,11 @@ impl CachingRepo {
                 );
             })
             .ok();
-        Self { inner, db }
+        Self {
+            inner,
+            db,
+            repo_url,
+        }
     }
 
     // --- Core cached lookup ---------------------------------------------------
@@ -93,15 +99,64 @@ impl CachingRepo {
     }
 
     pub(crate) async fn lookup_ref(&self, name: &RefName) -> GResult<Ref> {
+        // Tag refs are immutable: cache the name → OID mapping permanently.
+        if let RefName::Ref(b) = name
+            && let Some(short) = b.strip_prefix(b"tags/")
+        {
+            let short = String::from_utf8_lossy(short).into_owned();
+            if let Some(oid) = self.tag_ref_get(&short).await {
+                return Ok(Ref::new_direct(name.clone(), oid));
+            }
+            let r = self.inner.lookup_ref(name).await?;
+            if let RefTarget::Direct(oid) = r.target() {
+                self.tag_ref_set(&short, *oid).await;
+            }
+            return Ok(r);
+        }
         self.inner.lookup_ref(name).await
     }
 
     // --- IndexedDB helpers ---------------------------------------------------
 
+    async fn tag_ref_get(&self, short: &str) -> Option<ObjectId> {
+        let db = self.db.as_ref()?;
+        let key = format!("{}::tags/{}", self.repo_url, short);
+        let tx = db.transaction_with_str(STORE_TAG_REFS).ok()?;
+        let store = tx.object_store(STORE_TAG_REFS).ok()?;
+        let req = store.get(&JsValue::from_str(&key)).ok()?;
+        let result = await_request(&req).await.ok()?;
+        if result.is_undefined() || result.is_null() {
+            return None;
+        }
+        let oid_str = js_sys::Reflect::get(&result, &"oid".into())
+            .ok()?
+            .as_string()?;
+        ObjectId::from_hex(oid_str.as_bytes())
+    }
+
+    async fn tag_ref_set(&self, short: &str, oid: ObjectId) {
+        let Some(db) = self.db.as_ref() else { return };
+        let key = format!("{}::tags/{}", self.repo_url, short);
+        let Ok(tx) =
+            db.transaction_with_str_and_mode(STORE_TAG_REFS, IdbTransactionMode::Readwrite)
+        else {
+            return;
+        };
+        let Ok(store) = tx.object_store(STORE_TAG_REFS) else {
+            return;
+        };
+        let record = js_sys::Object::new();
+        js_sys::Reflect::set(&record, &"id".into(), &JsValue::from_str(&key)).ok();
+        js_sys::Reflect::set(&record, &"oid".into(), &JsValue::from_str(&oid.to_string())).ok();
+        if let Ok(req) = store.put(&record) {
+            await_request(&req).await.ok();
+        }
+    }
+
     async fn idb_get(&self, id: ObjectId) -> Option<RawObject> {
         let db = self.db.as_ref()?;
-        let tx = db.transaction_with_str(STORE).ok()?;
-        let store = tx.object_store(STORE).ok()?;
+        let tx = db.transaction_with_str(STORE_OBJECTS).ok()?;
+        let store = tx.object_store(STORE_OBJECTS).ok()?;
         let req = store.get(&JsValue::from_str(&id.to_string())).ok()?;
         let result = await_request(&req).await.ok()?;
         if result.is_undefined() || result.is_null() {
@@ -119,10 +174,11 @@ impl CachingRepo {
 
     async fn idb_set(&self, id: ObjectId, raw: &RawObject) {
         let Some(db) = self.db.as_ref() else { return };
-        let Ok(tx) = db.transaction_with_str_and_mode(STORE, IdbTransactionMode::Readwrite) else {
+        let Ok(tx) = db.transaction_with_str_and_mode(STORE_OBJECTS, IdbTransactionMode::Readwrite)
+        else {
             return;
         };
-        let Ok(store) = tx.object_store(STORE) else {
+        let Ok(store) = tx.object_store(STORE_OBJECTS) else {
             return;
         };
 
@@ -177,15 +233,25 @@ async fn open_db() -> Result<IdbDatabase, JsValue> {
         .ok_or_else(|| JsValue::from_str("no indexedDB"))?;
     let open_req = factory.open_with_u32(DB_NAME, DB_VERSION)?;
 
-    // Create the object store on first run / version bump.
+    // Migrate the schema incrementally based on the previous version.
     let upgrade_cb = Closure::<dyn FnMut(web_sys::IdbVersionChangeEvent)>::new(
         |event: web_sys::IdbVersionChangeEvent| {
             let req: IdbOpenDbRequest = event.target().unwrap().dyn_into().unwrap();
             let db: IdbDatabase = req.result().unwrap().dyn_into().unwrap();
-            let params = web_sys::IdbObjectStoreParameters::new();
-            params.set_key_path(&JsValue::from_str("oid"));
-            db.create_object_store_with_optional_parameters(STORE, &params)
-                .ok();
+            let old = event.old_version() as u32;
+
+            if old < 1 {
+                let params = web_sys::IdbObjectStoreParameters::new();
+                params.set_key_path(&JsValue::from_str("oid"));
+                db.create_object_store_with_optional_parameters(STORE_OBJECTS, &params)
+                    .ok();
+            }
+            if old < 2 {
+                let params = web_sys::IdbObjectStoreParameters::new();
+                params.set_key_path(&JsValue::from_str("id"));
+                db.create_object_store_with_optional_parameters(STORE_TAG_REFS, &params)
+                    .ok();
+            }
         },
     );
     open_req.set_onupgradeneeded(Some(upgrade_cb.as_ref().unchecked_ref()));

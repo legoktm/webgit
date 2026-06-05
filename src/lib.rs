@@ -50,7 +50,7 @@ async fn load_repo(url: String, doc: Document) {
         }
         Ok(r) => r,
     };
-    let repo = CachingRepo::open(repo).await;
+    let repo = CachingRepo::open(repo, url.clone()).await;
 
     let head = match repo.head().await {
         Err(e) => {
