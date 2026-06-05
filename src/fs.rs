@@ -1,20 +1,18 @@
-use crate::fetch::{fetch_bytes, fetch_text};
+use crate::fetch::{check_exists, fetch_bytes, fetch_text};
 use git_async::file_system::{DirEntry, Directory, File, FileSystem, FileSystemError, Offset};
-use wasm_bindgen::JsCast;
+use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{DomParser, SupportedType};
 
 #[allow(dead_code)]
 pub(crate) struct HttpFile {
     url: String,
-    /// Fetched eagerly by `open_file` so that a 404 surfaces as
-    /// `FileSystemError::NotFound` during `open_file`, which is when
-    /// `git-async` checks for it (to fall back to `packed-refs`).
-    pub(crate) data: Vec<u8>,
 }
 
 impl File for HttpFile {
     async fn read_all(&mut self) -> Result<Vec<u8>, FileSystemError> {
-        Ok(self.data.clone())
+        web_sys::console::debug_1(&JsValue::from_str(&format!("read_all for {}", &self.url)));
+        let data = fetch_bytes(&self.url, None).await?;
+        Ok(data)
     }
 
     async fn read_segment(
@@ -22,14 +20,25 @@ impl File for HttpFile {
         offset: Offset,
         dest: &mut [u8],
     ) -> Result<usize, FileSystemError> {
+        web_sys::console::debug_1(&JsValue::from_str(&format!(
+            "read_segment({}, {}) for {}",
+            offset.0,
+            offset.0 as usize + dest.len(),
+            &self.url
+        )));
         let start = offset.0 as usize;
-        if start >= self.data.len() {
+        let range = format!("bytes={start}-{}", dest.len() - 1 + start);
+        let data = fetch_bytes(&self.url, Some(range)).await?;
+        // FIXME: Handle 416 invalid range
+        dest.copy_from_slice(&data);
+        Ok(data.len())
+        /*        if start >= data.len() {
             return Ok(0);
         }
-        let available = &self.data[start..];
+        let available = &data[start..];
         let n = dest.len().min(available.len());
         dest[..n].copy_from_slice(&available[..n]);
-        Ok(n)
+        Ok(n)*/
     }
 }
 
@@ -154,8 +163,8 @@ impl Directory<HttpFile> for HttpDirectory {
         let name_str = std::str::from_utf8(name)
             .map_err(|e| FileSystemError::Other(Box::new(e.to_string())))?;
         let url = format!("{}/{}", self.base_url, name_str);
-        let data = fetch_bytes(&url).await?;
-        Ok(HttpFile { url, data })
+        check_exists(&url).await?;
+        Ok(HttpFile { url })
     }
 }
 

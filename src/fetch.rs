@@ -3,7 +3,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
-use web_sys::{Request, RequestInit, RequestMode, Response};
+use web_sys::{Headers, Request, RequestInit, RequestMode, Response};
 
 // ---------------------------------------------------------------------------
 // Per-load stats + progress hook
@@ -20,7 +20,7 @@ thread_local! {
 }
 
 fn is_session_cacheable(url: &str) -> bool {
-    url.ends_with("/packed-refs") || url.ends_with(".pack")
+    url.ends_with("/packed-refs")
 }
 
 thread_local! {
@@ -66,12 +66,21 @@ fn fire(req_delta: u32, byte_delta: u64, cache_delta: u64) {
     });
 }
 
-async fn send(url: &str) -> Result<Response, FileSystemError> {
+enum Method {
+    Head,
+    Get,
+}
+
+async fn send(url: &str, method: Method, headers: &Headers) -> Result<Response, FileSystemError> {
     let window = web_sys::window()
         .ok_or_else(|| FileSystemError::Other(Box::new("no window".to_string())))?;
     let opts = RequestInit::new();
-    opts.set_method("GET");
+    opts.set_method(match method {
+        Method::Get => "GET",
+        Method::Head => "HEAD",
+    });
     opts.set_mode(RequestMode::Cors);
+    opts.set_headers_headers(headers);
     let request = Request::new_with_str_and_init(url, &opts)
         .map_err(|e| FileSystemError::Other(Box::new(e.as_string().unwrap_or_default())))?;
     let resp_value = JsFuture::from(window.fetch_with_request(&request))
@@ -82,8 +91,21 @@ async fn send(url: &str) -> Result<Response, FileSystemError> {
         .map_err(|_| FileSystemError::Other(Box::new("not a Response".to_string())))
 }
 
-pub(crate) async fn fetch_bytes(url: &str) -> Result<Vec<u8>, FileSystemError> {
-    if is_session_cacheable(url) {
+pub(crate) async fn check_exists(url: &str) -> Result<(), FileSystemError> {
+    let resp = send(url, Method::Head, &Headers::new().unwrap()).await?;
+    fire_progress(1, 0);
+    if resp.status() == 404 {
+        Err(FileSystemError::NotFound(Box::new(url.to_string())))
+    } else {
+        Ok(())
+    }
+}
+
+pub(crate) async fn fetch_bytes(
+    url: &str,
+    range: Option<String>,
+) -> Result<Vec<u8>, FileSystemError> {
+    if is_session_cacheable(url) && range.is_none() {
         let hit = SESSION_CACHE.with(|c| c.borrow().get(url).cloned());
         if let Some(bytes) = hit {
             record_cache_hit(bytes.len() as u64);
@@ -91,7 +113,12 @@ pub(crate) async fn fetch_bytes(url: &str) -> Result<Vec<u8>, FileSystemError> {
         }
     }
 
-    let resp = send(url).await?;
+    let headers = Headers::new().unwrap();
+    if let Some(range) = range {
+        headers.set("Range", &range).unwrap();
+    }
+
+    let resp = send(url, Method::Get, &headers).await?;
     if resp.status() == 404 {
         fire_progress(1, 0);
         return Err(FileSystemError::NotFound(Box::new(url.to_string())));
@@ -111,6 +138,6 @@ pub(crate) async fn fetch_bytes(url: &str) -> Result<Vec<u8>, FileSystemError> {
 }
 
 pub(crate) async fn fetch_text(url: &str) -> Result<String, FileSystemError> {
-    let bytes = fetch_bytes(url).await?;
+    let bytes = fetch_bytes(url, None).await?;
     String::from_utf8(bytes).map_err(|e| FileSystemError::Other(Box::new(e.to_string())))
 }
