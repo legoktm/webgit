@@ -17,7 +17,7 @@
             <td class="name"><a href="#!/tree">{{ b.name }}</a></td>
             <td class="msg">{{ b.message }}</td>
             <td class="author">{{ b.author }}</td>
-            <td class="age">{{ b.age }}</td>
+            <td class="age">{{ b.age | age_string }}</td>
         </tr>
         {% endfor %}
     </tbody>
