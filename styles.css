@@ -4,6 +4,10 @@
     box-sizing: border-box;
 }
 
+.hide {
+    display: none;
+}
+
 /* ── Palette (light blue-tinted cgit) ───────────────────────────── */
 :root {
     --bg: #f0f4ff;

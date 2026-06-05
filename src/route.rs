@@ -18,13 +18,13 @@ pub(crate) fn set_text(doc: &Document, id: &str, text: &str) {
 
 fn show(doc: &Document, id: &str) {
     if let Some(el) = doc.get_element_by_id(id) {
-        let _ = el.remove_attribute("style");
+        el.class_list().remove_1("hide").unwrap();
     }
 }
 
 fn hide_path_bar(doc: &Document) {
     if let Some(el) = doc.get_element_by_id("path-bar") {
-        el.set_attribute("style", "display:none").ok();
+        el.class_list().add_1("hide").unwrap();
     }
 }
 
