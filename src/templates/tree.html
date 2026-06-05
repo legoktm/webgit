@@ -1,0 +1,23 @@
+<table class="tree-table">
+  <thead>
+    <tr>
+      <th>Mode</th>
+      <th>Name</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for entry in entries %}
+    <tr>
+      <td class="mode">{{ entry.mode }}</td>
+      <td class="name">
+        {% if entry.is_dir %}
+        <a href="#">{{ entry.name }}</a>
+        {% else %}
+        <a class="file" href="#">{{ entry.name }}</a>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+""

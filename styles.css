@@ -1,0 +1,214 @@
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+}
+
+/* ── Palette (light blue-tinted cgit) ───────────────────────────── */
+:root {
+    --bg: #f0f4ff;
+    --bg-header: #dce6f8;
+    --bg-nav: #e4ecfa;
+    --bg-alt: #e8effe; /* alternating row tint */
+    --border: #b0c4e8;
+    --text: #111827;
+    --text-dim: #4a5a7a;
+    --link: #1a56c4;
+    --link-dir: #1a56c4;
+    --accent: #1a56c4; /* active nav tab bg */
+    --accent-fg: #ffffff;
+    --tab-border: #1a56c4;
+    --mono: "SFMono-Regular", "Consolas", "Liberation Mono", monospace;
+}
+
+html,
+body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    min-height: 100vh;
+}
+
+a {
+    color: var(--link);
+    text-decoration: none;
+}
+a:hover {
+    text-decoration: underline;
+}
+
+/* ── Page header ─────────────────────────────────────────────── */
+#header {
+    background: var(--bg-header);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.6rem 1rem;
+}
+
+#header-logo {
+    font-size: 1.5rem;
+    font-weight: bold;
+    color: var(--link);
+    letter-spacing: 0.03em;
+    white-space: nowrap;
+}
+
+#header-sub {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+}
+
+#repo-path {
+    font-size: 1.35rem;
+    font-weight: normal;
+    color: var(--text);
+    margin: 0;
+}
+
+#repo-desc {
+    font-size: 0.85rem;
+    color: var(--text-dim);
+}
+
+/* ── Nav tabs ────────────────────────────────────────────────── */
+#nav {
+    background: var(--bg-nav);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    padding: 0 1rem;
+}
+
+#nav a {
+    display: inline-block;
+    padding: 0.45rem 0.85rem;
+    color: var(--text-dim);
+    font-size: 0.9rem;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    text-decoration: none;
+}
+#nav a:hover {
+    color: var(--text);
+}
+#nav a.active {
+    color: var(--accent-fg);
+    border-bottom-color: var(--accent);
+    background: var(--accent);
+}
+
+/* ── Main content area ───────────────────────────────────────── */
+#content {
+    padding: 1rem;
+}
+
+/* ── File/tree table ─────────────────────────────────────────── */
+.tree-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+}
+
+.tree-table th {
+    text-align: left;
+    padding: 0.3rem 0.6rem;
+    color: var(--text-dim);
+    border-bottom: 1px solid var(--border);
+    font-weight: bold;
+}
+
+.tree-table td {
+    padding: 0.2rem 0.6rem;
+    font-family: var(--mono);
+    white-space: nowrap;
+}
+
+.tree-table tr:nth-child(even) td {
+    background: var(--bg-alt);
+}
+
+.tree-table td.mode {
+    color: var(--text-dim);
+    min-width: 10em;
+}
+.tree-table td.name {
+    min-width: 16em;
+}
+.tree-table td.name a {
+    color: var(--link-dir);
+    font-weight: bold;
+}
+.tree-table td.name a.file {
+    color: var(--text);
+    font-weight: normal;
+}
+.tree-table td.size {
+    text-align: right;
+    color: var(--text-dim);
+    padding-right: 1.2rem;
+}
+.tree-table td.desc {
+    color: var(--text-dim);
+    font-family: sans-serif;
+    white-space: normal;
+}
+
+/* ── Commit info strip ───────────────────────────────────────── */
+#commit-strip {
+    background: var(--bg-alt);
+    border: 1px solid var(--border);
+    padding: 0.5rem 0.8rem;
+    margin-bottom: 0.75rem;
+    font-size: 0.85rem;
+    color: var(--text-dim);
+    display: flex;
+    gap: 1.5rem;
+    flex-wrap: wrap;
+}
+#commit-strip span {
+    white-space: nowrap;
+}
+#commit-strip .label {
+    color: var(--text);
+}
+
+/* ── Spinner ─────────────────────────────────────────────────── */
+.spinner {
+    width: 14px;
+    height: 14px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    display: inline-block;
+    animation: spin 0.8s linear infinite;
+    vertical-align: middle;
+    margin-right: 0.4em;
+}
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* ── Error/status messages ───────────────────────────────────── */
+.msg {
+    padding: 0.5rem 0;
+    color: var(--text-dim);
+    font-size: 0.9rem;
+}
+.msg.error {
+    color: #b91c1c;
+}
+
+code {
+    font-family: var(--mono);
+    background: #dce6f8;
+    padding: 0.1em 0.35em;
+    border-radius: 2px;
+}

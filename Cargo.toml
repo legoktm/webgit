@@ -13,6 +13,7 @@ wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
 web-sys = { version = "0.3", features = [
     "Window",
+    "Location",
     "Document",
     "HtmlDocument",
     "Element",
@@ -31,3 +32,5 @@ web-sys = { version = "0.3", features = [
     "console",
 ] }
 console_error_panic_hook = "0.1"
+serde = { version = "1", features = ["derive"] }
+tera = { version = "2.0.0-alpha", default-features = false, features = ["unicode"] }
