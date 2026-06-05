@@ -21,41 +21,20 @@
         <!-- ── Navigation tabs ─────────────────────────────────────────── -->
         <nav id="nav">
             <a href="#" class="nav-tab">about</a>
-            <a href="#" class="nav-tab">summary</a>
+            <a href="#!/summary" class="nav-tab">summary</a>
             <a href="#" class="nav-tab">refs</a>
             <a href="#" class="nav-tab">log</a>
-            <a href="#" class="nav-tab active">tree</a>
+            <a href="#!/tree" class="nav-tab">tree</a>
             <a href="#" class="nav-tab">commit</a>
             <a href="#" class="nav-tab">diff</a>
             <a href="#" class="nav-tab">stats</a>
         </nav>
 
+        <!-- ── Path breadcrumb ─────────────────────────────────────────────── -->
+        <div id="path-bar" style="display: none"></div>
+
         <!-- ── Main content ────────────────────────────────────────────── -->
         <div id="content">
-            <!-- commit strip (shown once a repo is loaded) -->
-            <div id="commit-strip" style="display: none">
-                <span
-                    ><span class="label">branch:</span>
-                    <span id="strip-branch">HEAD</span></span
-                >
-                <span
-                    ><span class="label">commit:</span>
-                    <a id="strip-hash" href="#">&mdash;</a></span
-                >
-                <span
-                    ><span class="label">author:</span>
-                    <span id="strip-author">&mdash;</span></span
-                >
-                <span
-                    ><span class="label">date:</span>
-                    <span id="strip-date">&mdash;</span></span
-                >
-                <span
-                    ><span class="label">message:</span>
-                    <span id="strip-msg">&mdash;</span></span
-                >
-            </div>
-
             <!-- file tree table -->
             <div id="output">
                 <p class="msg">Loading…</p>

@@ -1,0 +1,68 @@
+<h3 class="summary-heading">Branches</h3>
+<table class="summary-table">
+    <thead>
+        <tr>
+            <th>Branch</th>
+            <th>Commit message</th>
+            <th>Author</th>
+            <th>Age</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for b in branches %}
+        <tr>
+            <td class="name"><a href="#!/tree">{{ b.name }}</a></td>
+            <td class="msg">{{ b.message }}</td>
+            <td class="author">{{ b.author }}</td>
+            <td class="age">{{ b.age }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+{% if tags %}
+<h3 class="summary-heading">Tags</h3>
+<table class="summary-table">
+    <thead>
+        <tr>
+            <th>Tag</th>
+            <th>Commit message</th>
+            <th>Author</th>
+            <th>Age</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for t in tags %}
+        <tr>
+            <td class="name">{{ t.name }}</td>
+            <td class="msg">{{ t.message }}</td>
+            <td class="author">{{ t.author }}</td>
+            <td class="age">{{ t.age }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endif %}
+
+<h3 class="summary-heading">Recent commits</h3>
+<table class="summary-table">
+    <thead>
+        <tr>
+            <th>Age</th>
+            <th>Commit message</th>
+            <th>Author</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for c in commits %}
+        <tr>
+            <td class="age">{{ c.age }}</td>
+            <td class="msg">{{ c.message }}</td>
+            <td class="author">{{ c.author }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+<h3 class="summary-heading">Clone</h3>
+<div class="clone-url">{{ clone_url }}</div>

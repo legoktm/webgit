@@ -66,6 +66,17 @@ impl Directory<HttpFile> for HttpDirectory {
         // Normalise base_url: strip trailing slash for prefix comparisons.
         let base = self.base_url.trim_end_matches('/');
 
+        // Extract the path portion of base_url (e.g. "/objects/pack" from
+        // "http://host/objects/pack") so we can accept miniserve-style
+        // absolute hrefs like "/objects/pack/pack-abc.idx".
+        let base_path: &str = base
+            .find("://")
+            .and_then(|i| {
+                let after = &base[i + 3..];
+                after.find('/').map(|j| &after[j..])
+            })
+            .unwrap_or("");
+
         let links = doc
             .query_selector_all("td a")
             .map_err(|e| FileSystemError::Other(Box::new(e.as_string().unwrap_or_default())))?;
@@ -97,8 +108,14 @@ impl Directory<HttpFile> for HttpDirectory {
                     Some(rest) => rest.trim_matches('/'),
                     None => continue,
                 }
-            } else if href.starts_with('/') || href.starts_with('.') || href.contains(':') {
-                // absolute-path, relative-dot, or scheme -- skip
+            } else if href.starts_with('/') {
+                // Absolute path (e.g. miniserve) — strip the base path prefix.
+                match href.strip_prefix(base_path) {
+                    Some(rest) if !rest.is_empty() => rest.trim_matches('/'),
+                    _ => continue,
+                }
+            } else if href.starts_with('.') || href.contains(':') {
+                // relative-dot or scheme -- skip
                 continue;
             } else {
                 href.trim_end_matches('/')

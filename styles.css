@@ -159,25 +159,6 @@ a:hover {
     white-space: normal;
 }
 
-/* ── Commit info strip ───────────────────────────────────────── */
-#commit-strip {
-    background: var(--bg-alt);
-    border: 1px solid var(--border);
-    padding: 0.5rem 0.8rem;
-    margin-bottom: 0.75rem;
-    font-size: 0.85rem;
-    color: var(--text-dim);
-    display: flex;
-    gap: 1.5rem;
-    flex-wrap: wrap;
-}
-#commit-strip span {
-    white-space: nowrap;
-}
-#commit-strip .label {
-    color: var(--text);
-}
-
 /* ── Spinner ─────────────────────────────────────────────────── */
 .spinner {
     width: 14px;
@@ -211,4 +192,145 @@ code {
     background: #dce6f8;
     padding: 0.1em 0.35em;
     border-radius: 2px;
+}
+
+/* ── Path breadcrumb bar ─────────────────────────────────────── */
+#path-bar {
+    background: var(--bg-nav);
+    border-bottom: 1px solid var(--border);
+    padding: 0.3rem 1rem;
+    font-size: 0.875rem;
+    font-family: var(--mono);
+}
+#path-bar a {
+    color: var(--link);
+}
+
+/* ── Blob info line ──────────────────────────────────────────── */
+.blob-info {
+    font-size: 0.85rem;
+    color: var(--text-dim);
+    margin-bottom: 0.5rem;
+    font-family: var(--mono);
+}
+
+/* ── Blob / source table ─────────────────────────────────────── */
+.blob-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+    font-family: var(--mono);
+}
+
+.blob-table td {
+    padding: 0 0.5rem;
+    vertical-align: top;
+    white-space: pre;
+    line-height: 1.5;
+}
+
+.blob-table td.lno {
+    text-align: right;
+    color: var(--text-dim);
+    border-right: 1px solid var(--border);
+    user-select: none;
+    min-width: 3em;
+}
+
+.blob-table td.lno a {
+    color: var(--text-dim);
+    text-decoration: none;
+}
+.blob-table td.lno a:hover {
+    color: var(--link);
+}
+
+.blob-table tr:target td,
+.blob-table tr:target td.lno a {
+    background: var(--bg-alt);
+    color: var(--link);
+}
+
+.blob-table td.code {
+    padding-left: 1em;
+    width: 100%;
+}
+
+/* ── Summary page ────────────────────────────────────────────── */
+.summary-heading {
+    font-size: 0.85rem;
+    font-weight: bold;
+    color: var(--text);
+    margin: 1.25rem 0 0.25rem;
+    padding-bottom: 0.2rem;
+    border-bottom: 1px solid var(--border);
+}
+
+.summary-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.875rem;
+    margin-bottom: 0.5rem;
+}
+
+.summary-table th {
+    text-align: left;
+    padding: 0.25rem 0.6rem;
+    color: var(--text-dim);
+    border-bottom: 1px solid var(--border);
+    font-weight: bold;
+}
+
+.summary-table td {
+    padding: 0.2rem 0.6rem;
+    white-space: nowrap;
+}
+
+.summary-table tr:nth-child(even) td {
+    background: var(--bg-alt);
+}
+
+.summary-table td.name {
+    font-family: var(--mono);
+    min-width: 8em;
+}
+
+.summary-table td.msg {
+    width: 100%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 0; /* trick to make text-overflow work in table cells */
+}
+
+.summary-table td.author {
+    color: var(--text-dim);
+    min-width: 10em;
+}
+
+.summary-table td.age {
+    color: var(--link);
+    font-family: var(--mono);
+    white-space: nowrap;
+    min-width: 7em;
+}
+
+.ref-label {
+    display: inline-block;
+    font-size: 0.75rem;
+    font-family: var(--mono);
+    padding: 0.05em 0.4em;
+    border-radius: 2px;
+    margin-left: 0.3em;
+    background: var(--accent);
+    color: var(--accent-fg);
+    vertical-align: middle;
+}
+
+.clone-url {
+    font-family: var(--mono);
+    font-size: 0.875rem;
+    padding: 0.3rem 0;
+    color: var(--text);
+    user-select: all;
 }

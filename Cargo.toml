@@ -20,6 +20,7 @@ web-sys = { version = "0.3", features = [
     "HtmlElement",
     "HtmlInputElement",
     "NodeList",
+    "DomTokenList",
     "DomParser",
     "SupportedType",
     "Event",
@@ -31,6 +32,7 @@ web-sys = { version = "0.3", features = [
     "Headers",
     "console",
 ] }
+chrono = "0.4"
 console_error_panic_hook = "0.1"
 serde = { version = "1", features = ["derive"] }
 tera = { version = "2.0.0-alpha", default-features = false, features = ["unicode"] }
