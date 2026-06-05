@@ -23,29 +23,7 @@
     </tbody>
 </table>
 
-{% if tags %}
-<h3 class="summary-heading">Tags</h3>
-<table class="summary-table">
-    <thead>
-        <tr>
-            <th>Tag</th>
-            <th>Commit message</th>
-            <th>Author</th>
-            <th>Age</th>
-        </tr>
-    </thead>
-    <tbody>
-        {% for t in tags %}
-        <tr>
-            <td class="name">{{ t.name }}</td>
-            <td class="msg">{{ t.message }}</td>
-            <td class="author">{{ t.author }}</td>
-            <td class="age">{{ t.age }}</td>
-        </tr>
-        {% endfor %}
-    </tbody>
-</table>
-{% endif %}
+{% include "refs_tags.html" %}
 
 <h3 class="summary-heading">Recent commits</h3>
 <table class="summary-table">
@@ -59,7 +37,7 @@
     <tbody>
         {% for c in commits %}
         <tr>
-            <td class="age">{{ c.age }}</td>
+            <td class="age">{{ c.age | age_string }}</td>
             <td class="msg">{{ c.message }}</td>
             <td class="author">{{ c.author }}</td>
         </tr>

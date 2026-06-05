@@ -1,66 +1,18 @@
-use crate::cache::CachingRepo;
+use crate::{
+    cache::CachingRepo,
+    render::{CommitRow, RefRow, age, commit_first_line, ref_row},
+};
 use git_async::object::Commit;
 use git_async::reference::RefName;
 use serde::Serialize;
 use std::collections::BinaryHeap;
 use tera::{Context, Tera};
 
-#[derive(Serialize)]
-struct RefRow {
-    name: String,
-    short_hash: String,
-    message: String,
-    author: String,
-    age: String,
-}
-
-#[derive(Serialize)]
-struct CommitRow {
-    short_hash: String,
-    message: String,
-    author: String,
-    age: String,
-}
-
-fn age_string(dt: &chrono::DateTime<chrono::FixedOffset>) -> String {
-    let now_ms = js_sys::Date::now();
-    let then_ms = dt.timestamp_millis() as f64;
-    let secs = ((now_ms - then_ms) / 1000.0).max(0.0) as u64;
-    match secs {
-        s if s < 90 => format!("{} seconds", s),
-        s if s < 90 * 60 => format!("{} minutes", s / 60),
-        s if s < 36 * 3600 => format!("{} hours", s / 3600),
-        s if s < 14 * 86400 => format!("{} days", s / 86400),
-        s if s < 8 * 7 * 86400 => format!("{} weeks", s / (7 * 86400)),
-        s if s < 24 * 30 * 86400 => format!("{} months", s / (30 * 86400)),
-        s => format!("{} years", s / (365 * 86400)),
-    }
-}
-
-fn commit_first_line(c: &Commit) -> String {
-    String::from_utf8_lossy(c.message())
-        .trim_end()
-        .lines()
-        .next()
-        .unwrap_or("")
-        .to_string()
-}
-
-fn ref_row(name: String, c: &Commit) -> RefRow {
-    let hash = format!("{}", c.id());
-    RefRow {
-        name,
-        short_hash: hash[..8].to_string(),
-        message: commit_first_line(c),
-        author: String::from_utf8_lossy(c.author_name()).into_owned(),
-        age: age_string(&c.author_date()),
-    }
-}
-
 async fn build_summary(
     head_commit: &Commit,
     repo: &CachingRepo,
-) -> (Vec<RefRow>, Vec<RefRow>, Vec<CommitRow>) {
+    clone_url: &str,
+) -> SummaryTemplate {
     let ref_names = repo.ref_names().await.unwrap_or_default();
 
     // --- Collect and select branch names before fetching any commits ---
@@ -91,6 +43,7 @@ async fn build_summary(
     other_branches.truncate(others_limit);
     let branch_names: Vec<String> = primary.into_iter().chain(other_branches).collect();
 
+    let more_tags = tag_names.len() > 10;
     // Tags: reverse alpha, cap at 10.
     tag_names.sort_by(|a, b| b.cmp(a));
     tag_names.truncate(10);
@@ -135,7 +88,7 @@ async fn build_summary(
             short_hash: hash[..8].to_string(),
             message: commit_first_line(&current),
             author: String::from_utf8_lossy(current.author_name()).into_owned(),
-            age: age_string(&current.author_date()),
+            age: age(&current.author_date()),
         });
         let parents = match repo.lookup_parents(&current).await {
             Ok(p) => p,
@@ -146,7 +99,22 @@ async fn build_summary(
         }
     }
 
-    (branches, tags, commits)
+    SummaryTemplate {
+        branches,
+        tags,
+        more_tags,
+        commits,
+        clone_url: clone_url.to_string(),
+    }
+}
+
+#[derive(Serialize)]
+struct SummaryTemplate {
+    branches: Vec<RefRow>,
+    tags: Vec<RefRow>,
+    more_tags: bool,
+    commits: Vec<CommitRow>,
+    clone_url: String,
 }
 
 pub(crate) async fn render_summary(
@@ -156,12 +124,8 @@ pub(crate) async fn render_summary(
     clone_url: &str,
     output: &web_sys::Element,
 ) {
-    let (branches, tags, commits) = build_summary(head_commit, repo).await;
-    let mut ctx = Context::new();
-    ctx.insert("branches", &branches);
-    ctx.insert("tags", &tags);
-    ctx.insert("commits", &commits);
-    ctx.insert("clone_url", clone_url);
+    let template = build_summary(head_commit, repo, clone_url).await;
+    let ctx = Context::from_serialize(&template).unwrap();
     match tera.render("summary.html", &ctx) {
         Ok(html) => output.set_inner_html(&html),
         Err(e) => {

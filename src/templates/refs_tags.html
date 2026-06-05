@@ -1,0 +1,30 @@
+<h3 class="summary-heading">Tags</h3>
+{% if tags %}
+<table class="summary-table">
+    <thead>
+        <tr>
+            <th>Tag</th>
+            <th>Commit message</th>
+            <th>Author</th>
+            <th>Age</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for t in tags %}
+        <tr>
+            <td class="name">{{ t.name }}</td>
+            <td class="msg">{{ t.message }}</td>
+            <td class="author">{{ t.author }}</td>
+            <td class="age">{{ t.age | age_string }}</td>
+        </tr>
+        {% endfor %}
+        {% if more_tags %}
+        <tr>
+            <td>[<a href="#!/refs/tags">...</a>]</td>
+        </tr>
+        {% endif %}
+    </tbody>
+</table>
+{% else %}
+<p class="msg">No tags.</p>
+{% endif %}

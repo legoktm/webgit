@@ -1,4 +1,5 @@
 use crate::cache::CachingRepo;
+use crate::render::refs_tags::render_refs_tags;
 use crate::render::{blob::render_blob, summary::render_summary, tree::render_tree};
 use git_async::object::{ObjectId, Tree, TreeEntryType};
 use tera::Tera;
@@ -100,17 +101,38 @@ async fn walk_to_blob(root: &Tree, path: &str, repo: &CachingRepo) -> Option<(Ob
 // Hash routing
 // ---------------------------------------------------------------------------
 
+pub(crate) enum RefsRoute {
+    All,
+    Tags,
+}
+
 pub(crate) enum Route {
     Summary,
+    Refs(RefsRoute),
     Tree(String),
 }
 
-pub(crate) fn parse_hash(hash: &str) -> Option<Route> {
+pub(crate) fn parse_hash(hash: &str) -> Route {
+    // most likely scenario
     if hash == "#!/summary" || hash.is_empty() || hash == "#" {
-        return Some(Route::Summary);
+        return Route::Summary;
     }
-    let rest = hash.strip_prefix("#!/tree")?;
-    Some(Route::Tree(rest.trim_start_matches('/').to_string()))
+    if hash.starts_with("#!/tree") {
+        let rest = hash.strip_prefix("#!/tree").unwrap();
+        return Route::Tree(rest.trim_start_matches('/').to_string());
+    }
+
+    if hash.starts_with("#!/refs") {
+        let subroute = if hash == "#!/refs/tags" {
+            RefsRoute::Tags
+        } else {
+            RefsRoute::All
+        };
+        return Route::Refs(subroute);
+    }
+
+    // fallback to summary on invalid routes
+    Route::Summary
 }
 
 pub(crate) async fn handle_route(
@@ -128,20 +150,20 @@ pub(crate) async fn handle_route(
     };
 
     match parse_hash(&hash) {
-        None => {
-            // Unknown route — redirect to summary.
-            web_sys::window()
-                .unwrap()
-                .location()
-                .set_hash("#!/summary")
-                .ok();
-        }
-        Some(Route::Summary) => {
+        Route::Summary => {
             hide_path_bar(doc);
             set_active_tab(doc, "#!/summary");
             render_summary(tera, head_commit, repo, clone_url, &output).await;
         }
-        Some(Route::Tree(path)) => {
+        Route::Refs(RefsRoute::Tags) => {
+            hide_path_bar(doc);
+            set_active_tab(doc, "#!/refs");
+            render_refs_tags(tera, repo, &output).await;
+        }
+        Route::Refs(RefsRoute::All) => {
+            unimplemented!()
+        }
+        Route::Tree(path) => {
             update_path_bar(doc, &path);
             show(doc, "path-bar");
             set_active_tab(doc, "#!/tree");

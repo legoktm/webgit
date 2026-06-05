@@ -10,7 +10,7 @@ use cache::CachingRepo;
 use error::fmt_git_err;
 use fs::{HttpDirectory, HttpFilesystem};
 use git_async::Repo;
-use route::{handle_route, parse_hash, set_text};
+use route::{handle_route, set_text};
 use stats::{format_stats, set_stats_loaded};
 use std::rc::Rc;
 use wasm_bindgen::prelude::*;
@@ -120,18 +120,8 @@ async fn load_repo(url: String, doc: Document) {
         .location()
         .hash()
         .unwrap_or_default();
-    let initial_hash = if parse_hash(&hash).is_some() {
-        hash
-    } else {
-        web_sys::window()
-            .unwrap()
-            .location()
-            .set_hash("#!/summary")
-            .ok();
-        "#!/summary".to_string()
-    };
     handle_route(
-        initial_hash,
+        hash,
         &head_commit,
         &root_tree,
         &repo,
