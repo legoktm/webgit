@@ -25,7 +25,9 @@ pub enum ObjectType {
 pub struct ObjectSize(pub u64);
 
 #[derive(Debug)]
-pub(crate) struct RawObject {
+pub struct RawObject {
+    /// The type of the object
     pub object_type: ObjectType,
+    /// The raw decoded body bytes
     pub body: Vec<u8>,
 }

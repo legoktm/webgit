@@ -1,3 +1,4 @@
+mod cache;
 mod error;
 mod fetch;
 mod fs;
@@ -5,10 +6,10 @@ mod render;
 mod route;
 mod stats;
 
+use cache::CachingRepo;
 use error::fmt_git_err;
 use fs::{HttpDirectory, HttpFilesystem};
 use git_async::Repo;
-
 use route::{handle_route, parse_hash, set_text};
 use stats::{format_stats, set_stats_loaded};
 use std::rc::Rc;
@@ -27,9 +28,14 @@ async fn load_repo(url: String, doc: Document) {
 
     // Register live progress updates on the persistent stats bar.
     let stats_el = doc.get_element_by_id("fetch-stats");
-    fetch::reset_and_watch(Box::new(move |reqs, bytes| {
+    fetch::reset_and_watch(Box::new(move |reqs, bytes, cached_bytes| {
         if let Some(el) = &stats_el {
-            el.set_text_content(Some(&format_stats("Loading\u{2026}", reqs, bytes)));
+            el.set_text_content(Some(&format_stats(
+                "Loading\u{2026}",
+                reqs,
+                bytes,
+                cached_bytes,
+            )));
         }
     }));
 
@@ -44,6 +50,7 @@ async fn load_repo(url: String, doc: Document) {
         }
         Ok(r) => r,
     };
+    let repo = CachingRepo::open(repo).await;
 
     let head = match repo.head().await {
         Err(e) => {
@@ -56,7 +63,7 @@ async fn load_repo(url: String, doc: Document) {
         Ok(h) => h,
     };
 
-    let commit = match head.peel_to_commit(&repo).await {
+    let commit = match repo.peel_ref_to_commit(&head).await {
         Ok(Some(c)) => c,
         Ok(None) => {
             output.set_inner_html("<p class=\"msg error\">HEAD does not point to a commit</p>");

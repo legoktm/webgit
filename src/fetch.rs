@@ -8,36 +8,46 @@ use web_sys::{Request, RequestInit, RequestMode, Response};
 // Per-load stats + progress hook
 // ---------------------------------------------------------------------------
 
-type ProgressFn = Box<dyn Fn(u32, u64)>;
+type ProgressFn = Box<dyn Fn(u32, u64, u64)>;
 
 thread_local! {
-    /// (request_count, total_bytes)
-    static STATS: RefCell<(u32, u64)> = const { RefCell::new((0, 0)) };
+    /// (request_count, total_bytes, cached_bytes)
+    static STATS: RefCell<(u32, u64, u64)> = const { RefCell::new((0, 0, 0)) };
     static ON_PROGRESS: RefCell<Option<ProgressFn>> = const { RefCell::new(None) };
 }
 
 /// Reset the counters to zero and register a callback that is invoked after
-/// every completed HTTP request with `(request_count, total_bytes)`.
-pub(crate) fn reset_and_watch(f: Box<dyn Fn(u32, u64)>) {
-    STATS.with(|s| *s.borrow_mut() = (0, 0));
+/// every fetch or cache hit with `(request_count, total_bytes, cached_bytes)`.
+pub(crate) fn reset_and_watch(f: Box<dyn Fn(u32, u64, u64)>) {
+    STATS.with(|s| *s.borrow_mut() = (0, 0, 0));
     ON_PROGRESS.with(|cb| *cb.borrow_mut() = Some(f));
 }
 
-/// Return the current `(request_count, total_bytes)` without stopping the callback.
-pub(crate) fn fetch_stats() -> (u32, u64) {
+/// Return the current `(request_count, total_bytes, cached_bytes)`.
+pub(crate) fn fetch_stats() -> (u32, u64, u64) {
     STATS.with(|s| *s.borrow())
 }
 
+/// Record a cache hit and fire the progress callback.
+pub(crate) fn record_cache_hit(bytes: u64) {
+    fire(0, 0, bytes);
+}
+
 fn fire_progress(req_delta: u32, byte_delta: u64) {
+    fire(req_delta, byte_delta, 0);
+}
+
+fn fire(req_delta: u32, byte_delta: u64, cache_delta: u64) {
     let snapshot = STATS.with(|s| {
         let mut st = s.borrow_mut();
         st.0 += req_delta;
         st.1 += byte_delta;
+        st.2 += cache_delta;
         *st
     });
     ON_PROGRESS.with(|cb| {
         if let Some(f) = cb.borrow().as_ref() {
-            f(snapshot.0, snapshot.1);
+            f(snapshot.0, snapshot.1, snapshot.2);
         }
     });
 }

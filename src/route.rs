@@ -1,6 +1,5 @@
-use crate::fs::HttpFilesystem;
+use crate::cache::CachingRepo;
 use crate::render::{blob::render_blob, summary::render_summary, tree::render_tree};
-use git_async::Repo;
 use git_async::object::{ObjectId, Tree, TreeEntryType};
 use wasm_bindgen::JsCast;
 use web_sys::Document;
@@ -68,7 +67,7 @@ fn set_active_tab(doc: &Document, tab: &str) {
 // Tree / blob walking
 // ---------------------------------------------------------------------------
 
-async fn walk_to_tree(root: &Tree, path: &str, repo: &Repo<HttpFilesystem>) -> Option<Tree> {
+async fn walk_to_tree(root: &Tree, path: &str, repo: &CachingRepo) -> Option<Tree> {
     let mut current = root.clone();
     for component in path.split('/').filter(|s| !s.is_empty()) {
         let entry = current
@@ -83,11 +82,7 @@ async fn walk_to_tree(root: &Tree, path: &str, repo: &Repo<HttpFilesystem>) -> O
     Some(current)
 }
 
-async fn walk_to_blob(
-    root: &Tree,
-    path: &str,
-    repo: &Repo<HttpFilesystem>,
-) -> Option<(ObjectId, Vec<u8>)> {
+async fn walk_to_blob(root: &Tree, path: &str, repo: &CachingRepo) -> Option<(ObjectId, Vec<u8>)> {
     let (dir_path, filename) = match path.rfind('/') {
         Some(i) => (&path[..i], &path[i + 1..]),
         None => ("", path),
@@ -121,7 +116,7 @@ pub(crate) async fn handle_route(
     hash: String,
     head_commit: &git_async::object::Commit,
     root_tree: &Tree,
-    repo: &Repo<HttpFilesystem>,
+    repo: &CachingRepo,
     clone_url: &str,
     doc: &Document,
 ) {

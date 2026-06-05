@@ -7,10 +7,7 @@
 use crate::{
     error::{Error, GResult, InternalObjectError, UnexpectedObjectType, annotate_with_object_id},
     file_system::FileSystem,
-    object_store::{
-        RawObject,
-        lookup::{lookup, lookup_size_type},
-    },
+    object_store::lookup::{lookup, lookup_size_type},
     parsing::ParseResult,
     repo::Repo,
 };
@@ -37,7 +34,7 @@ pub use crate::object::commit::Commit;
 pub use crate::object::header::{ObjectHeader, ObjectHeaderIter};
 pub use crate::object::tag::Tag;
 pub use crate::object::tree::{Tree, TreeEntry, TreeEntryIter, TreeEntryType};
-pub use crate::object_store::{ObjectSize, ObjectType};
+pub use crate::object_store::{ObjectSize, ObjectType, RawObject};
 
 /// The ID of a git object
 ///
@@ -78,6 +75,7 @@ impl ObjectId {
         Some(oid)
     }
 
+    #[cfg_attr(not(feature = "diff"), allow(dead_code))]
     pub(crate) const fn zero() -> Self {
         Self { bytes: [0u8; 20] }
     }
@@ -228,11 +226,9 @@ impl Object {
         }
     }
 
-    pub(crate) async fn lookup<F: FileSystem>(repo: &Repo<F>, id: ObjectId) -> GResult<Self> {
-        let RawObject { object_type, body } = lookup(repo, id)
-            .await?
-            .ok_or_else(|| Error::MissingObject(id))?;
-
+    /// Parse a [`RawObject`] into a typed [`Object`].
+    pub fn from_raw(id: ObjectId, raw: RawObject) -> GResult<Self> {
+        let RawObject { object_type, body } = raw;
         let object = match object_type {
             ObjectType::Commit => Object::Commit(
                 Commit::parse(id, body)
@@ -251,8 +247,14 @@ impl Object {
                     .map_err(annotate_with_object_id(id))?,
             ),
         };
-
         Ok(object)
+    }
+
+    pub(crate) async fn lookup<F: FileSystem>(repo: &Repo<F>, id: ObjectId) -> GResult<Self> {
+        let raw = lookup(repo, id)
+            .await?
+            .ok_or_else(|| Error::MissingObject(id))?;
+        Self::from_raw(id, raw)
     }
 
     pub(crate) async fn lookup_size_type<F: FileSystem>(

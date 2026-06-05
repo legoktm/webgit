@@ -1,5 +1,4 @@
-use crate::fs::HttpFilesystem;
-use git_async::Repo;
+use crate::cache::CachingRepo;
 use git_async::object::Commit;
 use git_async::reference::RefName;
 use serde::Serialize;
@@ -62,7 +61,7 @@ fn ref_row(name: String, c: &Commit) -> RefRow {
 
 async fn build_summary(
     head_commit: &Commit,
-    repo: &Repo<HttpFilesystem>,
+    repo: &CachingRepo,
 ) -> (Vec<RefRow>, Vec<RefRow>, Vec<CommitRow>) {
     let ref_names = repo.ref_names().await.unwrap_or_default();
 
@@ -105,7 +104,7 @@ async fn build_summary(
         let Ok(r) = repo.lookup_ref(&rn).await else {
             continue;
         };
-        let Ok(Some(commit)) = r.peel_to_commit(repo).await else {
+        let Ok(Some(commit)) = repo.peel_ref_to_commit(&r).await else {
             continue;
         };
         branches.push(ref_row(short.clone(), &commit));
@@ -117,7 +116,7 @@ async fn build_summary(
         let Ok(r) = repo.lookup_ref(&rn).await else {
             continue;
         };
-        let Ok(Some(commit)) = r.peel_to_commit(repo).await else {
+        let Ok(Some(commit)) = repo.peel_ref_to_commit(&r).await else {
             continue;
         };
         tags.push(ref_row(short.clone(), &commit));
@@ -140,7 +139,7 @@ async fn build_summary(
             author: String::from_utf8_lossy(current.author_name()).into_owned(),
             age: age_string(&current.author_date()),
         });
-        let parents = match current.lookup_parents(repo).await {
+        let parents = match repo.lookup_parents(&current).await {
             Ok(p) => p,
             Err(_) => continue,
         };
@@ -154,7 +153,7 @@ async fn build_summary(
 
 pub(crate) async fn render_summary(
     head_commit: &Commit,
-    repo: &Repo<HttpFilesystem>,
+    repo: &CachingRepo,
     clone_url: &str,
     output: &web_sys::Element,
 ) {

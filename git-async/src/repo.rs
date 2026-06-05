@@ -2,7 +2,7 @@ use crate::{
     error::{Error, GResult},
     file_system::{Directory, FileSystem, FileSystemError, search_for_files},
     object::{Object, ObjectId},
-    object_store::{ObjectSize, ObjectType, cache::IndexCache},
+    object_store::{ObjectSize, ObjectType, RawObject, cache::IndexCache},
     reference::{Ref, RefName, read_packed_refs},
 };
 use alloc::collections::BTreeSet;
@@ -138,6 +138,14 @@ impl<F: FileSystem> Repo<F> {
     /// into memory.
     pub async fn lookup_object(&self, id: ObjectId) -> GResult<Object> {
         Object::lookup(self, id).await
+    }
+
+    /// Look up the raw (unparsed) bytes and type of an object.
+    ///
+    /// Returns `None` if the object does not exist in the repository.
+    /// Use [`Object::from_raw`] to parse the result into a typed object.
+    pub async fn lookup_raw(&self, id: ObjectId) -> GResult<Option<RawObject>> {
+        crate::object_store::lookup::lookup(self, id).await
     }
 
     /// Look up the size and type of an object, without reading it to memory or

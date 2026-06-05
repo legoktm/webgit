@@ -11,13 +11,18 @@ fn format_bytes(b: u64) -> String {
     }
 }
 
-pub(crate) fn format_stats(label: &str, reqs: u32, bytes: u64) -> String {
-    format!("{}: {} requests, {}", label, reqs, format_bytes(bytes))
+pub(crate) fn format_stats(label: &str, reqs: u32, bytes: u64, cached_bytes: u64) -> String {
+    let base = format!("{}: {} requests, {}", label, reqs, format_bytes(bytes));
+    if cached_bytes > 0 {
+        format!("{} (cached: {})", base, format_bytes(cached_bytes))
+    } else {
+        base
+    }
 }
 
 pub(crate) fn set_stats_loaded(doc: &Document) {
-    let (reqs, bytes) = fetch::fetch_stats();
+    let (reqs, bytes, cached_bytes) = fetch::fetch_stats();
     if let Some(el) = doc.get_element_by_id("fetch-stats") {
-        el.set_text_content(Some(&format_stats("Loaded", reqs, bytes)));
+        el.set_text_content(Some(&format_stats("Loaded", reqs, bytes, cached_bytes)));
     }
 }
