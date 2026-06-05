@@ -1,6 +1,7 @@
 use crate::cache::CachingRepo;
 use crate::render::{blob::render_blob, summary::render_summary, tree::render_tree};
 use git_async::object::{ObjectId, Tree, TreeEntryType};
+use tera::Tera;
 use wasm_bindgen::JsCast;
 use web_sys::Document;
 
@@ -119,6 +120,7 @@ pub(crate) async fn handle_route(
     repo: &CachingRepo,
     clone_url: &str,
     doc: &Document,
+    tera: &Tera,
 ) {
     let output = match doc.get_element_by_id("output") {
         Some(el) => el,
@@ -137,7 +139,7 @@ pub(crate) async fn handle_route(
         Some(Route::Summary) => {
             hide_path_bar(doc);
             set_active_tab(doc, "#!/summary");
-            render_summary(head_commit, repo, clone_url, &output).await;
+            render_summary(tera, head_commit, repo, clone_url, &output).await;
         }
         Some(Route::Tree(path)) => {
             update_path_bar(doc, &path);
@@ -145,13 +147,13 @@ pub(crate) async fn handle_route(
             set_active_tab(doc, "#!/tree");
 
             if let Some(subtree) = walk_to_tree(root_tree, &path, repo).await {
-                render_tree(&subtree, &path, &output);
+                render_tree(tera, &subtree, &path, &output);
                 return;
             }
 
             output.set_inner_html("<p class=\"msg\">Loading\u{2026}</p>");
             match walk_to_blob(root_tree, &path, repo).await {
-                Some((id, data)) => render_blob(id, &data, &output),
+                Some((id, data)) => render_blob(tera, id, &data, &output),
                 None => output.set_inner_html(&format!(
                     "<p class=\"msg error\">Not found: <code>{}</code></p>",
                     path

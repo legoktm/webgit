@@ -5,8 +5,6 @@ use serde::Serialize;
 use std::collections::BinaryHeap;
 use tera::{Context, Tera};
 
-const SUMMARY_TEMPLATE: &str = include_str!("../templates/summary.html");
-
 #[derive(Serialize)]
 struct RefRow {
     name: String,
@@ -152,6 +150,7 @@ async fn build_summary(
 }
 
 pub(crate) async fn render_summary(
+    tera: &Tera,
     head_commit: &Commit,
     repo: &CachingRepo,
     clone_url: &str,
@@ -163,7 +162,7 @@ pub(crate) async fn render_summary(
     ctx.insert("tags", &tags);
     ctx.insert("commits", &commits);
     ctx.insert("clone_url", clone_url);
-    match Tera::one_off(SUMMARY_TEMPLATE, &ctx, true) {
+    match tera.render("summary.html", &ctx) {
         Ok(html) => output.set_inner_html(&html),
         Err(e) => {
             output.set_inner_html(&format!("<p class=\"msg error\">Template error: {}</p>", e))

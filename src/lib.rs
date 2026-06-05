@@ -112,6 +112,7 @@ async fn load_repo(url: String, doc: Document) {
     let root_tree = Rc::new(root_tree);
     let repo = Rc::new(repo);
     let clone_url = Rc::new(url.clone());
+    let tera = Rc::new(render::init_tera());
 
     // Initial route.
     let hash = web_sys::window()
@@ -136,6 +137,7 @@ async fn load_repo(url: String, doc: Document) {
         &repo,
         &clone_url,
         &doc,
+        &tera,
     )
     .await;
     set_stats_loaded(&doc);
@@ -146,6 +148,7 @@ async fn load_repo(url: String, doc: Document) {
     let root_tree_c = Rc::clone(&root_tree);
     let repo_c = Rc::clone(&repo);
     let clone_url_c = Rc::clone(&clone_url);
+    let tera_c = Rc::clone(&tera);
     let cb = Closure::<dyn Fn(web_sys::Event)>::new(move |_: web_sys::Event| {
         let hash = web_sys::window()
             .unwrap()
@@ -157,8 +160,18 @@ async fn load_repo(url: String, doc: Document) {
         let root_tree = Rc::clone(&root_tree_c);
         let repo = Rc::clone(&repo_c);
         let clone_url = Rc::clone(&clone_url_c);
+        let tera = Rc::clone(&tera_c);
         wasm_bindgen_futures::spawn_local(async move {
-            handle_route(hash, &head_commit, &root_tree, &repo, &clone_url, &doc).await;
+            handle_route(
+                hash,
+                &head_commit,
+                &root_tree,
+                &repo,
+                &clone_url,
+                &doc,
+                &tera,
+            )
+            .await;
             set_stats_loaded(&doc);
         });
     });

@@ -2,8 +2,6 @@ use git_async::object::{Tree, TreeEntryType};
 use serde::Serialize;
 use tera::{Context, Tera};
 
-const TREE_TEMPLATE: &str = include_str!("../templates/tree.html");
-
 #[derive(Serialize)]
 struct TreeEntryRow {
     mode: String,
@@ -41,11 +39,11 @@ fn tree_rows(tree: &Tree, prefix: &str) -> Vec<TreeEntryRow> {
         .collect()
 }
 
-pub(crate) fn render_tree(tree: &Tree, prefix: &str, output: &web_sys::Element) {
+pub(crate) fn render_tree(tera: &Tera, tree: &Tree, prefix: &str, output: &web_sys::Element) {
     let rows = tree_rows(tree, prefix);
     let mut ctx = Context::new();
     ctx.insert("entries", &rows);
-    match Tera::one_off(TREE_TEMPLATE, &ctx, true) {
+    match tera.render("tree.html", &ctx) {
         Ok(html) => output.set_inner_html(&html),
         Err(e) => {
             output.set_inner_html(&format!("<p class=\"msg error\">Template error: {}</p>", e))
