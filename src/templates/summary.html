@@ -6,21 +6,4 @@
 {% include "refs_tags.html" %}
 
 <h3 class="summary-heading">Recent commits</h3>
-<table class="summary-table">
-    <thead>
-        <tr>
-            <th>Age</th>
-            <th>Commit message</th>
-            <th>Author</th>
-        </tr>
-    </thead>
-    <tbody>
-        {% for c in commits %}
-        <tr>
-            <td class="age">{{ c.age | age_string }}</td>
-            <td class="msg">{{ c.message }}</td>
-            <td class="author">{{ c.author }}</td>
-        </tr>
-        {% endfor %}
-    </tbody>
-</table>
+{% include "commits.html" %}

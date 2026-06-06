@@ -1,5 +1,6 @@
 use crate::cache::CachingRepo;
 use crate::console_log;
+use crate::render::log::render_log;
 use crate::render::refs_all::render_refs_all;
 use crate::render::refs_heads::render_refs_heads;
 use crate::render::refs_tags::render_refs_tags;
@@ -114,6 +115,7 @@ pub(crate) enum RefsRoute {
 
 pub(crate) enum Route {
     Summary,
+    Log(usize),
     Refs(RefsRoute),
     Tree(String),
 }
@@ -123,6 +125,14 @@ pub(crate) fn parse_hash(hash: &str) -> Route {
     if hash == "#!/summary" || hash.is_empty() || hash == "#" {
         return Route::Summary;
     }
+    if hash == "#!/log" || hash.starts_with("#!/log/") {
+        let offset = hash
+            .strip_prefix("#!/log/")
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(0);
+        return Route::Log(offset);
+    }
+
     if hash.starts_with("#!/tree") {
         let rest = hash.strip_prefix("#!/tree").unwrap();
         return Route::Tree(rest.trim_start_matches('/').to_string());
@@ -162,6 +172,11 @@ pub(crate) async fn handle_route(
             hide_path_bar(doc);
             set_active_tab(doc, "#!/summary");
             render_summary(tera, head_commit, repo, clone_url, &output).await;
+        }
+        Route::Log(offset) => {
+            hide_path_bar(doc);
+            set_active_tab(doc, "#!/log");
+            render_log(tera, head_commit, repo, offset, &output).await;
         }
         Route::Refs(RefsRoute::Heads) => {
             hide_path_bar(doc);

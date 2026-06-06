@@ -1,24 +1,22 @@
-<table>
+<table class="tag-table">
     <tbody>
         <tr>
-            <td>Name</td>
+            <td class="label">tag name</td>
             <td>{{ name }}</td>
         </tr>
         <tr>
-            <td>Date</td>
+            <td class="label">tag date</td>
             <td>{{ date }}</td>
         </tr>
         <tr>
-            <td>Tagger</td>
+            <td class="label">tagged by</td>
             <td>{{ tagger_name }}</td>
         </tr>
         <tr>
-            <td>Commit</td>
-            <td>{{ commit }}</td>
+            <td class="label">tagged object</td>
+            <td class="mono">{{ commit }}</td>
         </tr>
     </tbody>
 </table>
 
-<pre>
-{{ contents }}
-</pre>
+<pre class="tag-message">{{ contents }}</pre>

@@ -1,0 +1,11 @@
+{% include "commits.html" %}
+{% if has_prev or has_next %}
+<div class="log-nav">
+    {% if has_prev %}
+    <a href="{% if prev_offset == 0 %}#!/log{% else %}#!/log/{{ prev_offset }}{% endif %}">&#8592; newer</a>
+    {% endif %}
+    {% if has_next %}
+    <a href="#!/log/{{ next_offset }}">older &#8594;</a>
+    {% endif %}
+</div>
+{% endif %}

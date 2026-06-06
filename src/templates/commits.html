@@ -1,0 +1,20 @@
+<table class="summary-table">
+    <thead>
+        <tr>
+            <th>Age</th>
+            <th>Commit</th>
+            <th>Message</th>
+            <th>Author</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for c in commits %}
+        <tr>
+            <td class="age">{{ c.age | age_string }}</td>
+            <td class="name">{{ c.short_hash }}</td>
+            <td class="msg">{{ c.message }}</td>
+            <td class="author">{{ c.author }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
