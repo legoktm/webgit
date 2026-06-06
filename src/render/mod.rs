@@ -4,6 +4,7 @@ use tera::{Kwargs, State, Tera, TeraResult, Value};
 
 pub(crate) mod blob;
 pub(crate) mod refs_all;
+pub(crate) mod refs_heads;
 pub(crate) mod refs_tags;
 pub(crate) mod summary;
 pub(crate) mod tag;
@@ -15,8 +16,8 @@ pub(crate) fn init_tera() -> Tera {
     tera.add_raw_templates(vec![
         ("blob.html", include_str!("../templates/blob.html")),
         (
-            "branch_list.html",
-            include_str!("../templates/branch_list.html"),
+            "refs_heads.html",
+            include_str!("../templates/refs_heads.html"),
         ),
         (
             "refs_tags.html",

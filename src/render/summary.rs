@@ -40,6 +40,7 @@ async fn build_summary(
 
     other_branches.sort();
     let others_limit = if primary.is_some() { 9 } else { 10 };
+    let more_branches = other_branches.len() > others_limit;
     other_branches.truncate(others_limit);
     let branch_names: Vec<String> = primary.into_iter().chain(other_branches).collect();
 
@@ -101,6 +102,7 @@ async fn build_summary(
 
     SummaryTemplate {
         branches,
+        more_branches,
         tags,
         more_tags,
         commits,
@@ -111,6 +113,7 @@ async fn build_summary(
 #[derive(Serialize)]
 struct SummaryTemplate {
     branches: Vec<RefRow>,
+    more_branches: bool,
     tags: Vec<RefRow>,
     more_tags: bool,
     commits: Vec<CommitRow>,

@@ -11,11 +11,16 @@
     <tbody>
         {% for b in branches %}
         <tr>
-            <td class="name"><a href="#!/tree">{{ b.name }}</a></td>
+            <td class="name">{{ b.name }}</td>
             <td class="msg">{{ b.message }}</td>
             <td class="author">{{ b.author }}</td>
             <td class="age">{{ b.age | age_string }}</td>
         </tr>
         {% endfor %}
+        {% if more_branches %}
+        <tr>
+            <td>[<a href="#!/refs/heads">...</a>]</td>
+        </tr>
+        {% endif %}
     </tbody>
 </table>

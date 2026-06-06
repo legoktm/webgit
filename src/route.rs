@@ -1,6 +1,7 @@
 use crate::cache::CachingRepo;
 use crate::console_log;
 use crate::render::refs_all::render_refs_all;
+use crate::render::refs_heads::render_refs_heads;
 use crate::render::refs_tags::render_refs_tags;
 use crate::render::tag::render_tag;
 use crate::render::{blob::render_blob, summary::render_summary, tree::render_tree};
@@ -106,6 +107,7 @@ async fn walk_to_blob(root: &Tree, path: &str, repo: &CachingRepo) -> Option<(Ob
 
 pub(crate) enum RefsRoute {
     All,
+    Heads,
     Tags,
     Tag(String),
 }
@@ -129,6 +131,8 @@ pub(crate) fn parse_hash(hash: &str) -> Route {
     if hash.starts_with("#!/refs") {
         let subroute = if hash == "#!/refs/tags" {
             RefsRoute::Tags
+        } else if hash == "#!/refs/heads" {
+            RefsRoute::Heads
         } else if let Some(tag) = hash.strip_prefix("#!/refs/tags/") {
             RefsRoute::Tag(tag.to_string())
         } else {
@@ -160,6 +164,11 @@ pub(crate) async fn handle_route(
             hide_path_bar(doc);
             set_active_tab(doc, "#!/summary");
             render_summary(tera, head_commit, repo, clone_url, &output).await;
+        }
+        Route::Refs(RefsRoute::Heads) => {
+            hide_path_bar(doc);
+            set_active_tab(doc, "#!/refs");
+            render_refs_heads(tera, repo, &output).await;
         }
         Route::Refs(RefsRoute::Tags) => {
             hide_path_bar(doc);
