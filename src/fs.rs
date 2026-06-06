@@ -140,22 +140,17 @@ impl Directory<HttpFile> for HttpDirectory {
                 );
                 DirEntry::Directory(name.as_bytes().to_vec())
             } else {
-                web_sys::console::log_1(
-                    &format!("list_dir {}: file {}", self.base_url, name).into(),
-                );
+                console_log(&format!("list_dir {}: file {}", self.base_url, name));
                 DirEntry::File(name.as_bytes().to_vec())
             };
             entries.push(entry);
         }
 
-        web_sys::console::log_1(
-            &format!(
-                "list_dir {}: {} entries total",
-                self.base_url,
-                entries.len()
-            )
-            .into(),
-        );
+        console_log(&format!(
+            "list_dir {}: {} entries total",
+            self.base_url,
+            entries.len()
+        ));
         Ok(entries)
     }
 

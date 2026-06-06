@@ -16,6 +16,10 @@ use std::rc::Rc;
 use wasm_bindgen::prelude::*;
 use web_sys::Document;
 
+fn console_log(msg: &str) {
+    web_sys::console::log_1(&JsValue::from_str(msg));
+}
+
 // ---------------------------------------------------------------------------
 // Initial repo load
 // ---------------------------------------------------------------------------

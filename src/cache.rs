@@ -1,3 +1,4 @@
+use crate::console_log;
 use crate::fs::HttpFilesystem;
 use git_async::Repo;
 use git_async::error::{Error as GitError, GResult};
@@ -105,10 +106,12 @@ impl CachingRepo {
         {
             let short = String::from_utf8_lossy(short).into_owned();
             if let Some(oid) = self.tag_ref_get(&short).await {
+                console_log(&format!("cache hit: tags/{short}"));
                 return Ok(Ref::new_direct(name.clone(), oid));
             }
             let r = self.inner.lookup_ref(name).await?;
             if let RefTarget::Direct(oid) = r.target() {
+                console_log(&format!("cache set: tags/{short}"));
                 self.tag_ref_set(&short, *oid).await;
             }
             return Ok(r);
