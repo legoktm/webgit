@@ -12,7 +12,7 @@
     <tbody>
         {% for t in tags %}
         <tr>
-            <td class="name">{{ t.name }}</td>
+            <td class="name"><a href="#!/refs/tags/{{t.name}}">{{ t.name }}</a></td>
             <td class="msg">{{ t.message }}</td>
             <td class="author">{{ t.author }}</td>
             <td class="age">{{ t.age | age_string }}</td>

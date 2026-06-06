@@ -6,6 +6,7 @@ pub(crate) mod blob;
 pub(crate) mod refs_all;
 pub(crate) mod refs_tags;
 pub(crate) mod summary;
+pub(crate) mod tag;
 pub(crate) mod tree;
 
 pub(crate) fn init_tera() -> Tera {
@@ -24,6 +25,7 @@ pub(crate) fn init_tera() -> Tera {
         ("refs_all.html", include_str!("../templates/refs_all.html")),
         ("summary.html", include_str!("../templates/summary.html")),
         ("tree.html", include_str!("../templates/tree.html")),
+        ("tag.html", include_str!("../templates/tag.html")),
     ])
     .unwrap();
     tera
