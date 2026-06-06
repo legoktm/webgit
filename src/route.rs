@@ -1,4 +1,5 @@
 use crate::cache::CachingRepo;
+use crate::render::refs_all::render_refs_all;
 use crate::render::refs_tags::render_refs_tags;
 use crate::render::{blob::render_blob, summary::render_summary, tree::render_tree};
 use git_async::object::{ObjectId, Tree, TreeEntryType};
@@ -162,6 +163,11 @@ pub(crate) async fn handle_route(
         }
         Route::Refs(RefsRoute::All) => {
             unimplemented!()
+        }
+        Route::Refs(RefsRoute::All) => {
+            hide_path_bar(doc);
+            set_active_tab(doc, "#!/refs");
+            render_refs_all(tera, repo, &output).await;
         }
         Route::Tree(path) => {
             update_path_bar(doc, &path);

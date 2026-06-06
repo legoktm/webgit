@@ -3,6 +3,7 @@ use serde::Serialize;
 use tera::{Kwargs, State, Tera, TeraResult, Value};
 
 pub(crate) mod blob;
+pub(crate) mod refs_all;
 pub(crate) mod refs_tags;
 pub(crate) mod summary;
 pub(crate) mod tree;
@@ -13,9 +14,14 @@ pub(crate) fn init_tera() -> Tera {
     tera.add_raw_templates(vec![
         ("blob.html", include_str!("../templates/blob.html")),
         (
+            "branch_list.html",
+            include_str!("../templates/branch_list.html"),
+        ),
+        (
             "refs_tags.html",
             include_str!("../templates/refs_tags.html"),
         ),
+        ("refs_all.html", include_str!("../templates/refs_all.html")),
         ("summary.html", include_str!("../templates/summary.html")),
         ("tree.html", include_str!("../templates/tree.html")),
     ])
