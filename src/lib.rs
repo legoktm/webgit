@@ -25,10 +25,7 @@ fn console_log(msg: &str) {
 // ---------------------------------------------------------------------------
 
 async fn load_repo(url: String, doc: Document) {
-    let output = match doc.get_element_by_id("output") {
-        Some(el) => el,
-        None => return,
-    };
+    let output = doc.get_element_by_id("output").unwrap();
 
     // Register live progress updates on the persistent stats bar.
     let stats_el = doc.get_element_by_id("fetch-stats");

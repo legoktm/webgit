@@ -22,7 +22,7 @@ pub(crate) fn format_stats(label: &str, reqs: u32, bytes: u64, cached_bytes: u64
 
 pub(crate) fn set_stats_loaded(doc: &Document) {
     let (reqs, bytes, cached_bytes) = fetch::fetch_stats();
-    if let Some(el) = doc.get_element_by_id("fetch-stats") {
-        el.set_text_content(Some(&format_stats("Loaded", reqs, bytes, cached_bytes)));
-    }
+    doc.get_element_by_id("fetch-stats")
+        .unwrap()
+        .set_text_content(Some(&format_stats("Loaded", reqs, bytes, cached_bytes)));
 }

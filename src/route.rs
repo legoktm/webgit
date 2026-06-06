@@ -15,28 +15,29 @@ use web_sys::Document;
 // ---------------------------------------------------------------------------
 
 pub(crate) fn set_text(doc: &Document, id: &str, text: &str) {
-    if let Some(el) = doc.get_element_by_id(id) {
-        el.set_text_content(Some(text));
-    }
+    doc.get_element_by_id(id)
+        .unwrap()
+        .set_text_content(Some(text));
 }
 
 fn show(doc: &Document, id: &str) {
-    if let Some(el) = doc.get_element_by_id(id) {
-        el.class_list().remove_1("hide").unwrap();
-    }
+    doc.get_element_by_id(id)
+        .unwrap()
+        .class_list()
+        .remove_1("hide")
+        .unwrap();
 }
 
 fn hide_path_bar(doc: &Document) {
-    if let Some(el) = doc.get_element_by_id("path-bar") {
-        el.class_list().add_1("hide").unwrap();
-    }
+    doc.get_element_by_id("path-bar")
+        .unwrap()
+        .class_list()
+        .add_1("hide")
+        .unwrap();
 }
 
 fn update_path_bar(doc: &Document, path: &str) {
-    let bar = match doc.get_element_by_id("path-bar") {
-        Some(el) => el,
-        None => return,
-    };
+    let bar = doc.get_element_by_id("path-bar").unwrap();
     let mut html = String::from("<a href=\"#!/tree\">root</a>");
     let mut cumulative = String::new();
     for component in path.split('/').filter(|s| !s.is_empty()) {
@@ -53,17 +54,16 @@ fn update_path_bar(doc: &Document, path: &str) {
 }
 
 fn set_active_tab(doc: &Document, tab: &str) {
-    if let Ok(tabs) = doc.query_selector_all("#nav a") {
-        for i in 0..tabs.length() {
-            if let Some(node) = tabs.get(i)
-                && let Ok(el) = node.dyn_into::<web_sys::Element>()
-            {
-                let href = el.get_attribute("href").unwrap_or_default();
-                if href.starts_with(tab) {
-                    el.class_list().add_1("active").ok();
-                } else {
-                    el.class_list().remove_1("active").ok();
-                }
+    let tabs = doc.query_selector_all("#nav a").unwrap();
+    for i in 0..tabs.length() {
+        if let Some(node) = tabs.get(i)
+            && let Ok(el) = node.dyn_into::<web_sys::Element>()
+        {
+            let href = el.get_attribute("href").unwrap_or_default();
+            if href.starts_with(tab) {
+                el.class_list().add_1("active").ok();
+            } else {
+                el.class_list().remove_1("active").ok();
             }
         }
     }
@@ -154,10 +154,8 @@ pub(crate) async fn handle_route(
     doc: &Document,
     tera: &Tera,
 ) {
-    let output = match doc.get_element_by_id("output") {
-        Some(el) => el,
-        None => return,
-    };
+    let output = doc.get_element_by_id("output").unwrap();
+    output.set_inner_html("");
 
     match parse_hash(&hash) {
         Route::Summary => {
