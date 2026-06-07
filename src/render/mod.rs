@@ -1,7 +1,8 @@
 use crate::cache::CachingRepo;
-use git_async::object::Commit;
+use git_async::object::{Commit, ObjectId};
 use git_async::reference::RefName;
 use serde::Serialize;
+use std::collections::{BTreeSet, BinaryHeap};
 use tera::{Context, Kwargs, State, Tera, TeraResult, Value};
 
 pub(crate) mod about;
@@ -63,7 +64,7 @@ pub(crate) struct RefRow {
 }
 
 #[derive(Serialize)]
-struct CommitRow {
+pub(crate) struct CommitRow {
     hash: String,
     short_hash: String,
     message: String,
@@ -140,6 +141,51 @@ pub(crate) async fn fetch_branch_rows(branch_names: &[String], repo: &CachingRep
 
 pub(crate) async fn fetch_tag_rows(tag_names: &[String], repo: &CachingRepo) -> Vec<RefRow> {
     fetch_ref_rows("tags", tag_names, repo).await
+}
+
+pub(crate) async fn walk_commits(
+    head_commit: &Commit,
+    repo: &CachingRepo,
+    skip: usize,
+    limit: usize,
+) -> (Vec<CommitRow>, bool) {
+    let mut heap: BinaryHeap<(chrono::DateTime<chrono::FixedOffset>, Commit)> = BinaryHeap::new();
+    let mut visited: BTreeSet<ObjectId> = BTreeSet::new();
+    heap.push((head_commit.commit_date(), head_commit.clone()));
+    visited.insert(head_commit.id());
+
+    let mut count = 0usize;
+    let mut commits: Vec<CommitRow> = Vec::new();
+    let mut has_more = false;
+
+    while let Some((_, current)) = heap.pop() {
+        if count >= skip && commits.len() < limit {
+            let hash = format!("{}", current.id());
+            commits.push(CommitRow {
+                short_hash: hash[..8].to_string(),
+                hash,
+                message: commit_first_line(&current),
+                author: String::from_utf8_lossy(current.author_name()).into_owned(),
+                age: age(&current.author_date()),
+            });
+        } else if commits.len() == limit {
+            has_more = true;
+            break;
+        }
+        count += 1;
+
+        let parents = match repo.lookup_parents(&current).await {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        for parent in parents {
+            if visited.insert(parent.id()) {
+                heap.push((parent.commit_date(), parent));
+            }
+        }
+    }
+
+    (commits, has_more)
 }
 
 fn ref_row(name: String, c: &Commit) -> RefRow {

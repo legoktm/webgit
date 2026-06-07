@@ -1,40 +1,11 @@
 use crate::{
     cache::CachingRepo,
-    render::{CommitRow, RefRow, age, collect_ref_names, commit_first_line, fetch_branch_rows, fetch_tag_rows, render_template},
+    render::{CommitRow, RefRow, collect_ref_names, fetch_branch_rows, fetch_tag_rows, render_template, walk_commits},
 };
 use git_async::object::Commit;
 use git_async::reference::{RefName, RefTarget};
 use serde::Serialize;
-use std::collections::BinaryHeap;
 use tera::Tera;
-
-async fn fetch_recent_commits(head_commit: &Commit, repo: &CachingRepo) -> Vec<CommitRow> {
-    let mut heap: BinaryHeap<(chrono::DateTime<chrono::FixedOffset>, Commit)> = BinaryHeap::new();
-    heap.push((head_commit.commit_date(), head_commit.clone()));
-    let mut commits = Vec::new();
-    while commits.len() < 10 {
-        let (_, current) = match heap.pop() {
-            Some(e) => e,
-            None => break,
-        };
-        let hash = format!("{}", current.id());
-        commits.push(CommitRow {
-            short_hash: hash[..8].to_string(),
-            hash,
-            message: commit_first_line(&current),
-            author: String::from_utf8_lossy(current.author_name()).into_owned(),
-            age: age(&current.author_date()),
-        });
-        let parents = match repo.lookup_parents(&current).await {
-            Ok(p) => p,
-            Err(_) => continue,
-        };
-        for parent in parents {
-            heap.push((parent.commit_date(), parent));
-        }
-    }
-    commits
-}
 
 async fn build_summary(
     head_commit: &Commit,
@@ -75,10 +46,10 @@ async fn build_summary(
     tag_names.truncate(10);
 
     // --- Fetch branch commits, tag commits, and recent HEAD commits concurrently ---
-    let (branches, tags, commits) = futures::join!(
+    let (branches, tags, (commits, _)) = futures::join!(
         fetch_branch_rows(&branch_names, repo),
         fetch_tag_rows(&tag_names, repo),
-        fetch_recent_commits(head_commit, repo),
+        walk_commits(head_commit, repo, 0, 10),
     );
 
     SummaryTemplate {
