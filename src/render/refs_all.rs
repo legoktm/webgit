@@ -60,13 +60,14 @@ struct RefsAllTemplate {
     tags: Vec<RefRow>,
 }
 
-pub(crate) async fn render_refs_all(tera: &Tera, repo: &CachingRepo, output: &web_sys::Element) {
+pub(crate) async fn render_refs_all(
+    tera: &Tera,
+    repo: &CachingRepo,
+    output: &web_sys::Element,
+) -> Result<(), String> {
     let template = build_refs_all(repo).await;
-    let ctx = Context::from_serialize(&template).unwrap();
-    match tera.render("refs_all.html", &ctx) {
-        Ok(html) => output.set_inner_html(&html),
-        Err(e) => {
-            output.set_inner_html(&format!("<p class=\"msg error\">Template error: {}</p>", e))
-        }
-    }
+    let ctx = Context::from_serialize(&template).map_err(|e| format!("{e}"))?;
+    let html = tera.render("refs_all.html", &ctx).map_err(|e| format!("Template error: {e}"))?;
+    output.set_inner_html(&html);
+    Ok(())
 }

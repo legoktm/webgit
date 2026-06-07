@@ -3,37 +3,42 @@ use git_async::reference::{RefName, RefTarget};
 use serde::Serialize;
 use tera::{Context, Tera};
 
-async fn build_tag(repo: &CachingRepo, tag: String) -> TagTemplate {
+async fn build_tag(repo: &CachingRepo, tag: String) -> Result<TagTemplate, String> {
     let ref_name = RefName::Ref(format!("tags/{tag}").into_bytes());
     let ref_ = repo
         .lookup_ref(&ref_name)
         .await
-        .unwrap_or_else(|_| panic!("unable to find commit for {tag}"));
+        .map_err(|e| format!("unable to find ref for {tag}: {e:?}"))?;
     let commit = repo
         .peel_ref_to_commit(&ref_)
         .await
-        .unwrap_or_else(|_| panic!("unable to find commit for {tag}"))
-        .ok_or_else(|| format!("unable to find commit for {tag}"))
-        .unwrap();
-    let tag_object_id = if let RefTarget::Direct(object_id) = ref_.target() {
-        object_id
-    } else {
-        panic!("reftarget is symbolic");
+        .map_err(|e| format!("unable to peel ref for {tag}: {e:?}"))?
+        .ok_or_else(|| format!("unable to find commit for {tag}"))?;
+    let tag_object_id = match ref_.target() {
+        RefTarget::Direct(object_id) => object_id,
+        _ => return Err(format!("ref target for {tag} is not direct")),
     };
     let tag_obj = repo
         .lookup_object(*tag_object_id)
         .await
-        .unwrap()
+        .map_err(|e| format!("{e:?}"))?
         .tag()
-        .unwrap();
+        .map_err(|e| format!("{e:?}"))?;
 
-    TagTemplate {
-        name: tag,
-        date: tag_obj.date().unwrap().to_string(),
-        tagger_name: String::from_utf8_lossy(tag_obj.tagger_name().unwrap()).to_string(),
+    Ok(TagTemplate {
+        name: tag.clone(),
+        date: tag_obj
+            .date()
+            .ok_or_else(|| format!("no date on tag {tag}"))?
+            .to_string(),
+        tagger_name: String::from_utf8_lossy(
+            tag_obj.tagger_name().ok_or_else(|| format!("no tagger name on tag {tag}"))?,
+        )
+        .to_string(),
         commit: commit.id().to_string(),
-        contents: String::from_utf8(tag_obj.message().to_vec()).unwrap(),
-    }
+        contents: String::from_utf8(tag_obj.message().to_vec())
+            .map_err(|e| format!("{e}"))?,
+    })
 }
 
 #[derive(Serialize)]
@@ -50,13 +55,10 @@ pub(crate) async fn render_tag(
     repo: &CachingRepo,
     tag: String,
     output: &web_sys::Element,
-) {
-    let template = build_tag(repo, tag).await;
-    let ctx = Context::from_serialize(&template).unwrap();
-    match tera.render("tag.html", &ctx) {
-        Ok(html) => output.set_inner_html(&html),
-        Err(e) => {
-            output.set_inner_html(&format!("<p class=\"msg error\">Template error: {}</p>", e))
-        }
-    }
+) -> Result<(), String> {
+    let template = build_tag(repo, tag).await?;
+    let ctx = Context::from_serialize(&template).map_err(|e| format!("{e}"))?;
+    let html = tera.render("tag.html", &ctx).map_err(|e| format!("Template error: {e}"))?;
+    output.set_inner_html(&html);
+    Ok(())
 }

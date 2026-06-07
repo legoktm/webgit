@@ -39,14 +39,16 @@ fn tree_rows(tree: &Tree, prefix: &str) -> Vec<TreeEntryRow> {
         .collect()
 }
 
-pub(crate) fn render_tree(tera: &Tera, tree: &Tree, prefix: &str, output: &web_sys::Element) {
+pub(crate) fn render_tree(
+    tera: &Tera,
+    tree: &Tree,
+    prefix: &str,
+    output: &web_sys::Element,
+) -> Result<(), String> {
     let rows = tree_rows(tree, prefix);
     let mut ctx = Context::new();
     ctx.insert("entries", &rows);
-    match tera.render("tree.html", &ctx) {
-        Ok(html) => output.set_inner_html(&html),
-        Err(e) => {
-            output.set_inner_html(&format!("<p class=\"msg error\">Template error: {}</p>", e))
-        }
-    }
+    let html = tera.render("tree.html", &ctx).map_err(|e| format!("Template error: {e}"))?;
+    output.set_inner_html(&html);
+    Ok(())
 }

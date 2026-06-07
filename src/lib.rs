@@ -7,7 +7,7 @@ mod route;
 mod stats;
 
 use cache::CachingRepo;
-use error::fmt_git_err;
+use error::{error_html, fmt_git_err};
 use fs::{HttpDirectory, HttpFilesystem};
 use git_async::Repo;
 use route::{handle_route, set_text};
@@ -26,7 +26,12 @@ fn console_log(msg: &str) {
 
 async fn load_repo(url: String, doc: Document) {
     let output = doc.get_element_by_id("output").unwrap();
+    if let Err(e) = try_load_repo(url, doc.clone()).await {
+        output.set_inner_html(&error_html(&e));
+    }
+}
 
+async fn try_load_repo(url: String, doc: Document) -> Result<(), String> {
     // Register live progress updates on the persistent stats bar.
     let stats_el = doc.get_element_by_id("fetch-stats");
     fetch::reset_and_watch(Box::new(move |reqs, bytes, cached_bytes| {
@@ -41,43 +46,21 @@ async fn load_repo(url: String, doc: Document) {
     }));
 
     let dir = HttpDirectory::new(url.clone());
-    let repo = match Repo::<HttpFilesystem>::open(dir).await {
-        Err(e) => {
-            output.set_inner_html(&format!(
-                "<p class=\"msg error\">Failed to open repo: {}</p>",
-                fmt_git_err(&e)
-            ));
-            return;
-        }
-        Ok(r) => r,
-    };
+    let repo = Repo::<HttpFilesystem>::open(dir)
+        .await
+        .map_err(|e| format!("Failed to open repo: {}", fmt_git_err(&e)))?;
     let repo = CachingRepo::open(repo, url.clone()).await;
 
-    let head = match repo.head().await {
-        Err(e) => {
-            output.set_inner_html(&format!(
-                "<p class=\"msg error\">Failed to read HEAD: {}</p>",
-                fmt_git_err(&e)
-            ));
-            return;
-        }
-        Ok(h) => h,
-    };
+    let head = repo
+        .head()
+        .await
+        .map_err(|e| format!("Failed to read HEAD: {}", fmt_git_err(&e)))?;
 
-    let commit = match repo.peel_ref_to_commit(&head).await {
-        Ok(Some(c)) => c,
-        Ok(None) => {
-            output.set_inner_html("<p class=\"msg error\">HEAD does not point to a commit</p>");
-            return;
-        }
-        Err(e) => {
-            output.set_inner_html(&format!(
-                "<p class=\"msg error\">Failed to peel HEAD to commit: {}</p>",
-                fmt_git_err(&e)
-            ));
-            return;
-        }
-    };
+    let commit = repo
+        .peel_ref_to_commit(&head)
+        .await
+        .map_err(|e| format!("Failed to peel HEAD to commit: {}", fmt_git_err(&e)))?
+        .ok_or_else(|| "HEAD does not point to a commit".to_string())?;
 
     let repo_name = url
         .trim_end_matches('/')
@@ -89,25 +72,12 @@ async fn load_repo(url: String, doc: Document) {
 
     set_text(&doc, "repo-path-name", &repo_name);
 
-    let root_tree = match repo.lookup_object(commit.tree()).await {
-        Ok(obj) => match obj.tree() {
-            Ok(t) => t,
-            Err(e) => {
-                output.set_inner_html(&format!(
-                    "<p class=\"msg error\">Root object is not a tree: {:?}</p>",
-                    e
-                ));
-                return;
-            }
-        },
-        Err(e) => {
-            output.set_inner_html(&format!(
-                "<p class=\"msg error\">Failed to load root tree: {}</p>",
-                fmt_git_err(&e)
-            ));
-            return;
-        }
-    };
+    let root_tree = repo
+        .lookup_object(commit.tree())
+        .await
+        .map_err(|e| format!("Failed to load root tree: {}", fmt_git_err(&e)))?
+        .tree()
+        .map_err(|e| format!("Root object is not a tree: {e:?}"))?;
 
     let head_commit = Rc::new(commit);
     let root_tree = Rc::new(root_tree);
@@ -173,6 +143,7 @@ async fn load_repo(url: String, doc: Document) {
         .expect("failed to add hashchange listener");
 
     cb.forget();
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

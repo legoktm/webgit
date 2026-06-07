@@ -136,13 +136,10 @@ pub(crate) async fn render_summary(
     repo: &CachingRepo,
     clone_url: &str,
     output: &web_sys::Element,
-) {
+) -> Result<(), String> {
     let template = build_summary(head_commit, repo, clone_url).await;
-    let ctx = Context::from_serialize(&template).unwrap();
-    match tera.render("summary.html", &ctx) {
-        Ok(html) => output.set_inner_html(&html),
-        Err(e) => {
-            output.set_inner_html(&format!("<p class=\"msg error\">Template error: {}</p>", e))
-        }
-    }
+    let ctx = Context::from_serialize(&template).map_err(|e| format!("{e}"))?;
+    let html = tera.render("summary.html", &ctx).map_err(|e| format!("Template error: {e}"))?;
+    output.set_inner_html(&html);
+    Ok(())
 }

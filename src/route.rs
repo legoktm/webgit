@@ -1,5 +1,6 @@
 use crate::cache::{CachingRepo, ClearTarget};
 use crate::console_log;
+use crate::error::error_html;
 use crate::render::about::render_about;
 use std::rc::Rc;
 use wasm_bindgen::closure::Closure;
@@ -184,54 +185,70 @@ pub(crate) async fn handle_route(
 ) {
     let output = doc.get_element_by_id("output").unwrap();
     output.set_inner_html("");
+    if let Err(e) =
+        try_handle_route(hash, head_commit, root_tree, repo, clone_url, doc, tera, &output).await
+    {
+        output.set_inner_html(&error_html(&e));
+    }
+}
 
+async fn try_handle_route(
+    hash: String,
+    head_commit: &git_async::object::Commit,
+    root_tree: &Tree,
+    repo: &Rc<CachingRepo>,
+    clone_url: &Rc<String>,
+    doc: &Document,
+    tera: &Rc<Tera>,
+    output: &web_sys::Element,
+) -> Result<(), String> {
     match parse_hash(&hash) {
         Route::About => {
             hide_path_bar(doc);
             set_active_tab(doc, "#!/about");
-            render_about(tera, repo, clone_url, &output).await;
-            attach_about_handlers(doc, &output, repo, tera, clone_url);
+            render_about(tera, repo, clone_url, output).await?;
+            attach_about_handlers(doc, output, repo, tera, clone_url);
         }
         Route::Summary => {
             hide_path_bar(doc);
             set_active_tab(doc, "#!/summary");
-            render_summary(tera, head_commit, repo, clone_url, &output).await;
+            render_summary(tera, head_commit, repo, clone_url, output).await?;
         }
         Route::Log(offset) => {
             hide_path_bar(doc);
             set_active_tab(doc, "#!/log");
-            render_log(tera, head_commit, repo, offset, &output).await;
+            render_log(tera, head_commit, repo, offset, output).await?;
         }
         Route::CommitHead => {
             hide_path_bar(doc);
             set_active_tab(doc, "#!/commit");
-            render_commit(tera, repo, format!("{}", head_commit.id()), &output).await;
+            render_commit(tera, repo, format!("{}", head_commit.id()), output).await?;
         }
         Route::Commit(sha) => {
             hide_path_bar(doc);
             set_active_tab(doc, "#!/commit");
-            render_commit(tera, repo, sha, &output).await;
+            render_commit(tera, repo, sha, output).await?;
         }
         Route::Refs(RefsRoute::Heads) => {
             hide_path_bar(doc);
             set_active_tab(doc, "#!/refs");
-            render_refs_heads(tera, repo, &output).await;
+            render_refs_heads(tera, repo, output).await?;
         }
         Route::Refs(RefsRoute::Tags) => {
             hide_path_bar(doc);
             set_active_tab(doc, "#!/refs");
-            render_refs_tags(tera, repo, &output).await;
+            render_refs_tags(tera, repo, output).await?;
         }
         Route::Refs(RefsRoute::Tag(tag)) => {
             hide_path_bar(doc);
             set_active_tab(doc, "#!/refs");
             console_log(&tag);
-            render_tag(tera, repo, tag, &output).await;
+            render_tag(tera, repo, tag, output).await?;
         }
         Route::Refs(RefsRoute::All) => {
             hide_path_bar(doc);
             set_active_tab(doc, "#!/refs");
-            render_refs_all(tera, repo, &output).await;
+            render_refs_all(tera, repo, output).await?;
         }
         Route::Tree(path) => {
             update_path_bar(doc, &path);
@@ -239,13 +256,12 @@ pub(crate) async fn handle_route(
             set_active_tab(doc, "#!/tree");
 
             if let Some(subtree) = walk_to_tree(root_tree, &path, repo).await {
-                render_tree(tera, &subtree, &path, &output);
-                return;
+                return render_tree(tera, &subtree, &path, output);
             }
 
             output.set_inner_html("<p class=\"msg\">Loading\u{2026}</p>");
             match walk_to_blob(root_tree, &path, repo).await {
-                Some((id, data)) => render_blob(tera, id, &data, &output),
+                Some((id, data)) => render_blob(tera, id, &data, output)?,
                 None => output.set_inner_html(&format!(
                     "<p class=\"msg error\">Not found: <code>{}</code></p>",
                     path
@@ -253,6 +269,7 @@ pub(crate) async fn handle_route(
             }
         }
     }
+    Ok(())
 }
 
 fn attach_about_handlers(
@@ -289,7 +306,10 @@ fn attach_about_handlers(
             let output = output.clone();
             wasm_bindgen_futures::spawn_local(async move {
                 repo.clear_cache(target).await;
-                render_about(&tera, &repo, &clone_url, &output).await;
+                if let Err(e) = render_about(&tera, &repo, &clone_url, &output).await {
+                    output.set_inner_html(&error_html(&e));
+                    return;
+                }
                 attach_about_handlers(&doc, &output, &repo, &tera, &clone_url);
             });
         });

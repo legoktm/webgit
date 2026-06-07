@@ -196,17 +196,10 @@ pub(crate) async fn render_commit(
     repo: &CachingRepo,
     sha: String,
     output: &web_sys::Element,
-) {
-    match build_commit(repo, &sha).await {
-        Ok(template) => {
-            let ctx = Context::from_serialize(&template).unwrap();
-            match tera.render("commit.html", &ctx) {
-                Ok(html) => output.set_inner_html(&html),
-                Err(e) => output.set_inner_html(&format!(
-                    "<p class=\"msg error\">Template error: {e}</p>"
-                )),
-            }
-        }
-        Err(e) => output.set_inner_html(&format!("<p class=\"msg error\">{e}</p>")),
-    }
+) -> Result<(), String> {
+    let template = build_commit(repo, &sha).await?;
+    let ctx = Context::from_serialize(&template).map_err(|e| format!("{e}"))?;
+    let html = tera.render("commit.html", &ctx).map_err(|e| format!("Template error: {e}"))?;
+    output.set_inner_html(&html);
+    Ok(())
 }

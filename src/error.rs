@@ -1,6 +1,13 @@
 use git_async::error::Error as GitError;
 use git_async::file_system::FileSystemError;
 
+pub(crate) fn error_html(msg: &str) -> String {
+    let doc = web_sys::window().unwrap().document().unwrap();
+    let tmp = doc.create_element("span").unwrap();
+    tmp.set_text_content(Some(msg));
+    format!("<p class=\"msg error\">{}</p>", tmp.inner_html())
+}
+
 /// Format a [`FileSystemError`] into a human-readable string.
 /// The inner `Box<dyn Any>` is always a `String` in our implementation,
 /// so we downcast and display it directly.
