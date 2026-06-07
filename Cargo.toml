@@ -8,6 +8,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 anyhow = "1"
+futures = { version = "0.3", default-features = false, features = ["alloc", "async-await"] }
 git-async = { path = "./git-async", features = ["diff"] }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"

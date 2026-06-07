@@ -1,6 +1,6 @@
 use crate::{
     cache::CachingRepo,
-    render::{RefRow, ref_row},
+    render::{RefRow, fetch_branch_rows, fetch_tag_rows},
 };
 use git_async::reference::RefName;
 use serde::Serialize;
@@ -24,30 +24,10 @@ async fn build_refs_all(repo: &CachingRepo) -> RefsAllTemplate {
         }
     }
 
-    // --- Fetch commit data only for the selected refs ---
-    let mut branches: Vec<RefRow> = Vec::new();
-    for short in &branch_names {
-        let rn = RefName::Ref(format!("heads/{}", short).into_bytes());
-        let Ok(r) = repo.lookup_ref(&rn).await else {
-            continue;
-        };
-        let Ok(Some(commit)) = repo.peel_ref_to_commit(&r).await else {
-            continue;
-        };
-        branches.push(ref_row(short.clone(), &commit));
-    }
-
-    let mut tags: Vec<RefRow> = Vec::new();
-    for short in &tag_names {
-        let rn = RefName::Ref(format!("tags/{}", short).into_bytes());
-        let Ok(r) = repo.lookup_ref(&rn).await else {
-            continue;
-        };
-        let Ok(Some(commit)) = repo.peel_ref_to_commit(&r).await else {
-            continue;
-        };
-        tags.push(ref_row(short.clone(), &commit));
-    }
+    let (mut branches, mut tags) = futures::join!(
+        fetch_branch_rows(&branch_names, repo),
+        fetch_tag_rows(&tag_names, repo),
+    );
     branches.sort_by_key(|b| b.age);
     tags.sort_by_key(|t| t.age);
 

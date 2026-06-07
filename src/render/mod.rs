@@ -1,4 +1,6 @@
+use crate::cache::CachingRepo;
 use git_async::object::Commit;
+use git_async::reference::RefName;
 use serde::Serialize;
 use tera::{Kwargs, State, Tera, TeraResult, Value};
 
@@ -40,7 +42,7 @@ pub(crate) fn init_tera() -> Tera {
 }
 
 #[derive(Serialize)]
-struct RefRow {
+pub(crate) struct RefRow {
     name: String,
     short_hash: String,
     message: String,
@@ -84,6 +86,28 @@ fn commit_first_line(c: &Commit) -> String {
         .next()
         .unwrap_or("")
         .to_string()
+}
+
+pub(crate) async fn fetch_branch_rows(branch_names: &[String], repo: &CachingRepo) -> Vec<RefRow> {
+    let mut rows = Vec::new();
+    for short in branch_names {
+        let rn = RefName::Ref(format!("heads/{short}").into_bytes());
+        let Ok(r) = repo.lookup_ref(&rn).await else { continue };
+        let Ok(Some(commit)) = repo.peel_ref_to_commit(&r).await else { continue };
+        rows.push(ref_row(short.clone(), &commit));
+    }
+    rows
+}
+
+pub(crate) async fn fetch_tag_rows(tag_names: &[String], repo: &CachingRepo) -> Vec<RefRow> {
+    let mut rows = Vec::new();
+    for short in tag_names {
+        let rn = RefName::Ref(format!("tags/{short}").into_bytes());
+        let Ok(r) = repo.lookup_ref(&rn).await else { continue };
+        let Ok(Some(commit)) = repo.peel_ref_to_commit(&r).await else { continue };
+        rows.push(ref_row(short.clone(), &commit));
+    }
+    rows
 }
 
 fn ref_row(name: String, c: &Commit) -> RefRow {
