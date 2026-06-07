@@ -1,5 +1,6 @@
 use crate::cache::CachingRepo;
 use crate::console_log;
+use crate::render::about::render_about;
 use crate::render::commit::render_commit;
 use crate::render::log::render_log;
 use crate::render::refs_all::render_refs_all;
@@ -115,6 +116,7 @@ pub(crate) enum RefsRoute {
 }
 
 pub(crate) enum Route {
+    About,
     Summary,
     Log(usize),
     CommitHead,
@@ -127,6 +129,9 @@ pub(crate) fn parse_hash(hash: &str) -> Route {
     // most likely scenario
     if hash == "#!/summary" || hash.is_empty() || hash == "#" {
         return Route::Summary;
+    }
+    if hash == "#!/about" {
+        return Route::About;
     }
     if hash == "#!/log" || hash.starts_with("#!/log/") {
         let offset = hash
@@ -178,6 +183,11 @@ pub(crate) async fn handle_route(
     output.set_inner_html("");
 
     match parse_hash(&hash) {
+        Route::About => {
+            hide_path_bar(doc);
+            set_active_tab(doc, "#!/about");
+            render_about(tera, repo, clone_url, &output).await;
+        }
         Route::Summary => {
             hide_path_bar(doc);
             set_active_tab(doc, "#!/summary");

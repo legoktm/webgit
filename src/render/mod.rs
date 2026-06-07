@@ -2,6 +2,7 @@ use git_async::object::Commit;
 use serde::Serialize;
 use tera::{Kwargs, State, Tera, TeraResult, Value};
 
+pub(crate) mod about;
 pub(crate) mod blob;
 pub(crate) mod commit;
 pub(crate) mod log;
@@ -16,6 +17,7 @@ pub(crate) fn init_tera() -> Tera {
     let mut tera = Tera::default();
     tera.register_filter("age_string", age_string);
     tera.add_raw_templates(vec![
+        ("about.html", include_str!("../templates/about.html")),
         ("blob.html", include_str!("../templates/blob.html")),
         (
             "refs_heads.html",

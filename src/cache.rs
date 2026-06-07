@@ -124,6 +124,43 @@ impl CachingRepo {
         self.inner.lookup_ref(name).await
     }
 
+    // --- Stats ---------------------------------------------------------------
+
+    pub(crate) async fn about_stats(&self) -> Option<(usize, f64, usize)> {
+        let (object_count, size_mb) = self.object_store_stats().await?;
+        let tag_count = self.tag_ref_count().await.unwrap_or(0);
+        Some((object_count, size_mb, tag_count))
+    }
+
+    async fn object_store_stats(&self) -> Option<(usize, f64)> {
+        let db = self.db.as_ref()?;
+        let tx = db.transaction_with_str(STORE_OBJECTS).ok()?;
+        let store = tx.object_store(STORE_OBJECTS).ok()?;
+        let req = store.get_all().ok()?;
+        let result = await_request(&req).await.ok()?;
+        let arr = js_sys::Array::from(&result);
+        let count = arr.length() as usize;
+        let mut total_bytes = 0u64;
+        for i in 0..arr.length() {
+            let record = arr.get(i);
+            if let Ok(data) = js_sys::Reflect::get(&record, &"data".into())
+                && let Ok(ab) = data.dyn_into::<js_sys::ArrayBuffer>()
+            {
+                total_bytes += ab.byte_length() as u64;
+            }
+        }
+        Some((count, total_bytes as f64 / (1024.0 * 1024.0)))
+    }
+
+    async fn tag_ref_count(&self) -> Option<usize> {
+        let db = self.db.as_ref()?;
+        let tx = db.transaction_with_str(STORE_TAG_REFS).ok()?;
+        let store = tx.object_store(STORE_TAG_REFS).ok()?;
+        let req = store.count().ok()?;
+        let result = await_request(&req).await.ok()?;
+        Some(result.as_f64().unwrap_or(0.0) as usize)
+    }
+
     // --- IndexedDB helpers ---------------------------------------------------
 
     async fn tag_ref_get(&self, short: &str) -> Option<ObjectId> {
