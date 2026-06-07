@@ -1,9 +1,8 @@
 use crate::{
     cache::CachingRepo,
-    render::{CommitRow, RefRow, collect_ref_names, fetch_branch_rows, fetch_tag_rows, render_template, walk_commits},
+    render::{CommitRow, RefRow, collect_ref_names, fetch_branch_rows, fetch_tag_rows, head_branch_name, render_template, walk_commits},
 };
 use git_async::object::Commit;
-use git_async::reference::{RefName, RefTarget};
 use serde::Serialize;
 use tera::Tera;
 
@@ -12,14 +11,7 @@ async fn build_summary(
     repo: &CachingRepo,
     clone_url: &str,
 ) -> SummaryTemplate {
-    let head_branch: Option<String> = repo.head().await.ok().and_then(|r| {
-        match r.target() {
-            RefTarget::Symbolic(RefName::Ref(b)) => b
-                .strip_prefix(b"heads/")
-                .map(|s| String::from_utf8_lossy(s).into_owned()),
-            _ => None,
-        }
-    });
+    let head_branch: Option<String> = head_branch_name(repo).await;
 
     let (all_branch_names, mut tag_names) = collect_ref_names(repo).await;
 

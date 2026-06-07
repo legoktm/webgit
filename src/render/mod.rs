@@ -1,6 +1,6 @@
 use crate::cache::CachingRepo;
 use git_async::object::{Commit, ObjectId};
-use git_async::reference::RefName;
+use git_async::reference::{RefName, RefTarget};
 use serde::Serialize;
 use std::collections::{BTreeSet, BinaryHeap};
 use tera::{Context, Kwargs, State, Tera, TeraResult, Value};
@@ -99,6 +99,16 @@ fn commit_first_line(c: &Commit) -> String {
         .next()
         .unwrap_or("")
         .to_string()
+}
+
+pub(crate) async fn head_branch_name(repo: &CachingRepo) -> Option<String> {
+    let head = repo.head().await.ok()?;
+    if let RefTarget::Symbolic(RefName::Ref(name)) = head.target() {
+        let branch = name.strip_prefix(b"heads/")?;
+        Some(String::from_utf8_lossy(branch).into_owned())
+    } else {
+        None
+    }
 }
 
 pub(crate) async fn collect_ref_names(repo: &CachingRepo) -> (Vec<String>, Vec<String>) {

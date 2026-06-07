@@ -8,9 +8,9 @@ use crate::render::refs_all::render_refs_all;
 use crate::render::refs_heads::render_refs_heads;
 use crate::render::refs_tags::render_refs_tags;
 use crate::render::tag::render_tag;
-use crate::render::{blob::render_blob, summary::render_summary, tree::render_tree};
+use crate::render::{blob::render_blob, head_branch_name, summary::render_summary, tree::render_tree};
 use git_async::object::{ObjectId, Tree, TreeEntryType};
-use git_async::reference::{RefName, RefTarget};
+use git_async::reference::RefName;
 use std::rc::Rc;
 use tera::Tera;
 use wasm_bindgen::JsCast;
@@ -248,16 +248,6 @@ fn parse_log_query(query_string: &str) -> (usize, Option<String>) {
         }
     }
     (offset, head)
-}
-
-async fn head_branch_name(repo: &CachingRepo) -> Option<String> {
-    let head = repo.head().await.ok()?;
-    if let RefTarget::Symbolic(RefName::Ref(name)) = head.target() {
-        let branch = name.strip_prefix(b"heads/")?;
-        Some(String::from_utf8_lossy(branch).into_owned())
-    } else {
-        None
-    }
 }
 
 pub(crate) enum RefKind {
