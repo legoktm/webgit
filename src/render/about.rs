@@ -11,9 +11,12 @@ struct AboutTemplate {
     branch_count: usize,
     tag_count: usize,
     idb_available: bool,
-    object_count: usize,
-    size_mb: String,
-    cached_tag_refs: usize,
+    repo_objects: usize,
+    repo_size_mb: String,
+    global_objects: usize,
+    global_size_mb: String,
+    repo_tag_refs: usize,
+    global_tag_refs: usize,
 }
 
 pub(crate) async fn render_about(
@@ -27,10 +30,9 @@ pub(crate) async fn render_about(
         .await
         .ok()
         .and_then(|r| match r.target() {
-            RefTarget::Symbolic(RefName::Ref(b)) => {
-                b.strip_prefix(b"heads/")
-                    .map(|s| String::from_utf8_lossy(s).into_owned())
-            }
+            RefTarget::Symbolic(RefName::Ref(b)) => b
+                .strip_prefix(b"heads/")
+                .map(|s| String::from_utf8_lossy(s).into_owned()),
             _ => None,
         })
         .unwrap_or_else(|| "(detached)".to_string());
@@ -51,24 +53,37 @@ pub(crate) async fn render_about(
         })
         .unwrap_or((0, 0));
 
-    let (idb_available, object_count, size_mb, cached_tag_refs) =
-        match repo.about_stats().await {
-            Some((objects, mb, tag_refs)) => {
-                (true, objects, format!("{mb:.2}"), tag_refs)
+    let template = match repo.about_stats().await {
+        Some((repo_obj, repo_mb, global_obj, global_mb, repo_tags, global_tags)) => {
+            AboutTemplate {
+                version: env!("CARGO_PKG_VERSION"),
+                clone_url: clone_url.to_string(),
+                head_branch,
+                branch_count,
+                tag_count,
+                idb_available: true,
+                repo_objects: repo_obj,
+                repo_size_mb: format!("{repo_mb:.2}"),
+                global_objects: global_obj,
+                global_size_mb: format!("{global_mb:.2}"),
+                repo_tag_refs: repo_tags,
+                global_tag_refs: global_tags,
             }
-            None => (false, 0, String::new(), 0),
-        };
-
-    let template = AboutTemplate {
-        version: env!("CARGO_PKG_VERSION"),
-        clone_url: clone_url.to_string(),
-        head_branch,
-        branch_count,
-        tag_count,
-        idb_available,
-        object_count,
-        size_mb,
-        cached_tag_refs,
+        }
+        None => AboutTemplate {
+            version: env!("CARGO_PKG_VERSION"),
+            clone_url: clone_url.to_string(),
+            head_branch,
+            branch_count,
+            tag_count,
+            idb_available: false,
+            repo_objects: 0,
+            repo_size_mb: String::new(),
+            global_objects: 0,
+            global_size_mb: String::new(),
+            repo_tag_refs: 0,
+            global_tag_refs: 0,
+        },
     };
 
     let ctx = Context::from_serialize(&template).unwrap();

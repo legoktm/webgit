@@ -12,13 +12,21 @@ use wasm_bindgen_futures::JsFuture;
 use web_sys::{IdbDatabase, IdbOpenDbRequest, IdbRequest, IdbTransactionMode};
 
 const DB_NAME: &str = "webgit";
-const DB_VERSION: u32 = 2;
+const DB_VERSION: u32 = 3;
 const STORE_OBJECTS: &str = "objects";
 const STORE_TAG_REFS: &str = "tag_refs";
 
 // ---------------------------------------------------------------------------
 // CachingRepo
 // ---------------------------------------------------------------------------
+
+#[derive(Copy, Clone)]
+pub(crate) enum ClearTarget {
+    RepoObjects,
+    AllObjects,
+    RepoTags,
+    AllTags,
+}
 
 pub(crate) struct CachingRepo {
     inner: Repo<HttpFilesystem>,
@@ -124,41 +132,131 @@ impl CachingRepo {
         self.inner.lookup_ref(name).await
     }
 
-    // --- Stats ---------------------------------------------------------------
+    // --- Cache clearing ------------------------------------------------------
 
-    pub(crate) async fn about_stats(&self) -> Option<(usize, f64, usize)> {
-        let (object_count, size_mb) = self.object_store_stats().await?;
-        let tag_count = self.tag_ref_count().await.unwrap_or(0);
-        Some((object_count, size_mb, tag_count))
+    pub(crate) async fn clear_cache(&self, target: ClearTarget) {
+        match target {
+            ClearTarget::RepoObjects => self.clear_store_by_prefix(STORE_OBJECTS).await,
+            ClearTarget::AllObjects => self.clear_store(STORE_OBJECTS).await,
+            ClearTarget::RepoTags => self.clear_store_by_prefix(STORE_TAG_REFS).await,
+            ClearTarget::AllTags => self.clear_store(STORE_TAG_REFS).await,
+        }
     }
 
-    async fn object_store_stats(&self) -> Option<(usize, f64)> {
+    async fn clear_store(&self, store_name: &str) {
+        let Some(db) = self.db.as_ref() else { return };
+        let Ok(tx) = db.transaction_with_str_and_mode(store_name, IdbTransactionMode::Readwrite)
+        else {
+            return;
+        };
+        let Ok(store) = tx.object_store(store_name) else { return };
+        if let Ok(req) = store.clear() {
+            await_request(&req).await.ok();
+        }
+    }
+
+    async fn clear_store_by_prefix(&self, store_name: &str) {
+        let Some(db) = self.db.as_ref() else { return };
+        let prefix = format!("{}::", self.repo_url);
+
+        let keys: Vec<String> = {
+            let Ok(tx) = db.transaction_with_str(store_name) else { return };
+            let Ok(store) = tx.object_store(store_name) else { return };
+            let Ok(req) = store.get_all_keys() else { return };
+            let Ok(result) = await_request(&req).await else { return };
+            let arr = js_sys::Array::from(&result);
+            (0..arr.length())
+                .filter_map(|i| arr.get(i).as_string())
+                .filter(|k| k.starts_with(&prefix))
+                .collect()
+        };
+
+        if keys.is_empty() {
+            return;
+        }
+
+        // Queue all deletes synchronously so the transaction stays open,
+        // then await only the last request.
+        let Ok(tx) = db.transaction_with_str_and_mode(store_name, IdbTransactionMode::Readwrite)
+        else {
+            return;
+        };
+        let Ok(store) = tx.object_store(store_name) else { return };
+        let mut last_req = None;
+        for key in &keys {
+            if let Ok(req) = store.delete(&JsValue::from_str(key)) {
+                last_req = Some(req);
+            }
+        }
+        if let Some(req) = last_req {
+            await_request(&req).await.ok();
+        }
+    }
+
+    // --- Stats ---------------------------------------------------------------
+
+    /// Returns `(repo_objects, repo_mb, global_objects, global_mb, repo_tag_refs, global_tag_refs)`,
+    /// or `None` if IndexedDB is unavailable.
+    pub(crate) async fn about_stats(&self) -> Option<(usize, f64, usize, f64, usize, usize)> {
+        let (repo_obj, repo_mb, global_obj, global_mb) = self.object_store_stats().await?;
+        let (repo_tags, global_tags) = self.tag_ref_stats().await.unwrap_or((0, 0));
+        Some((repo_obj, repo_mb, global_obj, global_mb, repo_tags, global_tags))
+    }
+
+    async fn object_store_stats(&self) -> Option<(usize, f64, usize, f64)> {
         let db = self.db.as_ref()?;
         let tx = db.transaction_with_str(STORE_OBJECTS).ok()?;
         let store = tx.object_store(STORE_OBJECTS).ok()?;
         let req = store.get_all().ok()?;
         let result = await_request(&req).await.ok()?;
         let arr = js_sys::Array::from(&result);
-        let count = arr.length() as usize;
-        let mut total_bytes = 0u64;
+        let prefix = format!("{}::", self.repo_url);
+        let mut repo_count = 0usize;
+        let mut repo_bytes = 0u64;
+        let mut global_bytes = 0u64;
         for i in 0..arr.length() {
             let record = arr.get(i);
+            let is_repo = js_sys::Reflect::get(&record, &"id".into())
+                .ok()
+                .and_then(|v| v.as_string())
+                .is_some_and(|k| k.starts_with(&prefix));
             if let Ok(data) = js_sys::Reflect::get(&record, &"data".into())
                 && let Ok(ab) = data.dyn_into::<js_sys::ArrayBuffer>()
             {
-                total_bytes += ab.byte_length() as u64;
+                let bytes = ab.byte_length() as u64;
+                global_bytes += bytes;
+                if is_repo {
+                    repo_count += 1;
+                    repo_bytes += bytes;
+                }
             }
         }
-        Some((count, total_bytes as f64 / (1024.0 * 1024.0)))
+        let global_count = arr.length() as usize;
+        Some((
+            repo_count,
+            repo_bytes as f64 / (1024.0 * 1024.0),
+            global_count,
+            global_bytes as f64 / (1024.0 * 1024.0),
+        ))
     }
 
-    async fn tag_ref_count(&self) -> Option<usize> {
+    async fn tag_ref_stats(&self) -> Option<(usize, usize)> {
         let db = self.db.as_ref()?;
         let tx = db.transaction_with_str(STORE_TAG_REFS).ok()?;
         let store = tx.object_store(STORE_TAG_REFS).ok()?;
-        let req = store.count().ok()?;
+        let req = store.get_all_keys().ok()?;
         let result = await_request(&req).await.ok()?;
-        Some(result.as_f64().unwrap_or(0.0) as usize)
+        let keys = js_sys::Array::from(&result);
+        let prefix = format!("{}::", self.repo_url);
+        let global_count = keys.length() as usize;
+        let repo_count = (0..keys.length())
+            .filter(|&i| {
+                keys.get(i)
+                    .as_string()
+                    .is_some_and(|k| k.starts_with(&prefix))
+            })
+            .count();
+        Some((repo_count, global_count))
     }
 
     // --- IndexedDB helpers ---------------------------------------------------
@@ -200,9 +298,10 @@ impl CachingRepo {
 
     async fn idb_get(&self, id: ObjectId) -> Option<RawObject> {
         let db = self.db.as_ref()?;
+        let key = format!("{}::{}", self.repo_url, id);
         let tx = db.transaction_with_str(STORE_OBJECTS).ok()?;
         let store = tx.object_store(STORE_OBJECTS).ok()?;
-        let req = store.get(&JsValue::from_str(&id.to_string())).ok()?;
+        let req = store.get(&JsValue::from_str(&key)).ok()?;
         let result = await_request(&req).await.ok()?;
         if result.is_undefined() || result.is_null() {
             return None;
@@ -228,7 +327,8 @@ impl CachingRepo {
         };
 
         let record = js_sys::Object::new();
-        js_sys::Reflect::set(&record, &"oid".into(), &id.to_string().into()).ok();
+        let key = format!("{}::{}", self.repo_url, id);
+        js_sys::Reflect::set(&record, &"id".into(), &JsValue::from_str(&key)).ok();
         js_sys::Reflect::set(
             &record,
             &"type".into(),
@@ -285,16 +385,21 @@ async fn open_db() -> Result<IdbDatabase, JsValue> {
             let db: IdbDatabase = req.result().unwrap().dyn_into().unwrap();
             let old = event.old_version() as u32;
 
-            if old < 1 {
-                let params = web_sys::IdbObjectStoreParameters::new();
-                params.set_key_path(&JsValue::from_str("oid"));
-                db.create_object_store_with_optional_parameters(STORE_OBJECTS, &params)
-                    .ok();
-            }
             if old < 2 {
                 let params = web_sys::IdbObjectStoreParameters::new();
                 params.set_key_path(&JsValue::from_str("id"));
                 db.create_object_store_with_optional_parameters(STORE_TAG_REFS, &params)
+                    .ok();
+            }
+            if old < 3 {
+                // Recreate objects store keyed by "{repo_url}::{oid}" instead of bare "{oid}".
+                // Existing cached objects are discarded; they will be re-fetched on demand.
+                if old >= 1 {
+                    db.delete_object_store(STORE_OBJECTS).ok();
+                }
+                let params = web_sys::IdbObjectStoreParameters::new();
+                params.set_key_path(&JsValue::from_str("id"));
+                db.create_object_store_with_optional_parameters(STORE_OBJECTS, &params)
                     .ok();
             }
         },

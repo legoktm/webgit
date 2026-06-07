@@ -1,6 +1,8 @@
-use crate::cache::CachingRepo;
+use crate::cache::{CachingRepo, ClearTarget};
 use crate::console_log;
 use crate::render::about::render_about;
+use std::rc::Rc;
+use wasm_bindgen::closure::Closure;
 use crate::render::commit::render_commit;
 use crate::render::log::render_log;
 use crate::render::refs_all::render_refs_all;
@@ -133,6 +135,7 @@ pub(crate) fn parse_hash(hash: &str) -> Route {
     if hash == "#!/about" {
         return Route::About;
     }
+
     if hash == "#!/log" || hash.starts_with("#!/log/") {
         let offset = hash
             .strip_prefix("#!/log/")
@@ -174,10 +177,10 @@ pub(crate) async fn handle_route(
     hash: String,
     head_commit: &git_async::object::Commit,
     root_tree: &Tree,
-    repo: &CachingRepo,
-    clone_url: &str,
+    repo: &Rc<CachingRepo>,
+    clone_url: &Rc<String>,
     doc: &Document,
-    tera: &Tera,
+    tera: &Rc<Tera>,
 ) {
     let output = doc.get_element_by_id("output").unwrap();
     output.set_inner_html("");
@@ -187,6 +190,7 @@ pub(crate) async fn handle_route(
             hide_path_bar(doc);
             set_active_tab(doc, "#!/about");
             render_about(tera, repo, clone_url, &output).await;
+            attach_about_handlers(doc, &output, repo, tera, clone_url);
         }
         Route::Summary => {
             hide_path_bar(doc);
@@ -248,5 +252,49 @@ pub(crate) async fn handle_route(
                 )),
             }
         }
+    }
+}
+
+fn attach_about_handlers(
+    doc: &Document,
+    output: &web_sys::Element,
+    repo: &Rc<CachingRepo>,
+    tera: &Rc<Tera>,
+    clone_url: &Rc<String>,
+) {
+    let Ok(nodes) = output.query_selector_all("[data-target]") else {
+        return;
+    };
+    for i in 0..nodes.length() {
+        let Some(node) = nodes.get(i) else { continue };
+        let Ok(btn) = node.dyn_into::<web_sys::Element>() else { continue };
+        let Some(target_str) = btn.get_attribute("data-target") else { continue };
+        let target = match target_str.as_str() {
+            "repo-objects" => ClearTarget::RepoObjects,
+            "all-objects" => ClearTarget::AllObjects,
+            "repo-tags" => ClearTarget::RepoTags,
+            "all-tags" => ClearTarget::AllTags,
+            _ => continue,
+        };
+        let repo = Rc::clone(repo);
+        let tera = Rc::clone(tera);
+        let clone_url = Rc::clone(clone_url);
+        let doc = doc.clone();
+        let output = output.clone();
+        let cb = Closure::<dyn Fn()>::new(move || {
+            let repo = Rc::clone(&repo);
+            let tera = Rc::clone(&tera);
+            let clone_url = Rc::clone(&clone_url);
+            let doc = doc.clone();
+            let output = output.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                repo.clear_cache(target).await;
+                render_about(&tera, &repo, &clone_url, &output).await;
+                attach_about_handlers(&doc, &output, &repo, &tera, &clone_url);
+            });
+        });
+        btn.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())
+            .ok();
+        cb.forget();
     }
 }

@@ -447,6 +447,20 @@ code {
 .diff-del  { background: #fef2f2; color: #b91c1c; }
 .diff-hunk { background: var(--bg-nav); color: var(--text-dim); }
 
+/* ── Inline action button (looks like a link) ────────────────── */
+.clear-btn {
+    background: none;
+    border: none;
+    padding: 0;
+    color: var(--link);
+    cursor: pointer;
+    font-size: inherit;
+    font-family: inherit;
+}
+.clear-btn:hover {
+    text-decoration: underline;
+}
+
 /* ── Tag detail page ─────────────────────────────────────────── */
 .tag-table {
     border-collapse: collapse;
