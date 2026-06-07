@@ -43,11 +43,14 @@ pub(crate) fn render_tree(
     tera: &Tera,
     tree: &Tree,
     prefix: &str,
+    head: Option<&str>,
     output: &web_sys::Element,
 ) -> anyhow::Result<()> {
     let rows = tree_rows(tree, prefix);
+    let head_suffix = head.map_or(String::new(), |h| format!("?h={h}"));
     let mut ctx = Context::new();
     ctx.insert("entries", &rows);
+    ctx.insert("head_suffix", &head_suffix);
     let html = tera.render("tree.html", &ctx)?;
     output.set_inner_html(&html);
     Ok(())

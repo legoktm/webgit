@@ -11,9 +11,9 @@
             <td class="mode">{{ entry.mode }}</td>
             <td class="name">
                 {% if entry.is_dir %}
-                <a href="#!/tree/{{ entry.path }}">{{ entry.name }}</a>
+                <a href="#!/tree/{{ entry.path }}{{ head_suffix }}">{{ entry.name }}</a>
                 {% else %}
-                <a class="file" href="#!/tree/{{ entry.path }}"
+                <a class="file" href="#!/tree/{{ entry.path }}{{ head_suffix }}"
                     >{{ entry.name }}</a
                 >
                 {% endif %}

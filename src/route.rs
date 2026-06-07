@@ -10,7 +10,7 @@ use crate::render::refs_tags::render_refs_tags;
 use crate::render::tag::render_tag;
 use crate::render::{blob::render_blob, summary::render_summary, tree::render_tree};
 use git_async::object::{ObjectId, Tree, TreeEntryType};
-use git_async::reference::RefName;
+use git_async::reference::{RefName, RefTarget};
 use std::rc::Rc;
 use tera::Tera;
 use wasm_bindgen::JsCast;
@@ -43,9 +43,45 @@ fn hide_path_bar(doc: &Document) {
         .unwrap();
 }
 
-fn update_path_bar(doc: &Document, path: &str) {
+fn update_nav_for_head(doc: &Document, head: Option<&str>) {
+    let tabs = doc.query_selector_all("#nav a").unwrap();
+    for i in 0..tabs.length() {
+        let Some(node) = tabs.get(i) else { continue };
+        let Ok(el) = node.dyn_into::<web_sys::Element>() else {
+            continue;
+        };
+        let href = el.get_attribute("href").unwrap_or_default();
+        let base = href.split('?').next().unwrap_or(&href);
+        let new_href = match (base, head) {
+            ("#!/log", Some(h)) => format!("#!/log?h={h}"),
+            ("#!/log", None) => "#!/log".to_string(),
+            ("#!/tree", Some(h)) => format!("#!/tree?h={h}"),
+            ("#!/tree", None) => "#!/tree".to_string(),
+            _ => continue,
+        };
+        el.set_attribute("href", &new_href).ok();
+    }
+}
+
+fn update_path_bar(
+    doc: &Document,
+    path: &str,
+    url_head: Option<&str>,
+    display: Option<(&str, &RefKind)>,
+) {
     let bar = doc.get_element_by_id("path-bar").unwrap();
-    let mut html = String::from("<a href=\"#!/tree\">root</a>");
+    let head_suffix = url_head.map_or(String::new(), |h| format!("?h={h}"));
+    let mut html = String::new();
+    if let Some((name, kind)) = display {
+        let label = match kind {
+            RefKind::Tag => "tag",
+            RefKind::Branch => "branch",
+        };
+        html.push_str(&format!("{label}: {name} | "));
+    }
+    html.push_str(&format!(
+        "path: <a href=\"#!/tree{head_suffix}\">root</a>"
+    ));
     let mut cumulative = String::new();
     for component in path.split('/').filter(|s| !s.is_empty()) {
         if !cumulative.is_empty() {
@@ -53,11 +89,11 @@ fn update_path_bar(doc: &Document, path: &str) {
         }
         cumulative.push_str(component);
         html.push_str(&format!(
-            " / <a href=\"#!/tree/{0}\">{1}</a>",
-            cumulative, component
+            " / <a href=\"#!/tree/{0}{1}\">{2}</a>",
+            cumulative, head_suffix, component
         ));
     }
-    bar.set_inner_html(&format!("path: {}", html));
+    bar.set_inner_html(&html);
 }
 
 fn set_active_tab(doc: &Document, tab: &str) {
@@ -126,7 +162,7 @@ pub(crate) enum Route {
     CommitHead,
     Commit(String),
     Refs(RefsRoute),
-    Tree(String),
+    Tree { path: String, head: Option<String> },
 }
 
 pub(crate) fn parse_hash(hash: &str) -> Route {
@@ -162,9 +198,9 @@ pub(crate) fn parse_hash(hash: &str) -> Route {
         return Route::Commit(sha.to_string());
     }
 
-    if hash.starts_with("#!/tree") {
-        let rest = hash.strip_prefix("#!/tree").unwrap();
-        return Route::Tree(rest.trim_start_matches('/').to_string());
+    if let Some(rest) = hash.strip_prefix("#!/tree") {
+        let (path, head) = parse_tree_rest(rest);
+        return Route::Tree { path, head };
     }
 
     if hash.starts_with("#!/refs") {
@@ -184,6 +220,21 @@ pub(crate) fn parse_hash(hash: &str) -> Route {
     Route::Summary
 }
 
+fn parse_tree_rest(rest: &str) -> (String, Option<String>) {
+    let rest = rest.trim_start_matches('/');
+    let (path_part, query_string) = match rest.find('?') {
+        Some(i) => (&rest[..i], Some(&rest[i + 1..])),
+        None => (rest, None),
+    };
+    let head = query_string.and_then(|qs| {
+        qs.split('&')
+            .find_map(|part| part.strip_prefix("h="))
+            .filter(|v| !v.is_empty())
+            .map(|v| v.to_string())
+    });
+    (path_part.to_string(), head)
+}
+
 fn parse_log_query(query_string: &str) -> (usize, Option<String>) {
     let mut offset = 0usize;
     let mut head = None;
@@ -199,25 +250,42 @@ fn parse_log_query(query_string: &str) -> (usize, Option<String>) {
     (offset, head)
 }
 
+async fn head_branch_name(repo: &CachingRepo) -> Option<String> {
+    let head = repo.head().await.ok()?;
+    if let RefTarget::Symbolic(RefName::Ref(name)) = head.target() {
+        let branch = name.strip_prefix(b"heads/")?;
+        Some(String::from_utf8_lossy(branch).into_owned())
+    } else {
+        None
+    }
+}
+
+pub(crate) enum RefKind {
+    Tag,
+    Branch,
+}
+
 async fn resolve_ref_to_commit(
     repo: &CachingRepo,
     name: &str,
-) -> anyhow::Result<git_async::object::Commit> {
+) -> anyhow::Result<(git_async::object::Commit, RefKind)> {
     let tags_ref = RefName::Ref(format!("tags/{name}").into_bytes());
     if let Ok(r) = repo.lookup_ref(&tags_ref).await
         && let Ok(Some(commit)) = repo.peel_ref_to_commit(&r).await
     {
-        return Ok(commit);
+        return Ok((commit, RefKind::Tag));
     }
     let heads_ref = RefName::Ref(format!("heads/{name}").into_bytes());
     let r = repo
         .lookup_ref(&heads_ref)
         .await
         .context(format!("ref not found: {name}"))?;
-    repo.peel_ref_to_commit(&r)
+    let commit = repo
+        .peel_ref_to_commit(&r)
         .await
         .context(format!("peel ref {name}"))?
-        .ok_or_else(|| anyhow::anyhow!("ref {name} does not point to a commit"))
+        .ok_or_else(|| anyhow::anyhow!("ref {name} does not point to a commit"))?;
+    Ok((commit, RefKind::Branch))
 }
 
 pub(crate) async fn handle_route(
@@ -247,7 +315,13 @@ async fn try_handle_route(
     tera: &Rc<Tera>,
 ) -> anyhow::Result<()> {
     let output = &doc.get_element_by_id("output").unwrap();
-    match parse_hash(&hash) {
+    let route = parse_hash(&hash);
+    let head = match &route {
+        Route::Log { head, .. } | Route::Tree { head, .. } => head.as_deref(),
+        _ => None,
+    };
+    update_nav_for_head(doc, head);
+    match route {
         Route::About => {
             hide_path_bar(doc);
             set_active_tab(doc, "#!/about");
@@ -260,15 +334,28 @@ async fn try_handle_route(
             render_summary(tera, head_commit, repo, clone_url, output).await?;
         }
         Route::Log { offset, head } => {
-            hide_path_bar(doc);
             set_active_tab(doc, "#!/log");
-            let resolved;
-            let log_commit = if let Some(ref ref_name) = head {
-                resolved = resolve_ref_to_commit(repo, ref_name).await?;
-                &resolved
+            let (resolved, display_head): (Option<git_async::object::Commit>, Option<(String, RefKind)>) =
+                if let Some(ref ref_name) = head {
+                    let (commit, kind) = resolve_ref_to_commit(repo, ref_name).await?;
+                    (Some(commit), Some((ref_name.clone(), kind)))
+                } else {
+                    let implicit = head_branch_name(repo).await;
+                    (None, implicit.map(|n| (n, RefKind::Branch)))
+                };
+            let log_commit = resolved.as_ref().unwrap_or(head_commit);
+            if let Some((ref name, ref kind)) = display_head {
+                let label = match kind {
+                    RefKind::Tag => "tag",
+                    RefKind::Branch => "branch",
+                };
+                doc.get_element_by_id("path-bar")
+                    .unwrap()
+                    .set_inner_html(&format!("{label}: {name}"));
+                show(doc, "path-bar");
             } else {
-                head_commit
-            };
+                hide_path_bar(doc);
+            }
             render_log(tera, log_commit, repo, offset, head.as_deref(), output).await?;
         }
         Route::CommitHead => {
@@ -302,17 +389,35 @@ async fn try_handle_route(
             set_active_tab(doc, "#!/refs");
             render_refs_all(tera, repo, output).await?;
         }
-        Route::Tree(path) => {
-            update_path_bar(doc, &path);
+        Route::Tree { path, head } => {
+            let resolved_tree;
+            let (tree, display_head): (&Tree, Option<(String, RefKind)>) =
+                if let Some(ref ref_name) = head {
+                    let (commit, kind) = resolve_ref_to_commit(repo, ref_name).await?;
+                    resolved_tree = repo
+                        .lookup_object(commit.tree())
+                        .await
+                        .context(format!("lookup tree for {ref_name}"))?
+                        .tree()
+                        .map_err(git_async::error::Error::from)
+                        .context(format!("expected tree for {ref_name}"))?;
+                    (&resolved_tree, Some((ref_name.clone(), kind)))
+                } else {
+                    let implicit = head_branch_name(repo).await;
+                    (root_tree, implicit.map(|n| (n, RefKind::Branch)))
+                };
+
+            let display = display_head.as_ref().map(|(n, k)| (n.as_str(), k));
+            update_path_bar(doc, &path, head.as_deref(), display);
             show(doc, "path-bar");
             set_active_tab(doc, "#!/tree");
 
-            if let Some(subtree) = walk_to_tree(root_tree, &path, repo).await {
-                return render_tree(tera, &subtree, &path, output);
+            if let Some(subtree) = walk_to_tree(tree, &path, repo).await {
+                return render_tree(tera, &subtree, &path, head.as_deref(), output);
             }
 
             output.set_inner_html("<p class=\"msg\">Loading\u{2026}</p>");
-            match walk_to_blob(root_tree, &path, repo).await {
+            match walk_to_blob(tree, &path, repo).await {
                 Some((id, data)) => render_blob(tera, id, &data, output)?,
                 None => output.set_inner_html(&format!(
                     "<p class=\"msg error\">Not found: <code>{}</code></p>",
@@ -476,8 +581,29 @@ mod tests {
 
     #[test]
     fn test_parse_hash_tree() {
-        assert!(matches!(parse_hash("#!/tree"), Route::Tree(_)));
-        assert!(matches!(parse_hash("#!/tree/src/main.rs"), Route::Tree(_)));
+        assert!(matches!(
+            parse_hash("#!/tree"),
+            Route::Tree { path, head: None } if path.is_empty()
+        ));
+        assert!(matches!(
+            parse_hash("#!/tree/src/main.rs"),
+            Route::Tree { path, head: None } if path == "src/main.rs"
+        ));
+    }
+
+    #[test]
+    fn test_parse_tree_rest() {
+        assert_eq!(parse_tree_rest(""), ("".into(), None));
+        assert_eq!(parse_tree_rest("/src"), ("src".into(), None));
+        assert_eq!(
+            parse_tree_rest("?h=main"),
+            ("".into(), Some("main".into()))
+        );
+        assert_eq!(
+            parse_tree_rest("/src?h=stable"),
+            ("src".into(), Some("stable".into()))
+        );
+        assert_eq!(parse_tree_rest("?h="), ("".into(), None));
     }
 
     #[test]
