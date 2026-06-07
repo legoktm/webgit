@@ -1,43 +1,41 @@
 use crate::cache::CachingRepo;
+use crate::error::GitContext;
+use git_async::error::Error as GitError;
 use git_async::reference::{RefName, RefTarget};
 use serde::Serialize;
 use tera::{Context, Tera};
 
-async fn build_tag(repo: &CachingRepo, tag: String) -> Result<TagTemplate, String> {
+async fn build_tag(repo: &CachingRepo, tag: String) -> anyhow::Result<TagTemplate> {
     let ref_name = RefName::Ref(format!("tags/{tag}").into_bytes());
     let ref_ = repo
-        .lookup_ref(&ref_name)
-        .await
-        .map_err(|e| format!("unable to find ref for {tag}: {e:?}"))?;
+        .lookup_ref(&ref_name).await
+        .context(format!("lookup ref for {tag}"))?;
     let commit = repo
-        .peel_ref_to_commit(&ref_)
-        .await
-        .map_err(|e| format!("unable to peel ref for {tag}: {e:?}"))?
-        .ok_or_else(|| format!("unable to find commit for {tag}"))?;
+        .peel_ref_to_commit(&ref_).await
+        .context(format!("peel ref for {tag}"))?
+        .ok_or_else(|| anyhow::anyhow!("no commit for {tag}"))?;
     let tag_object_id = match ref_.target() {
         RefTarget::Direct(object_id) => object_id,
-        _ => return Err(format!("ref target for {tag} is not direct")),
+        _ => anyhow::bail!("ref target for {tag} is not direct"),
     };
     let tag_obj = repo
-        .lookup_object(*tag_object_id)
-        .await
-        .map_err(|e| format!("{e:?}"))?
+        .lookup_object(*tag_object_id).await
+        .context(format!("lookup tag object {tag}"))?
         .tag()
-        .map_err(|e| format!("{e:?}"))?;
+        .map_err(GitError::from)
+        .context("expected annotated tag")?;
 
     Ok(TagTemplate {
         name: tag.clone(),
-        date: tag_obj
-            .date()
-            .ok_or_else(|| format!("no date on tag {tag}"))?
+        date: tag_obj.date()
+            .ok_or_else(|| anyhow::anyhow!("no date on tag {tag}"))?
             .to_string(),
         tagger_name: String::from_utf8_lossy(
-            tag_obj.tagger_name().ok_or_else(|| format!("no tagger name on tag {tag}"))?,
+            tag_obj.tagger_name().ok_or_else(|| anyhow::anyhow!("no tagger on {tag}"))?,
         )
         .to_string(),
         commit: commit.id().to_string(),
-        contents: String::from_utf8(tag_obj.message().to_vec())
-            .map_err(|e| format!("{e}"))?,
+        contents: String::from_utf8(tag_obj.message().to_vec())?,
     })
 }
 
@@ -55,10 +53,10 @@ pub(crate) async fn render_tag(
     repo: &CachingRepo,
     tag: String,
     output: &web_sys::Element,
-) -> Result<(), String> {
+) -> anyhow::Result<()> {
     let template = build_tag(repo, tag).await?;
-    let ctx = Context::from_serialize(&template).map_err(|e| format!("{e}"))?;
-    let html = tera.render("tag.html", &ctx).map_err(|e| format!("Template error: {e}"))?;
+    let ctx = Context::from_serialize(&template)?;
+    let html = tera.render("tag.html", &ctx)?;
     output.set_inner_html(&html);
     Ok(())
 }

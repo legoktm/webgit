@@ -44,11 +44,11 @@ pub(crate) fn render_tree(
     tree: &Tree,
     prefix: &str,
     output: &web_sys::Element,
-) -> Result<(), String> {
+) -> anyhow::Result<()> {
     let rows = tree_rows(tree, prefix);
     let mut ctx = Context::new();
     ctx.insert("entries", &rows);
-    let html = tera.render("tree.html", &ctx).map_err(|e| format!("Template error: {e}"))?;
+    let html = tera.render("tree.html", &ctx)?;
     output.set_inner_html(&html);
     Ok(())
 }

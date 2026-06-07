@@ -188,7 +188,7 @@ pub(crate) async fn handle_route(
     if let Err(e) =
         try_handle_route(hash, head_commit, root_tree, repo, clone_url, doc, tera, &output).await
     {
-        output.set_inner_html(&error_html(&e));
+        output.set_inner_html(&error_html(&format!("{e:#}")));
     }
 }
 
@@ -201,7 +201,7 @@ async fn try_handle_route(
     doc: &Document,
     tera: &Rc<Tera>,
     output: &web_sys::Element,
-) -> Result<(), String> {
+) -> anyhow::Result<()> {
     match parse_hash(&hash) {
         Route::About => {
             hide_path_bar(doc);
@@ -307,7 +307,7 @@ fn attach_about_handlers(
             wasm_bindgen_futures::spawn_local(async move {
                 repo.clear_cache(target).await;
                 if let Err(e) = render_about(&tera, &repo, &clone_url, &output).await {
-                    output.set_inner_html(&error_html(&e));
+                    output.set_inner_html(&error_html(&format!("{e:#}")));
                     return;
                 }
                 attach_about_handlers(&doc, &output, &repo, &tera, &clone_url);

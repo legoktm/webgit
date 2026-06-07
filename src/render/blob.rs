@@ -6,7 +6,7 @@ pub(crate) fn render_blob(
     blob_id: ObjectId,
     data: &[u8],
     output: &web_sys::Element,
-) -> Result<(), String> {
+) -> anyhow::Result<()> {
     let text = String::from_utf8_lossy(data);
     let lines: Vec<&str> = text.split('\n').collect();
     let lines: Vec<&str> = match lines.as_slice() {
@@ -16,7 +16,7 @@ pub(crate) fn render_blob(
     let mut ctx = Context::new();
     ctx.insert("blob_id", &format!("{}", blob_id));
     ctx.insert("lines", &lines);
-    let html = tera.render("blob.html", &ctx).map_err(|e| format!("Template error: {e}"))?;
+    let html = tera.render("blob.html", &ctx)?;
     output.set_inner_html(&html);
     Ok(())
 }

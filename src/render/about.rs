@@ -24,7 +24,7 @@ pub(crate) async fn render_about(
     repo: &CachingRepo,
     clone_url: &str,
     output: &web_sys::Element,
-) -> Result<(), String> {
+) -> anyhow::Result<()> {
     let head_branch = repo
         .head()
         .await
@@ -86,8 +86,8 @@ pub(crate) async fn render_about(
         },
     };
 
-    let ctx = Context::from_serialize(&template).map_err(|e| format!("{e}"))?;
-    let html = tera.render("about.html", &ctx).map_err(|e| format!("Template error: {e}"))?;
+    let ctx = Context::from_serialize(&template)?;
+    let html = tera.render("about.html", &ctx)?;
     output.set_inner_html(&html);
     Ok(())
 }

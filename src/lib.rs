@@ -7,7 +7,7 @@ mod route;
 mod stats;
 
 use cache::CachingRepo;
-use error::{error_html, fmt_git_err};
+use error::{error_html, GitContext};
 use fs::{HttpDirectory, HttpFilesystem};
 use git_async::Repo;
 use route::{handle_route, set_text};
@@ -27,11 +27,11 @@ fn console_log(msg: &str) {
 async fn load_repo(url: String, doc: Document) {
     let output = doc.get_element_by_id("output").unwrap();
     if let Err(e) = try_load_repo(url, doc.clone()).await {
-        output.set_inner_html(&error_html(&e));
+        output.set_inner_html(&error_html(&format!("{e:#}")));
     }
 }
 
-async fn try_load_repo(url: String, doc: Document) -> Result<(), String> {
+async fn try_load_repo(url: String, doc: Document) -> anyhow::Result<()> {
     // Register live progress updates on the persistent stats bar.
     let stats_el = doc.get_element_by_id("fetch-stats");
     fetch::reset_and_watch(Box::new(move |reqs, bytes, cached_bytes| {
@@ -48,19 +48,15 @@ async fn try_load_repo(url: String, doc: Document) -> Result<(), String> {
     let dir = HttpDirectory::new(url.clone());
     let repo = Repo::<HttpFilesystem>::open(dir)
         .await
-        .map_err(|e| format!("Failed to open repo: {}", fmt_git_err(&e)))?;
+        .context("Failed to open repo")?;
     let repo = CachingRepo::open(repo, url.clone()).await;
 
-    let head = repo
-        .head()
-        .await
-        .map_err(|e| format!("Failed to read HEAD: {}", fmt_git_err(&e)))?;
+    let head = repo.head().await.context("Failed to read HEAD")?;
 
     let commit = repo
-        .peel_ref_to_commit(&head)
-        .await
-        .map_err(|e| format!("Failed to peel HEAD to commit: {}", fmt_git_err(&e)))?
-        .ok_or_else(|| "HEAD does not point to a commit".to_string())?;
+        .peel_ref_to_commit(&head).await
+        .context("Failed to peel HEAD to commit")?
+        .ok_or_else(|| anyhow::anyhow!("HEAD does not point to a commit"))?;
 
     let repo_name = url
         .trim_end_matches('/')
@@ -73,11 +69,10 @@ async fn try_load_repo(url: String, doc: Document) -> Result<(), String> {
     set_text(&doc, "repo-path-name", &repo_name);
 
     let root_tree = repo
-        .lookup_object(commit.tree())
-        .await
-        .map_err(|e| format!("Failed to load root tree: {}", fmt_git_err(&e)))?
+        .lookup_object(commit.tree()).await
+        .context("Failed to load root tree")?
         .tree()
-        .map_err(|e| format!("Root object is not a tree: {e:?}"))?;
+        .map_err(|e| anyhow::anyhow!("Root object is not a tree: {e:?}"))?;
 
     let head_commit = Rc::new(commit);
     let root_tree = Rc::new(root_tree);

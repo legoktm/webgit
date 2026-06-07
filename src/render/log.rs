@@ -71,10 +71,10 @@ pub(crate) async fn render_log(
     repo: &CachingRepo,
     offset: usize,
     output: &web_sys::Element,
-) -> Result<(), String> {
+) -> anyhow::Result<()> {
     let template = build_log(head_commit, repo, offset).await;
-    let ctx = Context::from_serialize(&template).map_err(|e| format!("{e}"))?;
-    let html = tera.render("log.html", &ctx).map_err(|e| format!("Template error: {e}"))?;
+    let ctx = Context::from_serialize(&template)?;
+    let html = tera.render("log.html", &ctx)?;
     output.set_inner_html(&html);
     Ok(())
 }

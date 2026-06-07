@@ -1,6 +1,16 @@
 use git_async::error::Error as GitError;
 use git_async::file_system::FileSystemError;
 
+pub(crate) trait GitContext<T> {
+    fn context<C: std::fmt::Display>(self, msg: C) -> anyhow::Result<T>;
+}
+
+impl<T> GitContext<T> for Result<T, GitError> {
+    fn context<C: std::fmt::Display>(self, msg: C) -> anyhow::Result<T> {
+        self.map_err(|e| anyhow::anyhow!("{}: {}", msg, fmt_git_err(&e)))
+    }
+}
+
 pub(crate) fn error_html(msg: &str) -> String {
     let doc = web_sys::window().unwrap().document().unwrap();
     let tmp = doc.create_element("span").unwrap();

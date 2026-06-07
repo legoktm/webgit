@@ -1,5 +1,7 @@
 use crate::cache::CachingRepo;
+use crate::error::GitContext;
 use git_async::diff::{DiffEntry, TreeDiff};
+use git_async::error::Error as GitError;
 use git_async::object::{Object, ObjectId};
 use serde::Serialize;
 use similar::TextDiffConfig;
@@ -45,15 +47,15 @@ struct CommitTemplate {
     diff_lines: Vec<DiffLine>,
 }
 
-async fn build_commit(repo: &CachingRepo, sha: &str) -> Result<CommitTemplate, String> {
+async fn build_commit(repo: &CachingRepo, sha: &str) -> anyhow::Result<CommitTemplate> {
     let oid = ObjectId::from_hex(sha.as_bytes())
-        .ok_or_else(|| format!("invalid SHA: {sha}"))?;
+        .ok_or_else(|| anyhow::anyhow!("invalid SHA: {sha}"))?;
     let commit = repo
-        .lookup_object(oid)
-        .await
-        .map_err(|e| format!("{e:?}"))?
+        .lookup_object(oid).await
+        .context(format!("lookup {sha}"))?
         .commit()
-        .map_err(|e| format!("{e:?}"))?;
+        .map_err(GitError::from)
+        .context("unexpected object type")?;
 
     let parent_commits = repo.lookup_parents(&commit).await.unwrap_or_default();
 
@@ -66,23 +68,22 @@ async fn build_commit(repo: &CachingRepo, sha: &str) -> Result<CommitTemplate, S
         .collect();
 
     let commit_tree = repo
-        .lookup_object(commit.tree())
-        .await
-        .map_err(|e| format!("{e:?}"))?
+        .lookup_object(commit.tree()).await
+        .context("lookup commit tree")?
         .tree()
-        .map_err(|e| format!("{e:?}"))?;
+        .map_err(GitError::from)
+        .context("unexpected object type")?;
 
     let (files, diff_lines) = if let Some(parent) = parent_commits.first() {
         let parent_tree = repo
-            .lookup_object(parent.tree())
-            .await
-            .map_err(|e| format!("{e:?}"))?
+            .lookup_object(parent.tree()).await
+            .context("lookup parent tree")?
             .tree()
-            .map_err(|e| format!("{e:?}"))?;
+            .map_err(GitError::from)
+        .context("unexpected object type")?;
         let td = repo
-            .tree_diff(&parent_tree, &commit_tree)
-            .await
-            .map_err(|e| format!("{e:?}"))?;
+            .tree_diff(&parent_tree, &commit_tree).await
+            .context("tree diff")?;
         build_diff(repo, &td).await
     } else {
         (Vec::new(), Vec::new())
@@ -196,10 +197,10 @@ pub(crate) async fn render_commit(
     repo: &CachingRepo,
     sha: String,
     output: &web_sys::Element,
-) -> Result<(), String> {
+) -> anyhow::Result<()> {
     let template = build_commit(repo, &sha).await?;
-    let ctx = Context::from_serialize(&template).map_err(|e| format!("{e}"))?;
-    let html = tera.render("commit.html", &ctx).map_err(|e| format!("Template error: {e}"))?;
+    let ctx = Context::from_serialize(&template)?;
+    let html = tera.render("commit.html", &ctx)?;
     output.set_inner_html(&html);
     Ok(())
 }
