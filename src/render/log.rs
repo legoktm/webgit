@@ -1,13 +1,13 @@
 use crate::{
     cache::CachingRepo,
-    render::{CommitRow, age, commit_first_line},
+    render::{CommitRow, age, commit_first_line, render_template},
     route::log_url,
 };
 use git_async::object::Commit;
 use git_async::object::ObjectId;
 use serde::Serialize;
 use std::collections::{BTreeSet, BinaryHeap};
-use tera::{Context, Tera};
+use tera::Tera;
 
 const PAGE_SIZE: usize = 50;
 
@@ -77,8 +77,5 @@ pub(crate) async fn render_log(
     output: &web_sys::Element,
 ) -> anyhow::Result<()> {
     let template = build_log(head_commit, repo, offset, head).await;
-    let ctx = Context::from_serialize(&template)?;
-    let html = tera.render("log.html", &ctx)?;
-    output.set_inner_html(&html);
-    Ok(())
+    render_template(tera, "log.html", &template, output)
 }

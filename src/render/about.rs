@@ -1,7 +1,7 @@
-use crate::cache::CachingRepo;
+use crate::{cache::CachingRepo, render::render_template};
 use git_async::reference::{RefName, RefTarget};
 use serde::Serialize;
-use tera::{Context, Tera};
+use tera::Tera;
 
 #[derive(Serialize)]
 struct AboutTemplate {
@@ -86,8 +86,5 @@ pub(crate) async fn render_about(
         },
     };
 
-    let ctx = Context::from_serialize(&template)?;
-    let html = tera.render("about.html", &ctx)?;
-    output.set_inner_html(&html);
-    Ok(())
+    render_template(tera, "about.html", &template, output)
 }

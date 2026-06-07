@@ -2,7 +2,7 @@ use crate::cache::CachingRepo;
 use git_async::object::Commit;
 use git_async::reference::RefName;
 use serde::Serialize;
-use tera::{Kwargs, State, Tera, TeraResult, Value};
+use tera::{Context, Kwargs, State, Tera, TeraResult, Value};
 
 pub(crate) mod about;
 pub(crate) mod blob;
@@ -14,6 +14,18 @@ pub(crate) mod refs_tags;
 pub(crate) mod summary;
 pub(crate) mod tag;
 pub(crate) mod tree;
+
+pub(crate) fn render_template(
+    tera: &Tera,
+    name: &str,
+    data: &impl Serialize,
+    output: &web_sys::Element,
+) -> anyhow::Result<()> {
+    let ctx = Context::from_serialize(data)?;
+    let html = tera.render(name, &ctx)?;
+    output.set_inner_html(&html);
+    Ok(())
+}
 
 pub(crate) fn init_tera() -> Tera {
     let mut tera = Tera::default();

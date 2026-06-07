@@ -1,9 +1,9 @@
 use crate::{
     cache::CachingRepo,
-    render::{RefRow, collect_ref_names, fetch_branch_rows, fetch_tag_rows},
+    render::{RefRow, collect_ref_names, fetch_branch_rows, fetch_tag_rows, render_template},
 };
 use serde::Serialize;
-use tera::{Context, Tera};
+use tera::Tera;
 
 async fn build_refs_all(repo: &CachingRepo) -> RefsAllTemplate {
     let (branch_names, tag_names) = collect_ref_names(repo).await;
@@ -30,8 +30,5 @@ pub(crate) async fn render_refs_all(
     output: &web_sys::Element,
 ) -> anyhow::Result<()> {
     let template = build_refs_all(repo).await;
-    let ctx = Context::from_serialize(&template)?;
-    let html = tera.render("refs_all.html", &ctx)?;
-    output.set_inner_html(&html);
-    Ok(())
+    render_template(tera, "refs_all.html", &template, output)
 }

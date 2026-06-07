@@ -1,12 +1,12 @@
 use crate::{
     cache::CachingRepo,
-    render::{CommitRow, RefRow, age, collect_ref_names, commit_first_line, fetch_branch_rows, fetch_tag_rows},
+    render::{CommitRow, RefRow, age, collect_ref_names, commit_first_line, fetch_branch_rows, fetch_tag_rows, render_template},
 };
 use git_async::object::Commit;
 use git_async::reference::{RefName, RefTarget};
 use serde::Serialize;
 use std::collections::BinaryHeap;
-use tera::{Context, Tera};
+use tera::Tera;
 
 async fn fetch_recent_commits(head_commit: &Commit, repo: &CachingRepo) -> Vec<CommitRow> {
     let mut heap: BinaryHeap<(chrono::DateTime<chrono::FixedOffset>, Commit)> = BinaryHeap::new();
@@ -109,8 +109,5 @@ pub(crate) async fn render_summary(
     output: &web_sys::Element,
 ) -> anyhow::Result<()> {
     let template = build_summary(head_commit, repo, clone_url).await;
-    let ctx = Context::from_serialize(&template)?;
-    let html = tera.render("summary.html", &ctx)?;
-    output.set_inner_html(&html);
-    Ok(())
+    render_template(tera, "summary.html", &template, output)
 }

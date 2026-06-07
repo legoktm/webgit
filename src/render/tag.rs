@@ -1,9 +1,10 @@
 use crate::cache::CachingRepo;
 use crate::error::GitContext;
+use crate::render::render_template;
 use git_async::error::Error as GitError;
 use git_async::reference::{RefName, RefTarget};
 use serde::Serialize;
-use tera::{Context, Tera};
+use tera::Tera;
 
 async fn build_tag(repo: &CachingRepo, tag: String) -> anyhow::Result<TagTemplate> {
     let ref_name = RefName::Ref(format!("tags/{tag}").into_bytes());
@@ -55,8 +56,5 @@ pub(crate) async fn render_tag(
     output: &web_sys::Element,
 ) -> anyhow::Result<()> {
     let template = build_tag(repo, tag).await?;
-    let ctx = Context::from_serialize(&template)?;
-    let html = tera.render("tag.html", &ctx)?;
-    output.set_inner_html(&html);
-    Ok(())
+    render_template(tera, "tag.html", &template, output)
 }

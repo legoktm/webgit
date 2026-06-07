@@ -1,11 +1,11 @@
-use crate::cache::CachingRepo;
+use crate::{cache::CachingRepo, render::render_template};
 use crate::error::GitContext;
 use git_async::diff::{DiffEntry, TreeDiff};
 use git_async::error::Error as GitError;
 use git_async::object::{Object, ObjectId};
 use serde::Serialize;
 use similar::TextDiffConfig;
-use tera::{Context, Tera};
+use tera::Tera;
 
 #[derive(Serialize)]
 struct ParentRef {
@@ -200,8 +200,5 @@ pub(crate) async fn render_commit(
     output: &web_sys::Element,
 ) -> anyhow::Result<()> {
     let template = build_commit(repo, &sha).await?;
-    let ctx = Context::from_serialize(&template)?;
-    let html = tera.render("commit.html", &ctx)?;
-    output.set_inner_html(&html);
-    Ok(())
+    render_template(tera, "commit.html", &template, output)
 }
