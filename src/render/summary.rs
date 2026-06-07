@@ -3,7 +3,7 @@ use crate::{
     render::{CommitRow, RefRow, age, commit_first_line, ref_row},
 };
 use git_async::object::Commit;
-use git_async::reference::RefName;
+use git_async::reference::{RefName, RefTarget};
 use serde::Serialize;
 use std::collections::BinaryHeap;
 use tera::{Context, Tera};
@@ -15,8 +15,17 @@ async fn build_summary(
 ) -> SummaryTemplate {
     let ref_names = repo.ref_names().await.unwrap_or_default();
 
+    let head_branch: Option<String> = repo.head().await.ok().and_then(|r| {
+        match r.target() {
+            RefTarget::Symbolic(RefName::Ref(b)) => b
+                .strip_prefix(b"heads/")
+                .map(|s| String::from_utf8_lossy(s).into_owned()),
+            _ => None,
+        }
+    });
+
     // --- Collect and select branch names before fetching any commits ---
-    // Primary branch (main/master) goes first; remaining are alpha-sorted.
+    // HEAD branch goes first; remaining are alpha-sorted.
     // Total cap: 1 primary + 9 others = 10.
     let mut primary: Option<String> = None;
     let mut other_branches: Vec<String> = Vec::new();
@@ -28,7 +37,7 @@ async fn build_summary(
             RefName::Ref(b) => String::from_utf8_lossy(b).into_owned(),
         };
         if let Some(short) = label.strip_prefix("heads/") {
-            if short == "main" || short == "master" {
+            if head_branch.as_deref() == Some(short) {
                 primary = Some(short.to_string());
             } else {
                 other_branches.push(short.to_string());
