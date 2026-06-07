@@ -1,9 +1,7 @@
 use crate::cache::{CachingRepo, ClearTarget};
 use crate::console_log;
-use crate::error::error_html;
+use crate::error::{GitContext, error_html};
 use crate::render::about::render_about;
-use std::rc::Rc;
-use wasm_bindgen::closure::Closure;
 use crate::render::commit::render_commit;
 use crate::render::log::render_log;
 use crate::render::refs_all::render_refs_all;
@@ -12,8 +10,11 @@ use crate::render::refs_tags::render_refs_tags;
 use crate::render::tag::render_tag;
 use crate::render::{blob::render_blob, summary::render_summary, tree::render_tree};
 use git_async::object::{ObjectId, Tree, TreeEntryType};
+use git_async::reference::RefName;
+use std::rc::Rc;
 use tera::Tera;
 use wasm_bindgen::JsCast;
+use wasm_bindgen::closure::Closure;
 use web_sys::Document;
 
 // ---------------------------------------------------------------------------
@@ -121,7 +122,7 @@ pub(crate) enum RefsRoute {
 pub(crate) enum Route {
     About,
     Summary,
-    Log(usize),
+    Log { offset: usize, head: Option<String> },
     CommitHead,
     Commit(String),
     Refs(RefsRoute),
@@ -137,12 +138,21 @@ pub(crate) fn parse_hash(hash: &str) -> Route {
         return Route::About;
     }
 
-    if hash == "#!/log" || hash.starts_with("#!/log/") {
-        let offset = hash
-            .strip_prefix("#!/log/")
-            .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(0);
-        return Route::Log(offset);
+    if let Some(rest) = hash.strip_prefix("#!/log") {
+        if rest.is_empty() {
+            return Route::Log {
+                offset: 0,
+                head: None,
+            };
+        }
+        if let Some(query_string) = rest.strip_prefix('?') {
+            let (offset, head) = parse_log_query(query_string);
+            return Route::Log { offset, head };
+        }
+        return Route::Log {
+            offset: 0,
+            head: None,
+        };
     }
 
     if hash == "#!/commit" {
@@ -174,6 +184,42 @@ pub(crate) fn parse_hash(hash: &str) -> Route {
     Route::Summary
 }
 
+fn parse_log_query(query_string: &str) -> (usize, Option<String>) {
+    let mut offset = 0usize;
+    let mut head = None;
+    for part in query_string.split('&') {
+        if let Some(v) = part.strip_prefix("offset=") {
+            offset = v.parse().unwrap_or(0);
+        } else if let Some(v) = part.strip_prefix("h=")
+            && !v.is_empty()
+        {
+            head = Some(v.to_string());
+        }
+    }
+    (offset, head)
+}
+
+async fn resolve_ref_to_commit(
+    repo: &CachingRepo,
+    name: &str,
+) -> anyhow::Result<git_async::object::Commit> {
+    let tags_ref = RefName::Ref(format!("tags/{name}").into_bytes());
+    if let Ok(r) = repo.lookup_ref(&tags_ref).await
+        && let Ok(Some(commit)) = repo.peel_ref_to_commit(&r).await
+    {
+        return Ok(commit);
+    }
+    let heads_ref = RefName::Ref(format!("heads/{name}").into_bytes());
+    let r = repo
+        .lookup_ref(&heads_ref)
+        .await
+        .context(format!("ref not found: {name}"))?;
+    repo.peel_ref_to_commit(&r)
+        .await
+        .context(format!("peel ref {name}"))?
+        .ok_or_else(|| anyhow::anyhow!("ref {name} does not point to a commit"))
+}
+
 pub(crate) async fn handle_route(
     hash: String,
     head_commit: &git_async::object::Commit,
@@ -185,8 +231,7 @@ pub(crate) async fn handle_route(
 ) {
     let output = doc.get_element_by_id("output").unwrap();
     output.set_inner_html("");
-    if let Err(e) =
-        try_handle_route(hash, head_commit, root_tree, repo, clone_url, doc, tera, &output).await
+    if let Err(e) = try_handle_route(hash, head_commit, root_tree, repo, clone_url, doc, tera).await
     {
         output.set_inner_html(&error_html(&format!("{e:#}")));
     }
@@ -200,8 +245,8 @@ async fn try_handle_route(
     clone_url: &Rc<String>,
     doc: &Document,
     tera: &Rc<Tera>,
-    output: &web_sys::Element,
 ) -> anyhow::Result<()> {
+    let output = &doc.get_element_by_id("output").unwrap();
     match parse_hash(&hash) {
         Route::About => {
             hide_path_bar(doc);
@@ -214,10 +259,17 @@ async fn try_handle_route(
             set_active_tab(doc, "#!/summary");
             render_summary(tera, head_commit, repo, clone_url, output).await?;
         }
-        Route::Log(offset) => {
+        Route::Log { offset, head } => {
             hide_path_bar(doc);
             set_active_tab(doc, "#!/log");
-            render_log(tera, head_commit, repo, offset, output).await?;
+            let resolved;
+            let log_commit = if let Some(ref ref_name) = head {
+                resolved = resolve_ref_to_commit(repo, ref_name).await?;
+                &resolved
+            } else {
+                head_commit
+            };
+            render_log(tera, log_commit, repo, offset, head.as_deref(), output).await?;
         }
         Route::CommitHead => {
             hide_path_bar(doc);
@@ -284,8 +336,12 @@ fn attach_about_handlers(
     };
     for i in 0..nodes.length() {
         let Some(node) = nodes.get(i) else { continue };
-        let Ok(btn) = node.dyn_into::<web_sys::Element>() else { continue };
-        let Some(target_str) = btn.get_attribute("data-target") else { continue };
+        let Ok(btn) = node.dyn_into::<web_sys::Element>() else {
+            continue;
+        };
+        let Some(target_str) = btn.get_attribute("data-target") else {
+            continue;
+        };
         let target = match target_str.as_str() {
             "repo-objects" => ClearTarget::RepoObjects,
             "all-objects" => ClearTarget::AllObjects,
@@ -316,5 +372,136 @@ fn attach_about_handlers(
         btn.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())
             .ok();
         cb.forget();
+    }
+}
+
+pub(crate) fn log_url(offset: usize, head: Option<&str>) -> String {
+    match (offset, head) {
+        (0, None) => "#!/log".to_string(),
+        (n, None) => format!("#!/log?offset={n}"),
+        (0, Some(head)) => format!("#!/log?h={head}"),
+        (n, Some(head)) => format!("#!/log?h={head}&offset={n}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_hash_summary() {
+        assert!(matches!(parse_hash(""), Route::Summary));
+        assert!(matches!(parse_hash("#"), Route::Summary));
+        assert!(matches!(parse_hash("#!/summary"), Route::Summary));
+    }
+
+    #[test]
+    fn test_parse_hash_about() {
+        assert!(matches!(parse_hash("#!/about"), Route::About));
+    }
+
+    #[test]
+    fn test_parse_hash_log_bare() {
+        assert!(matches!(
+            parse_hash("#!/log"),
+            Route::Log {
+                offset: 0,
+                head: None
+            }
+        ));
+    }
+
+    #[test]
+    fn test_parse_hash_log_head_only() {
+        let route = parse_hash("#!/log?h=main");
+        assert!(matches!(
+            route,
+            Route::Log {
+                offset: 0,
+                head: Some(_)
+            }
+        ));
+        if let Route::Log {
+            head: Some(head), ..
+        } = route
+        {
+            assert_eq!(head, "main");
+        }
+    }
+
+    #[test]
+    fn test_parse_hash_log_head_with_offset() {
+        let route = parse_hash("#!/log?h=stable&offset=100");
+        if let Route::Log {
+            offset,
+            head: Some(head),
+        } = route
+        {
+            assert_eq!(head, "stable");
+            assert_eq!(offset, 100);
+        } else {
+            panic!("expected Log with head and offset");
+        }
+    }
+
+    #[test]
+    fn test_parse_hash_log_offset_only() {
+        let route = parse_hash("#!/log?offset=50");
+        assert!(matches!(
+            route,
+            Route::Log {
+                offset: 50,
+                head: None
+            }
+        ));
+    }
+
+    #[test]
+    fn test_parse_hash_log_empty_head_ignored() {
+        let route = parse_hash("#!/log?h=");
+        assert!(matches!(
+            route,
+            Route::Log {
+                offset: 0,
+                head: None
+            }
+        ));
+    }
+
+    #[test]
+    fn test_parse_hash_commit() {
+        assert!(matches!(parse_hash("#!/commit"), Route::CommitHead));
+        assert!(matches!(parse_hash("#!/commit/abc123"), Route::Commit(_)));
+    }
+
+    #[test]
+    fn test_parse_hash_tree() {
+        assert!(matches!(parse_hash("#!/tree"), Route::Tree(_)));
+        assert!(matches!(parse_hash("#!/tree/src/main.rs"), Route::Tree(_)));
+    }
+
+    #[test]
+    fn test_parse_hash_refs() {
+        assert!(matches!(parse_hash("#!/refs"), Route::Refs(RefsRoute::All)));
+        assert!(matches!(
+            parse_hash("#!/refs/heads"),
+            Route::Refs(RefsRoute::Heads)
+        ));
+        assert!(matches!(
+            parse_hash("#!/refs/tags"),
+            Route::Refs(RefsRoute::Tags)
+        ));
+        assert!(matches!(
+            parse_hash("#!/refs/tags/v1.0"),
+            Route::Refs(RefsRoute::Tag(_))
+        ));
+    }
+
+    #[test]
+    fn test_log_url() {
+        assert_eq!(log_url(0, None), "#!/log");
+        assert_eq!(log_url(50, None), "#!/log?offset=50");
+        assert_eq!(log_url(0, Some("main")), "#!/log?h=main");
+        assert_eq!(log_url(100, Some("stable")), "#!/log?h=stable&offset=100");
     }
 }

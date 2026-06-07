@@ -1,6 +1,7 @@
 use crate::{
     cache::CachingRepo,
     render::{CommitRow, age, commit_first_line},
+    route::log_url,
 };
 use git_async::object::Commit;
 use git_async::object::ObjectId;
@@ -10,7 +11,12 @@ use tera::{Context, Tera};
 
 const PAGE_SIZE: usize = 50;
 
-async fn build_log(head_commit: &Commit, repo: &CachingRepo, offset: usize) -> LogTemplate {
+async fn build_log(
+    head_commit: &Commit,
+    repo: &CachingRepo,
+    offset: usize,
+    head: Option<&str>,
+) -> LogTemplate {
     let mut heap: BinaryHeap<(chrono::DateTime<chrono::FixedOffset>, Commit)> = BinaryHeap::new();
     let mut visited: BTreeSet<ObjectId> = BTreeSet::new();
     heap.push((head_commit.commit_date(), head_commit.clone()));
@@ -49,20 +55,17 @@ async fn build_log(head_commit: &Commit, repo: &CachingRepo, offset: usize) -> L
 
     LogTemplate {
         commits,
-        has_prev: offset > 0,
-        prev_offset: offset.saturating_sub(PAGE_SIZE),
-        has_next,
-        next_offset: offset + PAGE_SIZE,
+        prev_url: (offset > 0)
+            .then(|| log_url(offset.saturating_sub(PAGE_SIZE), head)),
+        next_url: has_next.then(|| log_url(offset + PAGE_SIZE, head)),
     }
 }
 
 #[derive(Serialize)]
 struct LogTemplate {
     commits: Vec<CommitRow>,
-    has_prev: bool,
-    prev_offset: usize,
-    has_next: bool,
-    next_offset: usize,
+    prev_url: Option<String>,
+    next_url: Option<String>,
 }
 
 pub(crate) async fn render_log(
@@ -70,9 +73,10 @@ pub(crate) async fn render_log(
     head_commit: &Commit,
     repo: &CachingRepo,
     offset: usize,
+    head: Option<&str>,
     output: &web_sys::Element,
 ) -> anyhow::Result<()> {
-    let template = build_log(head_commit, repo, offset).await;
+    let template = build_log(head_commit, repo, offset, head).await;
     let ctx = Context::from_serialize(&template)?;
     let html = tera.render("log.html", &ctx)?;
     output.set_inner_html(&html);
