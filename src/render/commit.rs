@@ -57,7 +57,15 @@ async fn build_commit(repo: &CachingRepo, sha: &str) -> anyhow::Result<CommitTem
         .map_err(GitError::from)
         .context("unexpected object type")?;
 
-    let parent_commits = repo.lookup_parents(&commit).await.unwrap_or_default();
+    let (parent_commits, commit_tree_obj) = futures::join!(
+        async { repo.lookup_parents(&commit).await.unwrap_or_default() },
+        repo.lookup_object(commit.tree()),
+    );
+    let commit_tree = commit_tree_obj
+        .context("lookup commit tree")?
+        .tree()
+        .map_err(GitError::from)
+        .context("unexpected object type")?;
 
     let parents: Vec<ParentRef> = parent_commits
         .iter()
@@ -66,13 +74,6 @@ async fn build_commit(repo: &CachingRepo, sha: &str) -> anyhow::Result<CommitTem
             ParentRef { short: h[..8].to_string(), hash: h }
         })
         .collect();
-
-    let commit_tree = repo
-        .lookup_object(commit.tree()).await
-        .context("lookup commit tree")?
-        .tree()
-        .map_err(GitError::from)
-        .context("unexpected object type")?;
 
     let (files, diff_lines) = if let Some(parent) = parent_commits.first() {
         let parent_tree = repo
@@ -138,7 +139,7 @@ async fn build_diff(repo: &CachingRepo, td: &TreeDiff) -> (Vec<FileDiff>, Vec<Di
                 (Vec::new(), load_blob(repo, *new_id).await)
             }
             DiffEntry::Both { content: (old_id, new_id), .. } => {
-                (load_blob(repo, *old_id).await, load_blob(repo, *new_id).await)
+                futures::join!(load_blob(repo, *old_id), load_blob(repo, *new_id))
             }
         };
 

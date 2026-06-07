@@ -89,25 +89,35 @@ fn commit_first_line(c: &Commit) -> String {
 }
 
 pub(crate) async fn fetch_branch_rows(branch_names: &[String], repo: &CachingRepo) -> Vec<RefRow> {
-    let mut rows = Vec::new();
-    for short in branch_names {
-        let rn = RefName::Ref(format!("heads/{short}").into_bytes());
-        let Ok(r) = repo.lookup_ref(&rn).await else { continue };
-        let Ok(Some(commit)) = repo.peel_ref_to_commit(&r).await else { continue };
-        rows.push(ref_row(short.clone(), &commit));
-    }
-    rows
+    futures::future::join_all(branch_names.iter().map(|short| {
+        let short = short.clone();
+        async move {
+            let rn = RefName::Ref(format!("heads/{short}").into_bytes());
+            let Ok(r) = repo.lookup_ref(&rn).await else { return None };
+            let Ok(Some(commit)) = repo.peel_ref_to_commit(&r).await else { return None };
+            Some(ref_row(short, &commit))
+        }
+    }))
+    .await
+    .into_iter()
+    .flatten()
+    .collect()
 }
 
 pub(crate) async fn fetch_tag_rows(tag_names: &[String], repo: &CachingRepo) -> Vec<RefRow> {
-    let mut rows = Vec::new();
-    for short in tag_names {
-        let rn = RefName::Ref(format!("tags/{short}").into_bytes());
-        let Ok(r) = repo.lookup_ref(&rn).await else { continue };
-        let Ok(Some(commit)) = repo.peel_ref_to_commit(&r).await else { continue };
-        rows.push(ref_row(short.clone(), &commit));
-    }
-    rows
+    futures::future::join_all(tag_names.iter().map(|short| {
+        let short = short.clone();
+        async move {
+            let rn = RefName::Ref(format!("tags/{short}").into_bytes());
+            let Ok(r) = repo.lookup_ref(&rn).await else { return None };
+            let Ok(Some(commit)) = repo.peel_ref_to_commit(&r).await else { return None };
+            Some(ref_row(short, &commit))
+        }
+    }))
+    .await
+    .into_iter()
+    .flatten()
+    .collect()
 }
 
 fn ref_row(name: String, c: &Commit) -> RefRow {
