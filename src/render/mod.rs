@@ -88,11 +88,29 @@ fn commit_first_line(c: &Commit) -> String {
         .to_string()
 }
 
-pub(crate) async fn fetch_branch_rows(branch_names: &[String], repo: &CachingRepo) -> Vec<RefRow> {
-    futures::future::join_all(branch_names.iter().map(|short| {
+pub(crate) async fn collect_ref_names(repo: &CachingRepo) -> (Vec<String>, Vec<String>) {
+    let ref_names = repo.ref_names().await.unwrap_or_default();
+    let mut branch_names = Vec::new();
+    let mut tag_names = Vec::new();
+    for ref_name in &ref_names {
+        let label = match ref_name {
+            RefName::Head => continue,
+            RefName::Ref(b) => String::from_utf8_lossy(b),
+        };
+        if let Some(short) = label.strip_prefix("heads/") {
+            branch_names.push(short.to_string());
+        } else if let Some(short) = label.strip_prefix("tags/") {
+            tag_names.push(short.to_string());
+        }
+    }
+    (branch_names, tag_names)
+}
+
+async fn fetch_ref_rows(prefix: &'static str, names: &[String], repo: &CachingRepo) -> Vec<RefRow> {
+    futures::future::join_all(names.iter().map(|short| {
         let short = short.clone();
         async move {
-            let rn = RefName::Ref(format!("heads/{short}").into_bytes());
+            let rn = RefName::Ref(format!("{prefix}/{short}").into_bytes());
             let Ok(r) = repo.lookup_ref(&rn).await else { return None };
             let Ok(Some(commit)) = repo.peel_ref_to_commit(&r).await else { return None };
             Some(ref_row(short, &commit))
@@ -104,20 +122,12 @@ pub(crate) async fn fetch_branch_rows(branch_names: &[String], repo: &CachingRep
     .collect()
 }
 
+pub(crate) async fn fetch_branch_rows(branch_names: &[String], repo: &CachingRepo) -> Vec<RefRow> {
+    fetch_ref_rows("heads", branch_names, repo).await
+}
+
 pub(crate) async fn fetch_tag_rows(tag_names: &[String], repo: &CachingRepo) -> Vec<RefRow> {
-    futures::future::join_all(tag_names.iter().map(|short| {
-        let short = short.clone();
-        async move {
-            let rn = RefName::Ref(format!("tags/{short}").into_bytes());
-            let Ok(r) = repo.lookup_ref(&rn).await else { return None };
-            let Ok(Some(commit)) = repo.peel_ref_to_commit(&r).await else { return None };
-            Some(ref_row(short, &commit))
-        }
-    }))
-    .await
-    .into_iter()
-    .flatten()
-    .collect()
+    fetch_ref_rows("tags", tag_names, repo).await
 }
 
 fn ref_row(name: String, c: &Commit) -> RefRow {

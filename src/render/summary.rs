@@ -1,6 +1,6 @@
 use crate::{
     cache::CachingRepo,
-    render::{CommitRow, RefRow, age, commit_first_line, fetch_branch_rows, fetch_tag_rows},
+    render::{CommitRow, RefRow, age, collect_ref_names, commit_first_line, fetch_branch_rows, fetch_tag_rows},
 };
 use git_async::object::Commit;
 use git_async::reference::{RefName, RefTarget};
@@ -41,8 +41,6 @@ async fn build_summary(
     repo: &CachingRepo,
     clone_url: &str,
 ) -> SummaryTemplate {
-    let ref_names = repo.ref_names().await.unwrap_or_default();
-
     let head_branch: Option<String> = repo.head().await.ok().and_then(|r| {
         match r.target() {
             RefTarget::Symbolic(RefName::Ref(b)) => b
@@ -52,26 +50,16 @@ async fn build_summary(
         }
     });
 
-    // --- Collect and select branch names before fetching any commits ---
-    // HEAD branch goes first; remaining are alpha-sorted.
-    // Total cap: 1 primary + 9 others = 10.
+    let (all_branch_names, mut tag_names) = collect_ref_names(repo).await;
+
+    // HEAD branch goes first; remaining are alpha-sorted. Total cap: 10.
     let mut primary: Option<String> = None;
     let mut other_branches: Vec<String> = Vec::new();
-    let mut tag_names: Vec<String> = Vec::new();
-
-    for ref_name in &ref_names {
-        let label = match ref_name {
-            RefName::Head => continue,
-            RefName::Ref(b) => String::from_utf8_lossy(b).into_owned(),
-        };
-        if let Some(short) = label.strip_prefix("heads/") {
-            if head_branch.as_deref() == Some(short) {
-                primary = Some(short.to_string());
-            } else {
-                other_branches.push(short.to_string());
-            }
-        } else if let Some(short) = label.strip_prefix("tags/") {
-            tag_names.push(short.to_string());
+    for short in all_branch_names {
+        if head_branch.as_deref() == Some(&short) {
+            primary = Some(short);
+        } else {
+            other_branches.push(short);
         }
     }
 
