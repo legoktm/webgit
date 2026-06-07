@@ -1,5 +1,6 @@
 use crate::cache::CachingRepo;
 use crate::console_log;
+use crate::render::commit::render_commit;
 use crate::render::log::render_log;
 use crate::render::refs_all::render_refs_all;
 use crate::render::refs_heads::render_refs_heads;
@@ -116,6 +117,8 @@ pub(crate) enum RefsRoute {
 pub(crate) enum Route {
     Summary,
     Log(usize),
+    CommitHead,
+    Commit(String),
     Refs(RefsRoute),
     Tree(String),
 }
@@ -131,6 +134,13 @@ pub(crate) fn parse_hash(hash: &str) -> Route {
             .and_then(|s| s.parse::<usize>().ok())
             .unwrap_or(0);
         return Route::Log(offset);
+    }
+
+    if hash == "#!/commit" {
+        return Route::CommitHead;
+    }
+    if let Some(sha) = hash.strip_prefix("#!/commit/") {
+        return Route::Commit(sha.to_string());
     }
 
     if hash.starts_with("#!/tree") {
@@ -177,6 +187,16 @@ pub(crate) async fn handle_route(
             hide_path_bar(doc);
             set_active_tab(doc, "#!/log");
             render_log(tera, head_commit, repo, offset, &output).await;
+        }
+        Route::CommitHead => {
+            hide_path_bar(doc);
+            set_active_tab(doc, "#!/commit");
+            render_commit(tera, repo, format!("{}", head_commit.id()), &output).await;
+        }
+        Route::Commit(sha) => {
+            hide_path_bar(doc);
+            set_active_tab(doc, "#!/commit");
+            render_commit(tera, repo, sha, &output).await;
         }
         Route::Refs(RefsRoute::Heads) => {
             hide_path_bar(doc);

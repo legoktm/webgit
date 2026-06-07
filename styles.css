@@ -359,6 +359,94 @@ code {
     font-size: 0.875rem;
 }
 
+/* ── Diffstat ────────────────────────────────────────────────── */
+.diffstat {
+    margin: 1rem 0;
+}
+
+.diffstat-summary {
+    font-size: 0.875rem;
+    color: var(--text-dim);
+    margin: 0 0 0.4rem;
+}
+
+.diffstat-table {
+    border-collapse: collapse;
+    font-size: 0.85rem;
+    font-family: var(--mono);
+    width: 100%;
+}
+
+.diffstat-table td {
+    padding: 0.1rem 0.4rem 0.1rem 0;
+    vertical-align: middle;
+    white-space: nowrap;
+}
+
+.diffstat-name {
+    max-width: 30em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.diffstat-count {
+    text-align: right;
+    color: var(--text-dim);
+    min-width: 3em;
+}
+
+.diffstat-bar-cell {
+    width: 10rem;
+    padding-right: 0.5rem !important;
+}
+
+.diffstat-bar {
+    display: flex;
+    height: 0.7rem;
+    background: var(--bg-alt);
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    overflow: hidden;
+    width: 100%;
+}
+
+.bar-add {
+    background: #16a34a;
+    display: block;
+}
+
+.bar-del {
+    background: #dc2626;
+    display: block;
+}
+
+.diffstat-pm {
+    font-size: 0.8rem;
+}
+
+.add-count { color: #16a34a; margin-right: 0.3em; }
+.del-count { color: #dc2626; }
+
+/* ── Diff ─────────────────────────────────────────────────────── */
+.diff-pre {
+    margin: 0;
+    padding: 0;
+    font-family: var(--mono);
+    font-size: 0.82rem;
+    line-height: 1.45;
+    overflow-x: auto;
+}
+
+.diff-pre span {
+    display: block;
+    padding: 0 0.5rem;
+    white-space: pre;
+}
+
+.diff-add  { background: #f0fdf4; color: #15803d; }
+.diff-del  { background: #fef2f2; color: #b91c1c; }
+.diff-hunk { background: var(--bg-nav); color: var(--text-dim); }
+
 /* ── Tag detail page ─────────────────────────────────────────── */
 .tag-table {
     border-collapse: collapse;

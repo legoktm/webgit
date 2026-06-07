@@ -1,8 +1,9 @@
 use crate::console_log;
 use crate::fs::HttpFilesystem;
 use git_async::Repo;
+use git_async::diff::TreeDiff;
 use git_async::error::{Error as GitError, GResult};
-use git_async::object::{Commit, Object, ObjectId, ObjectType, RawObject};
+use git_async::object::{Commit, Object, ObjectId, ObjectType, RawObject, Tree};
 use git_async::reference::{Ref, RefName, RefTarget};
 use std::collections::BTreeSet;
 use wasm_bindgen::JsCast;
@@ -87,6 +88,10 @@ impl CachingRepo {
             out.push(self.lookup_object(id).await?.commit()?);
         }
         Ok(out)
+    }
+
+    pub(crate) async fn tree_diff(&self, old: &Tree, new: &Tree) -> GResult<TreeDiff> {
+        TreeDiff::new_with_lookup(old, new, async |id| self.lookup_object(id).await).await
     }
 
     // --- Delegators ----------------------------------------------------------

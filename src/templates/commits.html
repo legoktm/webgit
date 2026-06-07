@@ -11,7 +11,7 @@
         {% for c in commits %}
         <tr>
             <td class="age">{{ c.age | age_string }}</td>
-            <td class="name">{{ c.short_hash }}</td>
+            <td class="name"><a href="#!/commit/{{ c.hash }}">{{ c.short_hash }}</a></td>
             <td class="msg">{{ c.message }}</td>
             <td class="author">{{ c.author }}</td>
         </tr>

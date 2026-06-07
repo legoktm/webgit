@@ -3,6 +3,7 @@ use serde::Serialize;
 use tera::{Kwargs, State, Tera, TeraResult, Value};
 
 pub(crate) mod blob;
+pub(crate) mod commit;
 pub(crate) mod log;
 pub(crate) mod refs_all;
 pub(crate) mod refs_heads;
@@ -28,6 +29,7 @@ pub(crate) fn init_tera() -> Tera {
         ("summary.html", include_str!("../templates/summary.html")),
         ("tree.html", include_str!("../templates/tree.html")),
         ("tag.html", include_str!("../templates/tag.html")),
+        ("commit.html", include_str!("../templates/commit.html")),
         ("commits.html", include_str!("../templates/commits.html")),
         ("log.html", include_str!("../templates/log.html")),
     ])
@@ -46,6 +48,7 @@ struct RefRow {
 
 #[derive(Serialize)]
 struct CommitRow {
+    hash: String,
     short_hash: String,
     message: String,
     author: String,

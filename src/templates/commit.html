@@ -1,0 +1,54 @@
+<table class="tag-table">
+    <tbody>
+        <tr>
+            <td class="label">author</td>
+            <td>{{ author_name }} &lt;{{ author_email }}&gt; {{ author_date }}</td>
+        </tr>
+        <tr>
+            <td class="label">committer</td>
+            <td>{{ committer_name }} &lt;{{ committer_email }}&gt; {{ committer_date }}</td>
+        </tr>
+        {% for p in parents %}
+        <tr>
+            <td class="label">{% if loop.first %}parent{% endif %}</td>
+            <td class="mono"><a href="#!/commit/{{ p.hash }}">{{ p.short }}</a></td>
+        </tr>
+        {% endfor %}
+        <tr>
+            <td class="label">commit</td>
+            <td class="mono">{{ hash }}</td>
+        </tr>
+        <tr>
+            <td class="label">tree</td>
+            <td class="mono">{{ tree_hash }}</td>
+        </tr>
+    </tbody>
+</table>
+
+<pre class="tag-message">{{ message }}</pre>
+
+{% if files %}
+<div class="diffstat">
+    <p class="diffstat-summary">{{ files | length }} {{ files | length | pluralize(singular="file", plural="files") }} changed, {{ total_additions }} {{ total_additions | pluralize(singular="insertion", plural="insertions") }}(+), {{ total_deletions }} {{ total_deletions | pluralize(singular="deletion", plural="deletions") }}(-)</p>
+    <table class="diffstat-table">
+        {% for f in files %}
+        <tr>
+            <td class="diffstat-name">{{ f.path }}</td>
+            <td class="diffstat-count">{{ f.additions + f.deletions }}</td>
+            <td class="diffstat-bar-cell">
+                <span class="diffstat-bar">
+                    <span class="bar-add" style="width: {{ f.bar_add }}%"></span><span class="bar-del" style="width: {{ f.bar_del }}%"></span>
+                </span>
+            </td>
+            <td class="diffstat-pm">
+                {% if f.additions %}<span class="add-count">+{{ f.additions }}</span>{% endif %}
+                {% if f.deletions %}<span class="del-count">-{{ f.deletions }}</span>{% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+    </table>
+</div>
+
+<pre class="diff-pre">{% for line in diff_lines %}<span class="diff-{{ line.kind }}">{{ line.content }}
+</span>{% endfor %}</pre>
+{% endif %}

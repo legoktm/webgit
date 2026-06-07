@@ -87,6 +87,7 @@ async fn build_summary(
         let hash = format!("{}", current.id());
         commits.push(CommitRow {
             short_hash: hash[..8].to_string(),
+            hash,
             message: commit_first_line(&current),
             author: String::from_utf8_lossy(current.author_name()).into_owned(),
             age: age(&current.author_date()),
