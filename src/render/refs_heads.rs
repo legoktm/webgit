@@ -8,12 +8,17 @@ use tera::Tera;
 async fn build_refs_heads(repo: &CachingRepo) -> RefsHeadsTemplate {
     let (branch_names, _) = collect_ref_names(repo).await;
     let branches = fetch_branch_rows(&branch_names, repo).await;
-    RefsHeadsTemplate { branches }
+    RefsHeadsTemplate {
+        branches,
+        // This page lists every branch, so there is never a "more" link.
+        more_branches: false,
+    }
 }
 
 #[derive(Serialize)]
 struct RefsHeadsTemplate {
     branches: Vec<RefRow>,
+    more_branches: bool,
 }
 
 pub(crate) async fn render_refs_heads(
@@ -37,6 +42,7 @@ mod tests {
                 fixtures::ref_row("main", "Fix non-annotated tags", "Kunal Mehta", 3600),
                 fixtures::ref_row("develop", "WIP: new parser", "Someone Else", 86400 * 30),
             ],
+            more_branches: false,
         };
         insta::assert_snapshot!(
             render_to_string(&init_tera(), "refs_heads.html", &template).unwrap()

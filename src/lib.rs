@@ -7,7 +7,7 @@ mod route;
 mod stats;
 
 use cache::CachingRepo;
-use error::{error_html, GitContext};
+use error::{GitContext, error_html};
 use fs::{HttpDirectory, HttpFilesystem};
 use git_async::Repo;
 use route::{handle_route, set_text};
@@ -54,14 +54,16 @@ async fn try_load_repo(url: String, doc: Document) -> anyhow::Result<()> {
     let head = repo.head().await.context("Failed to read HEAD")?;
 
     let commit = repo
-        .peel_ref_to_commit(&head).await
+        .peel_ref_to_commit(&head)
+        .await
         .context("Failed to peel HEAD to commit")?
         .ok_or_else(|| anyhow::anyhow!("HEAD does not point to a commit"))?;
 
     set_text(&doc, "repo-path-name", &repo_name(&url));
 
     let root_tree = repo
-        .lookup_object(commit.tree()).await
+        .lookup_object(commit.tree())
+        .await
         .context("Failed to load root tree")?
         .tree()
         .map_err(|e| anyhow::anyhow!("Root object is not a tree: {e:?}"))?;

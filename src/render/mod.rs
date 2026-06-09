@@ -141,8 +141,12 @@ async fn fetch_ref_rows(prefix: &'static str, names: &[String], repo: &CachingRe
         let short = short.clone();
         async move {
             let rn = RefName::Ref(format!("{prefix}/{short}").into_bytes());
-            let Ok(r) = repo.lookup_ref(&rn).await else { return None };
-            let Ok(Some(commit)) = repo.peel_ref_to_commit(&r).await else { return None };
+            let Ok(r) = repo.lookup_ref(&rn).await else {
+                return None;
+            };
+            let Ok(Some(commit)) = repo.peel_ref_to_commit(&r).await else {
+                return None;
+            };
             Some(ref_row(short, &commit))
         }
     }))
@@ -283,6 +287,9 @@ mod tests {
         assert_eq!(commit_first_line(b"trailing newline\n"), "trailing newline");
         assert_eq!(commit_first_line(b""), "");
         // Invalid UTF-8 is replaced, not dropped.
-        assert_eq!(commit_first_line(b"caf\xc3\xa9 \xff fix"), "caf\u{e9} \u{fffd} fix");
+        assert_eq!(
+            commit_first_line(b"caf\xc3\xa9 \xff fix"),
+            "caf\u{e9} \u{fffd} fix"
+        );
     }
 }

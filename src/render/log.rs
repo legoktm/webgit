@@ -63,7 +63,12 @@ mod tests {
     #[test]
     fn test_log_html_first_page_no_nav() {
         let template = LogTemplate {
-            commits: vec![fixtures::commit_row("0123abcd", "Initial commit", "Kunal Mehta", 60)],
+            commits: vec![fixtures::commit_row(
+                "0123abcd",
+                "Initial commit",
+                "Kunal Mehta",
+                60,
+            )],
             prev_url: None,
             next_url: None,
         };

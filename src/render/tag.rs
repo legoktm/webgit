@@ -8,10 +8,12 @@ use tera::Tera;
 async fn build_tag(repo: &CachingRepo, tag: String) -> anyhow::Result<TagTemplate> {
     let ref_name = RefName::Ref(format!("tags/{tag}").into_bytes());
     let ref_ = repo
-        .lookup_ref(&ref_name).await
+        .lookup_ref(&ref_name)
+        .await
         .context(format!("lookup ref for {tag}"))?;
     let commit = repo
-        .peel_ref_to_commit(&ref_).await
+        .peel_ref_to_commit(&ref_)
+        .await
         .context(format!("peel ref for {tag}"))?
         .ok_or_else(|| anyhow::anyhow!("no commit for {tag}"))?;
     let tag_object_id = match ref_.target() {
@@ -19,7 +21,8 @@ async fn build_tag(repo: &CachingRepo, tag: String) -> anyhow::Result<TagTemplat
         _ => anyhow::bail!("ref target for {tag} is not direct"),
     };
     let object = repo
-        .lookup_object(*tag_object_id).await
+        .lookup_object(*tag_object_id)
+        .await
         .context(format!("lookup tag object {tag}"))?;
 
     // Annotated (and signed) tags point at a tag object that carries its own
@@ -34,7 +37,9 @@ async fn build_tag(repo: &CachingRepo, tag: String) -> anyhow::Result<TagTemplat
                 .to_string(),
             tagger_name: Some(
                 String::from_utf8_lossy(
-                    tag_obj.tagger_name().ok_or_else(|| anyhow::anyhow!("no tagger on {tag}"))?,
+                    tag_obj
+                        .tagger_name()
+                        .ok_or_else(|| anyhow::anyhow!("no tagger on {tag}"))?,
                 )
                 .into_owned(),
             ),

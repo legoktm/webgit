@@ -149,7 +149,9 @@ impl CachingRepo {
         else {
             return;
         };
-        let Ok(store) = tx.object_store(store_name) else { return };
+        let Ok(store) = tx.object_store(store_name) else {
+            return;
+        };
         if let Ok(req) = store.clear() {
             await_request(&req).await.ok();
         }
@@ -160,10 +162,18 @@ impl CachingRepo {
         let prefix = format!("{}::", self.repo_url);
 
         let keys: Vec<String> = {
-            let Ok(tx) = db.transaction_with_str(store_name) else { return };
-            let Ok(store) = tx.object_store(store_name) else { return };
-            let Ok(req) = store.get_all_keys() else { return };
-            let Ok(result) = await_request(&req).await else { return };
+            let Ok(tx) = db.transaction_with_str(store_name) else {
+                return;
+            };
+            let Ok(store) = tx.object_store(store_name) else {
+                return;
+            };
+            let Ok(req) = store.get_all_keys() else {
+                return;
+            };
+            let Ok(result) = await_request(&req).await else {
+                return;
+            };
             let arr = js_sys::Array::from(&result);
             (0..arr.length())
                 .filter_map(|i| arr.get(i).as_string())
@@ -181,7 +191,9 @@ impl CachingRepo {
         else {
             return;
         };
-        let Ok(store) = tx.object_store(store_name) else { return };
+        let Ok(store) = tx.object_store(store_name) else {
+            return;
+        };
         let mut last_req = None;
         for key in &keys {
             if let Ok(req) = store.delete(&JsValue::from_str(key)) {
@@ -200,7 +212,14 @@ impl CachingRepo {
     pub(crate) async fn about_stats(&self) -> Option<(usize, f64, usize, f64, usize, usize)> {
         let (repo_obj, repo_mb, global_obj, global_mb) = self.object_store_stats().await?;
         let (repo_tags, global_tags) = self.tag_ref_stats().await.unwrap_or((0, 0));
-        Some((repo_obj, repo_mb, global_obj, global_mb, repo_tags, global_tags))
+        Some((
+            repo_obj,
+            repo_mb,
+            global_obj,
+            global_mb,
+            repo_tags,
+            global_tags,
+        ))
     }
 
     async fn object_store_stats(&self) -> Option<(usize, f64, usize, f64)> {

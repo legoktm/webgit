@@ -15,13 +15,21 @@ async fn build_refs_all(repo: &CachingRepo) -> RefsAllTemplate {
     branches.sort_by_key(|b| b.age);
     tags.sort_by_key(|t| t.age);
 
-    RefsAllTemplate { branches, tags }
+    RefsAllTemplate {
+        branches,
+        tags,
+        // This page lists every ref, so there are never "more" links.
+        more_branches: false,
+        more_tags: false,
+    }
 }
 
 #[derive(Serialize)]
 struct RefsAllTemplate {
     branches: Vec<RefRow>,
     tags: Vec<RefRow>,
+    more_branches: bool,
+    more_tags: bool,
 }
 
 pub(crate) async fn render_refs_all(
@@ -53,6 +61,8 @@ mod tests {
                 "Kunal Mehta",
                 86400 * 400,
             )],
+            more_branches: false,
+            more_tags: false,
         };
         insta::assert_snapshot!(
             render_to_string(&init_tera(), "refs_all.html", &template).unwrap()

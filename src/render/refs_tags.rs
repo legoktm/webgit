@@ -9,12 +9,17 @@ async fn build_refs_tags(repo: &CachingRepo) -> RefsTagsTemplate {
     let (_, tag_names) = collect_ref_names(repo).await;
     let mut tags = fetch_tag_rows(&tag_names, repo).await;
     tags.sort_by_key(|t| t.age);
-    RefsTagsTemplate { tags }
+    RefsTagsTemplate {
+        tags,
+        // This page lists every tag, so there is never a "more" link.
+        more_tags: false,
+    }
 }
 
 #[derive(Serialize)]
 struct RefsTagsTemplate {
     tags: Vec<RefRow>,
+    more_tags: bool,
 }
 
 pub(crate) async fn render_refs_tags(
@@ -38,6 +43,7 @@ mod tests {
                 fixtures::ref_row("v1.1.0", "Release 1.1.0", "Kunal Mehta", 86400),
                 fixtures::ref_row("v1.0.0", "Release 1.0.0", "Kunal Mehta", 86400 * 400),
             ],
+            more_tags: false,
         };
         insta::assert_snapshot!(
             render_to_string(&init_tera(), "refs_tags.html", &template).unwrap()
@@ -46,7 +52,10 @@ mod tests {
 
     #[test]
     fn test_refs_tags_html_empty() {
-        let template = RefsTagsTemplate { tags: vec![] };
+        let template = RefsTagsTemplate {
+            tags: vec![],
+            more_tags: false,
+        };
         insta::assert_snapshot!(
             render_to_string(&init_tera(), "refs_tags.html", &template).unwrap()
         );

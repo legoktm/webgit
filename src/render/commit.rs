@@ -1,5 +1,5 @@
-use crate::{cache::CachingRepo, render::render_template};
 use crate::error::GitContext;
+use crate::{cache::CachingRepo, render::render_template};
 use git_async::diff::{DiffEntry, TreeDiff};
 use git_async::error::Error as GitError;
 use git_async::object::{Object, ObjectId};
@@ -48,10 +48,11 @@ struct CommitTemplate {
 }
 
 async fn build_commit(repo: &CachingRepo, sha: &str) -> anyhow::Result<CommitTemplate> {
-    let oid = ObjectId::from_hex(sha.as_bytes())
-        .ok_or_else(|| anyhow::anyhow!("invalid SHA: {sha}"))?;
+    let oid =
+        ObjectId::from_hex(sha.as_bytes()).ok_or_else(|| anyhow::anyhow!("invalid SHA: {sha}"))?;
     let commit = repo
-        .lookup_object(oid).await
+        .lookup_object(oid)
+        .await
         .context(format!("lookup {sha}"))?
         .commit()
         .map_err(GitError::from)
@@ -71,19 +72,24 @@ async fn build_commit(repo: &CachingRepo, sha: &str) -> anyhow::Result<CommitTem
         .iter()
         .map(|p| {
             let h = format!("{}", p.id());
-            ParentRef { short: h[..8].to_string(), hash: h }
+            ParentRef {
+                short: h[..8].to_string(),
+                hash: h,
+            }
         })
         .collect();
 
     let (files, diff_lines) = if let Some(parent) = parent_commits.first() {
         let parent_tree = repo
-            .lookup_object(parent.tree()).await
+            .lookup_object(parent.tree())
+            .await
             .context("lookup parent tree")?
             .tree()
             .map_err(GitError::from)
-        .context("unexpected object type")?;
+            .context("unexpected object type")?;
         let td = repo
-            .tree_diff(&parent_tree, &commit_tree).await
+            .tree_diff(&parent_tree, &commit_tree)
+            .await
             .context("tree diff")?;
         build_diff(repo, &td).await
     } else {
@@ -132,13 +138,18 @@ async fn build_diff(repo: &CachingRepo, td: &TreeDiff) -> (Vec<FileDiff>, Vec<Di
         let path = String::from_utf8_lossy(entry.path().as_slice()).into_owned();
 
         let (old_data, new_data) = match entry {
-            DiffEntry::LeftOnly { content: (old_id, _), .. } => {
-                (load_blob(repo, *old_id).await, Vec::new())
-            }
-            DiffEntry::RightOnly { content: (_, new_id), .. } => {
-                (Vec::new(), load_blob(repo, *new_id).await)
-            }
-            DiffEntry::Both { content: (old_id, new_id), .. } => {
+            DiffEntry::LeftOnly {
+                content: (old_id, _),
+                ..
+            } => (load_blob(repo, *old_id).await, Vec::new()),
+            DiffEntry::RightOnly {
+                content: (_, new_id),
+                ..
+            } => (Vec::new(), load_blob(repo, *new_id).await),
+            DiffEntry::Both {
+                content: (old_id, new_id),
+                ..
+            } => {
                 futures::join!(load_blob(repo, *old_id), load_blob(repo, *new_id))
             }
         };
@@ -160,20 +171,33 @@ async fn build_diff(repo: &CachingRepo, td: &TreeDiff) -> (Vec<FileDiff>, Vec<Di
         for line in udiff.lines() {
             let lkind = match line.chars().next() {
                 Some('+') => {
-                    if !line.starts_with("+++") { additions += 1; }
+                    if !line.starts_with("+++") {
+                        additions += 1;
+                    }
                     "add"
                 }
                 Some('-') => {
-                    if !line.starts_with("---") { deletions += 1; }
+                    if !line.starts_with("---") {
+                        deletions += 1;
+                    }
                     "del"
                 }
                 Some('@') => "hunk",
                 _ => "ctx",
             };
-            diff_lines.push(DiffLine { kind: lkind.to_string(), content: line.to_string() });
+            diff_lines.push(DiffLine {
+                kind: lkind.to_string(),
+                content: line.to_string(),
+            });
         }
 
-        files.push(FileDiff { path, additions, deletions, bar_add: 0, bar_del: 0 });
+        files.push(FileDiff {
+            path,
+            additions,
+            deletions,
+            bar_add: 0,
+            bar_del: 0,
+        });
     }
 
     let max_changes = files
@@ -186,7 +210,11 @@ async fn build_diff(repo: &CachingRepo, td: &TreeDiff) -> (Vec<FileDiff>, Vec<Di
     for f in &mut files {
         let total = f.additions + f.deletions;
         let bar_total = total * 40 / max_changes;
-        f.bar_add = f.additions.checked_mul(bar_total).and_then(|n| n.checked_div(total)).unwrap_or(0);
+        f.bar_add = f
+            .additions
+            .checked_mul(bar_total)
+            .and_then(|n| n.checked_div(total))
+            .unwrap_or(0);
         f.bar_del = bar_total - f.bar_add;
     }
 
@@ -289,8 +317,6 @@ mod tests {
                 content: "+    println!(\"<new> & escaped\");".to_string(),
             },
         ];
-        insta::assert_snapshot!(
-            render_to_string(&init_tera(), "commit.html", &template).unwrap()
-        );
+        insta::assert_snapshot!(render_to_string(&init_tera(), "commit.html", &template).unwrap());
     }
 }

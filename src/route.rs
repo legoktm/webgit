@@ -8,7 +8,9 @@ use crate::render::refs_all::render_refs_all;
 use crate::render::refs_heads::render_refs_heads;
 use crate::render::refs_tags::render_refs_tags;
 use crate::render::tag::render_tag;
-use crate::render::{blob::render_blob, head_branch_name, summary::render_summary, tree::render_tree};
+use crate::render::{
+    blob::render_blob, head_branch_name, summary::render_summary, tree::render_tree,
+};
 use git_async::object::{ObjectId, Tree, TreeEntryType};
 use git_async::reference::RefName;
 use std::rc::Rc;
@@ -79,9 +81,7 @@ fn update_path_bar(
         };
         html.push_str(&format!("{label}: {name} | "));
     }
-    html.push_str(&format!(
-        "path: <a href=\"#!/tree{head_suffix}\">root</a>"
-    ));
+    html.push_str(&format!("path: <a href=\"#!/tree{head_suffix}\">root</a>"));
     let mut cumulative = String::new();
     for component in path.split('/').filter(|s| !s.is_empty()) {
         if !cumulative.is_empty() {
@@ -325,14 +325,16 @@ async fn try_handle_route(
         }
         Route::Log { offset, head } => {
             set_active_tab(doc, "#!/log");
-            let (resolved, display_head): (Option<git_async::object::Commit>, Option<(String, RefKind)>) =
-                if let Some(ref ref_name) = head {
-                    let (commit, kind) = resolve_ref_to_commit(repo, ref_name).await?;
-                    (Some(commit), Some((ref_name.clone(), kind)))
-                } else {
-                    let implicit = head_branch_name(repo).await;
-                    (None, implicit.map(|n| (n, RefKind::Branch)))
-                };
+            let (resolved, display_head): (
+                Option<git_async::object::Commit>,
+                Option<(String, RefKind)>,
+            ) = if let Some(ref ref_name) = head {
+                let (commit, kind) = resolve_ref_to_commit(repo, ref_name).await?;
+                (Some(commit), Some((ref_name.clone(), kind)))
+            } else {
+                let implicit = head_branch_name(repo).await;
+                (None, implicit.map(|n| (n, RefKind::Branch)))
+            };
             let log_commit = resolved.as_ref().unwrap_or(head_commit);
             if let Some((ref name, ref kind)) = display_head {
                 let label = match kind {
@@ -585,10 +587,7 @@ mod tests {
     fn test_parse_tree_rest() {
         assert_eq!(parse_tree_rest(""), ("".into(), None));
         assert_eq!(parse_tree_rest("/src"), ("src".into(), None));
-        assert_eq!(
-            parse_tree_rest("?h=main"),
-            ("".into(), Some("main".into()))
-        );
+        assert_eq!(parse_tree_rest("?h=main"), ("".into(), Some("main".into())));
         assert_eq!(
             parse_tree_rest("/src?h=stable"),
             ("src".into(), Some("stable".into()))

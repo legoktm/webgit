@@ -1,6 +1,9 @@
 use crate::{
     cache::CachingRepo,
-    render::{CommitRow, RefRow, collect_ref_names, fetch_branch_rows, fetch_tag_rows, head_branch_name, render_template, walk_commits},
+    render::{
+        CommitRow, RefRow, collect_ref_names, fetch_branch_rows, fetch_tag_rows, head_branch_name,
+        render_template, walk_commits,
+    },
 };
 use git_async::object::Commit;
 use serde::Serialize;
@@ -101,8 +104,6 @@ mod tests {
             ],
             clone_url: "https://example.org/repo.git".to_string(),
         };
-        insta::assert_snapshot!(
-            render_to_string(&init_tera(), "summary.html", &template).unwrap()
-        );
+        insta::assert_snapshot!(render_to_string(&init_tera(), "summary.html", &template).unwrap());
     }
 }

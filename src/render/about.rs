@@ -54,22 +54,20 @@ pub(crate) async fn render_about(
         .unwrap_or((0, 0));
 
     let template = match repo.about_stats().await {
-        Some((repo_obj, repo_mb, global_obj, global_mb, repo_tags, global_tags)) => {
-            AboutTemplate {
-                version: env!("CARGO_PKG_VERSION"),
-                clone_url: clone_url.to_string(),
-                head_branch,
-                branch_count,
-                tag_count,
-                idb_available: true,
-                repo_objects: repo_obj,
-                repo_size_mb: format!("{repo_mb:.2}"),
-                global_objects: global_obj,
-                global_size_mb: format!("{global_mb:.2}"),
-                repo_tag_refs: repo_tags,
-                global_tag_refs: global_tags,
-            }
-        }
+        Some((repo_obj, repo_mb, global_obj, global_mb, repo_tags, global_tags)) => AboutTemplate {
+            version: env!("CARGO_PKG_VERSION"),
+            clone_url: clone_url.to_string(),
+            head_branch,
+            branch_count,
+            tag_count,
+            idb_available: true,
+            repo_objects: repo_obj,
+            repo_size_mb: format!("{repo_mb:.2}"),
+            global_objects: global_obj,
+            global_size_mb: format!("{global_mb:.2}"),
+            repo_tag_refs: repo_tags,
+            global_tag_refs: global_tags,
+        },
         None => AboutTemplate {
             version: env!("CARGO_PKG_VERSION"),
             clone_url: clone_url.to_string(),
