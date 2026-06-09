@@ -58,15 +58,7 @@ async fn try_load_repo(url: String, doc: Document) -> anyhow::Result<()> {
         .context("Failed to peel HEAD to commit")?
         .ok_or_else(|| anyhow::anyhow!("HEAD does not point to a commit"))?;
 
-    let repo_name = url
-        .trim_end_matches('/')
-        .rsplit('/')
-        .next()
-        .unwrap_or(&url)
-        .trim_end_matches(".git")
-        .to_string();
-
-    set_text(&doc, "repo-path-name", &repo_name);
+    set_text(&doc, "repo-path-name", &repo_name(&url));
 
     let root_tree = repo
         .lookup_object(commit.tree()).await
@@ -145,6 +137,15 @@ async fn try_load_repo(url: String, doc: Document) -> anyhow::Result<()> {
 // URL resolution
 // ---------------------------------------------------------------------------
 
+fn repo_name(url: &str) -> String {
+    url.trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or(url)
+        .trim_end_matches(".git")
+        .to_string()
+}
+
 fn resolve_repo_url(window: &web_sys::Window) -> Option<String> {
     let location = window.location();
 
@@ -196,4 +197,18 @@ pub fn main() {
     wasm_bindgen_futures::spawn_local(async move {
         load_repo(url, document).await;
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_repo_name() {
+        assert_eq!(repo_name("https://example.org/foo/bar.git"), "bar");
+        assert_eq!(repo_name("https://example.org/foo/bar.git/"), "bar");
+        assert_eq!(repo_name("https://example.org/foo/bar"), "bar");
+        assert_eq!(repo_name("bar.git"), "bar");
+        assert_eq!(repo_name(""), "");
+    }
 }

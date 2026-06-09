@@ -1,0 +1,51 @@
+---
+source: src/render/refs_all.rs
+expression: "render_to_string(&init_tera(), \"refs_all.html\", &template).unwrap()"
+---
+<h3 class="summary-heading">Branches</h3>
+<table class="summary-table">
+    <thead>
+        <tr>
+            <th>Branch</th>
+            <th>Commit message</th>
+            <th>Author</th>
+            <th>Age</th>
+        </tr>
+    </thead>
+    <tbody>
+        
+        <tr>
+            <td class="name"><a href="#!/tree?h=main">main</a></td>
+            <td class="msg">Fix non-annotated tags</td>
+            <td class="author">Kunal Mehta</td>
+            <td class="age">60 minutes</td>
+        </tr>
+        
+        
+    </tbody>
+</table>
+
+
+<h3 class="summary-heading">Tags</h3>
+
+<table class="summary-table">
+    <thead>
+        <tr>
+            <th>Tag</th>
+            <th>Commit message</th>
+            <th>Author</th>
+            <th>Age</th>
+        </tr>
+    </thead>
+    <tbody>
+        
+        <tr>
+            <td class="name"><a href="#!/refs/tags/v1.0.0">v1.0.0</a></td>
+            <td class="msg">Release 1.0.0</td>
+            <td class="author">Kunal Mehta</td>
+            <td class="age">13 months</td>
+        </tr>
+        
+        
+    </tbody>
+</table>

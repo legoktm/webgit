@@ -1,0 +1,33 @@
+---
+source: src/render/refs_heads.rs
+expression: "render_to_string(&init_tera(), \"refs_heads.html\", &template).unwrap()"
+---
+<h3 class="summary-heading">Branches</h3>
+<table class="summary-table">
+    <thead>
+        <tr>
+            <th>Branch</th>
+            <th>Commit message</th>
+            <th>Author</th>
+            <th>Age</th>
+        </tr>
+    </thead>
+    <tbody>
+        
+        <tr>
+            <td class="name"><a href="#!/tree?h=main">main</a></td>
+            <td class="msg">Fix non-annotated tags</td>
+            <td class="author">Kunal Mehta</td>
+            <td class="age">60 minutes</td>
+        </tr>
+        
+        <tr>
+            <td class="name"><a href="#!/tree?h=develop">develop</a></td>
+            <td class="msg">WIP: new parser</td>
+            <td class="author">Someone Else</td>
+            <td class="age">4 weeks</td>
+        </tr>
+        
+        
+    </tbody>
+</table>

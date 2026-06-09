@@ -1,0 +1,46 @@
+---
+source: src/render/tree.rs
+expression: html
+---
+<table class="tree-table">
+    <thead>
+        <tr>
+            <th>Mode</th>
+            <th>Name</th>
+        </tr>
+    </thead>
+    <tbody>
+        
+        <tr>
+            <td class="mode">d---------</td>
+            <td class="name">
+                
+                <a href="#!/tree/src?h=stable">src</a>
+                
+            </td>
+        </tr>
+        
+        <tr>
+            <td class="mode">-rw-r--r--</td>
+            <td class="name">
+                
+                <a class="file" href="#!/tree/README.md?h=stable"
+                    >README.md</a
+                >
+                
+            </td>
+        </tr>
+        
+        <tr>
+            <td class="mode">-rwxr-xr-x</td>
+            <td class="name">
+                
+                <a class="file" href="#!/tree/scripts/build.sh?h=stable"
+                    >build.sh</a
+                >
+                
+            </td>
+        </tr>
+        
+    </tbody>
+</table>

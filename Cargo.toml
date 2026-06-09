@@ -48,3 +48,6 @@ console_error_panic_hook = "0.1"
 serde = { version = "1", features = ["derive"] }
 tera = { version = "2.0.0-alpha", default-features = false, features = ["unicode"] }
 similar = { version = "3.1.1", features = ["bytes"] }
+
+[dev-dependencies]
+insta = "1"

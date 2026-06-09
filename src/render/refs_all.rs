@@ -32,3 +32,30 @@ pub(crate) async fn render_refs_all(
     let template = build_refs_all(repo).await;
     render_template(tera, "refs_all.html", &template, output)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::render::{fixtures, init_tera, render_to_string};
+
+    #[test]
+    fn test_refs_all_html() {
+        let template = RefsAllTemplate {
+            branches: vec![fixtures::ref_row(
+                "main",
+                "Fix non-annotated tags",
+                "Kunal Mehta",
+                3600,
+            )],
+            tags: vec![fixtures::ref_row(
+                "v1.0.0",
+                "Release 1.0.0",
+                "Kunal Mehta",
+                86400 * 400,
+            )],
+        };
+        insta::assert_snapshot!(
+            render_to_string(&init_tera(), "refs_all.html", &template).unwrap()
+        );
+    }
+}

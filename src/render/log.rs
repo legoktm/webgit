@@ -41,3 +41,32 @@ pub(crate) async fn render_log(
     let template = build_log(head_commit, repo, offset, head).await;
     render_template(tera, "log.html", &template, output)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::render::{fixtures, init_tera, render_to_string};
+
+    #[test]
+    fn test_log_html_with_pagination() {
+        let template = LogTemplate {
+            commits: vec![
+                fixtures::commit_row("0123abcd", "Fix non-annotated tags", "Kunal Mehta", 3600),
+                fixtures::commit_row("89abcdef", "Add README", "Kunal Mehta", 86400 * 3),
+            ],
+            prev_url: Some(log_url(0, Some("main"))),
+            next_url: Some(log_url(100, Some("main"))),
+        };
+        insta::assert_snapshot!(render_to_string(&init_tera(), "log.html", &template).unwrap());
+    }
+
+    #[test]
+    fn test_log_html_first_page_no_nav() {
+        let template = LogTemplate {
+            commits: vec![fixtures::commit_row("0123abcd", "Initial commit", "Kunal Mehta", 60)],
+            prev_url: None,
+            next_url: None,
+        };
+        insta::assert_snapshot!(render_to_string(&init_tera(), "log.html", &template).unwrap());
+    }
+}

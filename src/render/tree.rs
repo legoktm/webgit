@@ -39,6 +39,14 @@ fn tree_rows(tree: &Tree, prefix: &str) -> Vec<TreeEntryRow> {
         .collect()
 }
 
+fn tree_context(rows: &[TreeEntryRow], head: Option<&str>) -> Context {
+    let head_suffix = head.map_or(String::new(), |h| format!("?h={h}"));
+    let mut ctx = Context::new();
+    ctx.insert("entries", &rows);
+    ctx.insert("head_suffix", &head_suffix);
+    ctx
+}
+
 pub(crate) fn render_tree(
     tera: &Tera,
     tree: &Tree,
@@ -47,11 +55,61 @@ pub(crate) fn render_tree(
     output: &web_sys::Element,
 ) -> anyhow::Result<()> {
     let rows = tree_rows(tree, prefix);
-    let head_suffix = head.map_or(String::new(), |h| format!("?h={h}"));
-    let mut ctx = Context::new();
-    ctx.insert("entries", &rows);
-    ctx.insert("head_suffix", &head_suffix);
-    let html = tera.render("tree.html", &ctx)?;
+    let html = tera.render("tree.html", &tree_context(&rows, head))?;
     output.set_inner_html(&html);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::render::init_tera;
+
+    #[test]
+    fn test_mode_string() {
+        assert_eq!(mode_string(TreeEntryType::Tree), "d---------");
+        assert_eq!(mode_string(TreeEntryType::File), "-rw-r--r--");
+        assert_eq!(mode_string(TreeEntryType::Executable), "-rwxr-xr-x");
+        assert_eq!(mode_string(TreeEntryType::Symlink), "l---------");
+        assert_eq!(mode_string(TreeEntryType::Commit), "m---------");
+    }
+
+    fn fixture_rows() -> Vec<TreeEntryRow> {
+        vec![
+            TreeEntryRow {
+                mode: mode_string(TreeEntryType::Tree).to_string(),
+                name: "src".to_string(),
+                path: "src".to_string(),
+                is_dir: true,
+            },
+            TreeEntryRow {
+                mode: mode_string(TreeEntryType::File).to_string(),
+                name: "README.md".to_string(),
+                path: "README.md".to_string(),
+                is_dir: false,
+            },
+            TreeEntryRow {
+                mode: mode_string(TreeEntryType::Executable).to_string(),
+                name: "build.sh".to_string(),
+                path: "scripts/build.sh".to_string(),
+                is_dir: false,
+            },
+        ]
+    }
+
+    #[test]
+    fn test_tree_html() {
+        let html = init_tera()
+            .render("tree.html", &tree_context(&fixture_rows(), None))
+            .unwrap();
+        insta::assert_snapshot!(html);
+    }
+
+    #[test]
+    fn test_tree_html_with_head() {
+        let html = init_tera()
+            .render("tree.html", &tree_context(&fixture_rows(), Some("stable")))
+            .unwrap();
+        insta::assert_snapshot!(html);
+    }
 }

@@ -1,0 +1,17 @@
+---
+source: src/render/blob.rs
+expression: "render(b\"<script>alert(1)</script> & <b>bold</b>\\n\")"
+---
+<div class="blob-info">
+  blob: e69de29bb2d1d6434b8b29ae775ad8c2e48c5391 <!--(<a href="#" class="blob-plain-link">plain</a>)-->
+</div>
+<table class="blob-table">
+  <tbody>
+    
+    <tr id="n1">
+      <td class="lno"><a href="#n1">1</a></td>
+      <td class="code">&lt;script&gt;alert(1)&lt;/script&gt; &amp; &lt;b&gt;bold&lt;/b&gt;</td>
+    </tr>
+    
+  </tbody>
+</table>

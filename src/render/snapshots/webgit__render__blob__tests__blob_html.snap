@@ -1,0 +1,27 @@
+---
+source: src/render/blob.rs
+expression: "render(b\"fn main() {\\n    println!(\\\"hello\\\");\\n}\\n\")"
+---
+<div class="blob-info">
+  blob: e69de29bb2d1d6434b8b29ae775ad8c2e48c5391 <!--(<a href="#" class="blob-plain-link">plain</a>)-->
+</div>
+<table class="blob-table">
+  <tbody>
+    
+    <tr id="n1">
+      <td class="lno"><a href="#n1">1</a></td>
+      <td class="code">fn main() {</td>
+    </tr>
+    
+    <tr id="n2">
+      <td class="lno"><a href="#n2">2</a></td>
+      <td class="code">    println!(&quot;hello&quot;);</td>
+    </tr>
+    
+    <tr id="n3">
+      <td class="lno"><a href="#n3">3</a></td>
+      <td class="code">}</td>
+    </tr>
+    
+  </tbody>
+</table>

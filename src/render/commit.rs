@@ -202,3 +202,95 @@ pub(crate) async fn render_commit(
     let template = build_commit(repo, &sha).await?;
     render_template(tera, "commit.html", &template, output)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::render::{init_tera, render_to_string};
+
+    fn base_fixture() -> CommitTemplate {
+        CommitTemplate {
+            hash: "0123abcd0123abcd0123abcd0123abcd0123abcd".to_string(),
+            short_hash: "0123abcd".to_string(),
+            author_name: "Kunal Mehta".to_string(),
+            author_email: "author@example.org".to_string(),
+            author_date: "2026-01-15 12:34:56 +00:00".to_string(),
+            committer_name: "Committer Person".to_string(),
+            committer_email: "committer@example.org".to_string(),
+            committer_date: "2026-01-15 13:00:00 +00:00".to_string(),
+            parents: vec![],
+            tree_hash: "fedcba98fedcba98fedcba98fedcba98fedcba98".to_string(),
+            message: "Fix the thing\n\nLonger explanation with <html> & \"chars\".".to_string(),
+            total_additions: 0,
+            total_deletions: 0,
+            files: vec![],
+            diff_lines: vec![],
+        }
+    }
+
+    #[test]
+    fn test_commit_html_root_commit() {
+        // No parents and no diff: the diffstat section should be absent.
+        insta::assert_snapshot!(
+            render_to_string(&init_tera(), "commit.html", &base_fixture()).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_commit_html_merge_with_diff() {
+        let mut template = base_fixture();
+        template.parents = vec![
+            ParentRef {
+                hash: "1111111111111111111111111111111111111111".to_string(),
+                short: "11111111".to_string(),
+            },
+            ParentRef {
+                hash: "2222222222222222222222222222222222222222".to_string(),
+                short: "22222222".to_string(),
+            },
+        ];
+        template.files = vec![
+            FileDiff {
+                path: "src/main.rs".to_string(),
+                additions: 3,
+                deletions: 1,
+                bar_add: 30,
+                bar_del: 10,
+            },
+            FileDiff {
+                path: "README".to_string(),
+                additions: 1,
+                deletions: 0,
+                bar_add: 10,
+                bar_del: 0,
+            },
+        ];
+        template.total_additions = 4;
+        template.total_deletions = 1;
+        template.diff_lines = vec![
+            DiffLine {
+                kind: "hunk".to_string(),
+                content: "diff --git a/src/main.rs b/src/main.rs".to_string(),
+            },
+            DiffLine {
+                kind: "hunk".to_string(),
+                content: "@@ -1,3 +1,5 @@".to_string(),
+            },
+            DiffLine {
+                kind: "ctx".to_string(),
+                content: " fn main() {".to_string(),
+            },
+            DiffLine {
+                kind: "del".to_string(),
+                content: "-    println!(\"old\");".to_string(),
+            },
+            DiffLine {
+                kind: "add".to_string(),
+                content: "+    println!(\"<new> & escaped\");".to_string(),
+            },
+        ];
+        insta::assert_snapshot!(
+            render_to_string(&init_tera(), "commit.html", &template).unwrap()
+        );
+    }
+}

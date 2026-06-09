@@ -16,15 +16,22 @@ pub(crate) mod summary;
 pub(crate) mod tag;
 pub(crate) mod tree;
 
+pub(crate) fn render_to_string(
+    tera: &Tera,
+    name: &str,
+    data: &impl Serialize,
+) -> anyhow::Result<String> {
+    let ctx = Context::from_serialize(data)?;
+    Ok(tera.render(name, &ctx)?)
+}
+
 pub(crate) fn render_template(
     tera: &Tera,
     name: &str,
     data: &impl Serialize,
     output: &web_sys::Element,
 ) -> anyhow::Result<()> {
-    let ctx = Context::from_serialize(data)?;
-    let html = tera.render(name, &ctx)?;
-    output.set_inner_html(&html);
+    output.set_inner_html(&render_to_string(tera, name, data)?);
     Ok(())
 }
 
@@ -92,8 +99,8 @@ fn age_string(value: Value, _: Kwargs, _: &State) -> TeraResult<Value> {
     Ok(Value::from(formatted))
 }
 
-fn commit_first_line(c: &Commit) -> String {
-    String::from_utf8_lossy(c.message())
+fn commit_first_line(message: &[u8]) -> String {
+    String::from_utf8_lossy(message)
         .trim_end()
         .lines()
         .next()
@@ -174,7 +181,7 @@ pub(crate) async fn walk_commits(
             commits.push(CommitRow {
                 short_hash: hash[..8].to_string(),
                 hash,
-                message: commit_first_line(&current),
+                message: commit_first_line(current.message()),
                 author: String::from_utf8_lossy(current.author_name()).into_owned(),
                 age: age(&current.author_date()),
             });
@@ -203,8 +210,79 @@ fn ref_row(name: String, c: &Commit) -> RefRow {
     RefRow {
         name,
         short_hash: hash[..8].to_string(),
-        message: commit_first_line(c),
+        message: commit_first_line(c.message()),
         author: String::from_utf8_lossy(c.author_name()).into_owned(),
         age: age(&c.author_date()),
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod fixtures {
+    use super::{CommitRow, RefRow};
+
+    pub(crate) fn ref_row(name: &str, message: &str, author: &str, age: u64) -> RefRow {
+        RefRow {
+            name: name.to_string(),
+            short_hash: "0123abcd".to_string(),
+            message: message.to_string(),
+            author: author.to_string(),
+            age,
+        }
+    }
+
+    pub(crate) fn commit_row(short_hash: &str, message: &str, author: &str, age: u64) -> CommitRow {
+        CommitRow {
+            hash: format!("{short_hash}{}", "0".repeat(40 - short_hash.len())),
+            short_hash: short_hash.to_string(),
+            message: message.to_string(),
+            author: author.to_string(),
+            age,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn render_age(secs: u64) -> String {
+        let mut tera = Tera::default();
+        tera.register_filter("age_string", age_string);
+        tera.add_raw_template("age.html", "{{ s | age_string }}")
+            .unwrap();
+        let mut ctx = Context::new();
+        ctx.insert("s", &secs);
+        tera.render("age.html", &ctx).unwrap()
+    }
+
+    #[test]
+    fn test_age_string_buckets() {
+        assert_eq!(render_age(0), "0 seconds");
+        assert_eq!(render_age(89), "89 seconds");
+        assert_eq!(render_age(90), "1 minutes");
+        assert_eq!(render_age(89 * 60), "89 minutes");
+        assert_eq!(render_age(90 * 60), "1 hours");
+        assert_eq!(render_age(35 * 3600), "35 hours");
+        assert_eq!(render_age(36 * 3600), "1 days");
+        assert_eq!(render_age(13 * 86400), "13 days");
+        assert_eq!(render_age(14 * 86400), "2 weeks");
+        assert_eq!(render_age(8 * 7 * 86400 - 1), "7 weeks");
+        assert_eq!(render_age(8 * 7 * 86400), "1 months");
+        assert_eq!(render_age(24 * 30 * 86400 - 1), "23 months");
+        assert_eq!(render_age(24 * 30 * 86400), "1 years");
+        assert_eq!(render_age(3 * 365 * 86400), "3 years");
+    }
+
+    #[test]
+    fn test_commit_first_line() {
+        assert_eq!(
+            commit_first_line(b"Fix bug\n\nLonger description\n"),
+            "Fix bug"
+        );
+        assert_eq!(commit_first_line(b"Single line"), "Single line");
+        assert_eq!(commit_first_line(b"trailing newline\n"), "trailing newline");
+        assert_eq!(commit_first_line(b""), "");
+        // Invalid UTF-8 is replaced, not dropped.
+        assert_eq!(commit_first_line(b"caf\xc3\xa9 \xff fix"), "caf\u{e9} \u{fffd} fix");
     }
 }

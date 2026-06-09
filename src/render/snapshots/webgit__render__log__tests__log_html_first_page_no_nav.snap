@@ -1,0 +1,24 @@
+---
+source: src/render/log.rs
+expression: "render_to_string(&init_tera(), \"log.html\", &template).unwrap()"
+---
+<table class="summary-table">
+    <thead>
+        <tr>
+            <th>Age</th>
+            <th>Commit</th>
+            <th>Message</th>
+            <th>Author</th>
+        </tr>
+    </thead>
+    <tbody>
+        
+        <tr>
+            <td class="age">60 seconds</td>
+            <td class="name"><a href="#!/commit/0123abcd00000000000000000000000000000000">0123abcd</a></td>
+            <td class="msg">Initial commit</td>
+            <td class="author">Kunal Mehta</td>
+        </tr>
+        
+    </tbody>
+</table>

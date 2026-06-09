@@ -69,3 +69,33 @@ pub(crate) async fn render_tag(
     let template = build_tag(repo, tag).await?;
     render_template(tera, "tag.html", &template, output)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::render::{init_tera, render_to_string};
+
+    #[test]
+    fn test_tag_html_annotated() {
+        let template = TagTemplate {
+            name: "v1.0.0".to_string(),
+            date: "2026-01-15 12:34:56 +00:00".to_string(),
+            tagger_name: Some("Kunal Mehta".to_string()),
+            commit: "0123abcd0123abcd0123abcd0123abcd0123abcd".to_string(),
+            contents: Some("Release 1.0.0\n\nSigned-off-by: Kunal Mehta".to_string()),
+        };
+        insta::assert_snapshot!(render_to_string(&init_tera(), "tag.html", &template).unwrap());
+    }
+
+    #[test]
+    fn test_tag_html_lightweight() {
+        let template = TagTemplate {
+            name: "v0.9.0".to_string(),
+            date: "2025-11-02 08:00:00 +00:00".to_string(),
+            tagger_name: None,
+            commit: "89abcdef89abcdef89abcdef89abcdef89abcdef".to_string(),
+            contents: None,
+        };
+        insta::assert_snapshot!(render_to_string(&init_tera(), "tag.html", &template).unwrap());
+    }
+}

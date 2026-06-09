@@ -88,3 +88,40 @@ pub(crate) async fn render_about(
 
     render_template(tera, "about.html", &template, output)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::render::{init_tera, render_to_string};
+
+    fn fixture(idb_available: bool) -> AboutTemplate {
+        AboutTemplate {
+            version: "0.0.0-test",
+            clone_url: "https://example.org/repo.git".to_string(),
+            head_branch: "main".to_string(),
+            branch_count: 3,
+            tag_count: 7,
+            idb_available,
+            repo_objects: 1234,
+            repo_size_mb: "12.34".to_string(),
+            global_objects: 5678,
+            global_size_mb: "56.78".to_string(),
+            repo_tag_refs: 7,
+            global_tag_refs: 21,
+        }
+    }
+
+    #[test]
+    fn test_about_html_with_idb() {
+        insta::assert_snapshot!(
+            render_to_string(&init_tera(), "about.html", &fixture(true)).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_about_html_without_idb() {
+        insta::assert_snapshot!(
+            render_to_string(&init_tera(), "about.html", &fixture(false)).unwrap()
+        );
+    }
+}

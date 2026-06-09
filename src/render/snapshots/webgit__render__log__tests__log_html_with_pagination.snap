@@ -1,0 +1,41 @@
+---
+source: src/render/log.rs
+expression: "render_to_string(&init_tera(), \"log.html\", &template).unwrap()"
+---
+<table class="summary-table">
+    <thead>
+        <tr>
+            <th>Age</th>
+            <th>Commit</th>
+            <th>Message</th>
+            <th>Author</th>
+        </tr>
+    </thead>
+    <tbody>
+        
+        <tr>
+            <td class="age">60 minutes</td>
+            <td class="name"><a href="#!/commit/0123abcd00000000000000000000000000000000">0123abcd</a></td>
+            <td class="msg">Fix non-annotated tags</td>
+            <td class="author">Kunal Mehta</td>
+        </tr>
+        
+        <tr>
+            <td class="age">3 days</td>
+            <td class="name"><a href="#!/commit/89abcdef00000000000000000000000000000000">89abcdef</a></td>
+            <td class="msg">Add README</td>
+            <td class="author">Kunal Mehta</td>
+        </tr>
+        
+    </tbody>
+</table>
+
+
+<div class="log-nav">
+    
+    <a href="#!/log?h=main">&#8592; newer</a>
+    
+    
+    <a href="#!/log?h=main&amp;offset=100">older &#8594;</a>
+    
+</div>

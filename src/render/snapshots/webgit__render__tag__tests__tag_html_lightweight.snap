@@ -1,0 +1,21 @@
+---
+source: src/render/tag.rs
+expression: "render_to_string(&init_tera(), \"tag.html\", &template).unwrap()"
+---
+<table class="tag-table">
+    <tbody>
+        <tr>
+            <td class="label">tag name</td>
+            <td>v0.9.0</td>
+        </tr>
+        <tr>
+            <td class="label">tag date</td>
+            <td>2025-11-02 08:00:00 +00:00</td>
+        </tr>
+        
+        <tr>
+            <td class="label">tagged object</td>
+            <td class="mono">89abcdef89abcdef89abcdef89abcdef89abcdef</td>
+        </tr>
+    </tbody>
+</table>
