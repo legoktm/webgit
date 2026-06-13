@@ -32,16 +32,13 @@ impl File for HttpFile {
         let start = offset.0 as usize;
         let range = format!("bytes={start}-{}", dest.len() - 1 + start);
         let data = fetch_bytes(&self.url, Some(range)).await?;
-        // FIXME: Handle 416 invalid range
-        dest.copy_from_slice(&data);
-        Ok(data.len())
-        /*        if start >= data.len() {
-            return Ok(0);
-        }
-        let available = &data[start..];
-        let n = dest.len().min(available.len());
-        dest[..n].copy_from_slice(&available[..n]);
-        Ok(n)*/
+        // The server may return fewer bytes than requested when the range runs
+        // past EOF (a short 206), or zero bytes for a 416 (range entirely past
+        // EOF; see `fetch_bytes`). Copy only what we got and report the count
+        // so callers can detect EOF, rather than panicking in copy_from_slice.
+        let n = dest.len().min(data.len());
+        dest[..n].copy_from_slice(&data[..n]);
+        Ok(n)
     }
 }
 

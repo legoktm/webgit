@@ -29,6 +29,44 @@ impl<F: File> CachingPageReader<F> {
         let page = self.pages.get(&page_offset).unwrap();
         Ok(page)
     }
+
+    /// Ensure every page spanning `[first_page, last_page]` (both page-aligned)
+    /// is cached, fetching the contiguous run of missing pages in a single
+    /// underlying read. For large sequential reads this collapses what would
+    /// otherwise be one fetch per page into one request.
+    async fn ensure_pages(
+        &mut self,
+        first_page: Offset,
+        last_page: Offset,
+    ) -> Result<(), FileSystemError> {
+        let mut first_missing: Option<Offset> = None;
+        let mut last_missing = first_page;
+        let mut page = first_page;
+        while page <= last_page {
+            if !self.pages.contains_key(&page) {
+                first_missing.get_or_insert(page);
+                last_missing = page;
+            }
+            page = page + PAGE_SIZE_U64;
+        }
+        let Some(start) = first_missing else {
+            return Ok(());
+        };
+        // One read covering the whole missing run. Any already-cached pages
+        // caught in the middle are simply re-read and overwritten with the same
+        // bytes, which is rare for the sequential reads this optimises.
+        let span_len = usize::try_from(last_missing.0 - start.0).unwrap() + PAGE_SIZE;
+        let mut buf = vec![0u8; span_len];
+        let read_len = self.file.read_segment(start, &mut buf).await?;
+        buf.truncate(read_len);
+        let mut page_offset = start;
+        for chunk in buf.chunks(PAGE_SIZE) {
+            self.pages
+                .insert(page_offset, chunk.to_vec().into_boxed_slice());
+            page_offset = page_offset + PAGE_SIZE_U64;
+        }
+        Ok(())
+    }
 }
 
 impl<F: File> File for CachingPageReader<F> {
@@ -41,7 +79,14 @@ impl<F: File> File for CachingPageReader<F> {
         offset: Offset,
         dest: &mut [u8],
     ) -> Result<usize, FileSystemError> {
+        if dest.is_empty() {
+            return Ok(0);
+        }
         let mut page_offset = (offset / PAGE_SIZE_U64) * PAGE_SIZE_U64;
+        // Fetch all pages this read spans in one go before copying them out.
+        let last_byte = offset.0 + (dest.len() as u64) - 1;
+        let last_page = Offset((last_byte / PAGE_SIZE_U64) * PAGE_SIZE_U64);
+        self.ensure_pages(page_offset, last_page).await?;
         let mut page_start = usize::try_from(offset.0 - page_offset.0).unwrap();
         let mut dest_pos = 0;
         while dest_pos < dest.len() {

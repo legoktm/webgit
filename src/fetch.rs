@@ -123,6 +123,13 @@ pub(crate) async fn fetch_bytes(
         fire_progress(1, 0);
         return Err(FileSystemError::NotFound(Box::new(url.to_string())));
     }
+    // 416 Range Not Satisfiable: the requested range starts at or past EOF.
+    // Treat it as a zero-length read so callers see EOF instead of an error
+    // (or an error page's body being copied into the destination buffer).
+    if resp.status() == 416 {
+        fire_progress(1, 0);
+        return Ok(Vec::new());
+    }
     let array_buffer = JsFuture::from(
         resp.array_buffer()
             .map_err(|e| FileSystemError::Other(Box::new(e.as_string().unwrap_or_default())))?,

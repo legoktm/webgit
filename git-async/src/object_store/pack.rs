@@ -192,10 +192,19 @@ async fn read_pack_object_body<F: File>(
     pack_file: &mut F,
     object: &PackObject,
 ) -> IResult<Vec<u8>> {
+    // The compressed body is read sequentially, but the underlying file is
+    // often backed by paged network fetches. Reading in one large chunk lets
+    // those layers coalesce the read into a single request rather than one per
+    // page. The decompressed size bounds the compressed size for all but tiny
+    // objects, so size the buffer to it (with slack for zlib overhead) and cap
+    // it so huge objects don't allocate unboundedly; the loop reads more if
+    // needed.
+    const MAX_BODY_READ: usize = 1 << 20;
     let object_size =
         usize::try_from(object.size.0).map_err(|_| InternalObjectError::ObjectTooLarge)?;
     let mut pos = 0;
-    let mut compressed_body_buf = [0u8; 512];
+    let chunk_size = object_size.saturating_add(64).clamp(512, MAX_BODY_READ);
+    let mut compressed_body_buf = vec![0u8; chunk_size];
     let mut body = vec![0u8; object_size];
     let mut state = Box::<DecompressorOxide>::default();
     let mut out_idx: usize = 0;
