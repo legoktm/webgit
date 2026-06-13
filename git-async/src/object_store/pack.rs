@@ -266,12 +266,13 @@ pub(crate) async fn form_deltified_chain<F: File>(
 
 fn reconstruct_deltified_object(deltified: &[u8], base: &[u8]) -> Vec<u8> {
     let mut pos: usize = 0;
-    let mut reconstructed_body: Vec<u8> = Vec::new();
     let (bytes_read, base_object_size) = read_delta_expected_size(&deltified[pos..]);
     pos += bytes_read;
     debug_assert_eq!(base_object_size.0, base.len() as u64, "base size");
     let (bytes_read, reconstructed_body_size) = read_delta_expected_size(&deltified[pos..]);
     pos += bytes_read;
+    let mut reconstructed_body: Vec<u8> =
+        Vec::with_capacity(usize::try_from(reconstructed_body_size.0).unwrap_or(0));
     while pos < deltified.len() {
         let mut instruction = deltified[pos];
         pos += 1;
