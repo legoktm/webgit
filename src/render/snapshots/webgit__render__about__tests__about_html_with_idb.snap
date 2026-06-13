@@ -3,19 +3,57 @@ source: src/render/about.rs
 expression: "render_to_string(&init_tera(), \"about.html\", &fixture(true)).unwrap()"
 ---
 <h3 class="summary-heading">repository</h3>
-<table class="tag-table"><tbody>
-    <tr><td class="label">clone URL</td><td class="mono">https://example.org/repo.git</td></tr>
-    <tr><td class="label">HEAD branch</td><td>main</td></tr>
-    <tr><td class="label">branches</td><td>3</td></tr>
-    <tr><td class="label">tags</td><td>7</td></tr>
-</tbody></table>
+<table class="tag-table">
+    <tbody>
+        <tr>
+            <td class="label">clone URL</td>
+            <td class="mono">https://example.org/repo.git</td>
+        </tr>
+        <tr>
+            <td class="label">HEAD branch</td>
+            <td>main</td>
+        </tr>
+        <tr>
+            <td class="label">branches</td>
+            <td>3</td>
+        </tr>
+        <tr>
+            <td class="label">tags</td>
+            <td>7</td>
+        </tr>
+    </tbody>
+</table>
 
 <h3 class="summary-heading">webgit</h3>
-<p>webgit allows you to view Git repositories entirely client-side.</p>
-<table class="tag-table"><tbody>
-    <tr><td class="label">version</td><td>0.0.0-test</td></tr>
-    
-    <tr><td class="label">cached objects (repository)</td><td>1234 (12.34 MB) <button class="clear-btn" data-target="repo-objects">(clear)</button></td></tr>
-    <tr><td class="label">cached objects (host)</td><td>5678 (56.78 MB) <button class="clear-btn" data-target="all-objects">(clear)</button></td></tr>
-    
-</tbody></table>
+<p>
+    webgit allows you to view Git repositories entirely client-side. Objects are
+    fetched as needed and stored in IndexedDB.
+</p>
+<table class="tag-table">
+    <tbody>
+        <tr>
+            <td class="label">version</td>
+            <td>0.0.0-test</td>
+        </tr>
+        
+        <tr>
+            <td class="label">cached objects (repository)</td>
+            <td>
+                1234 (12.34 MB)
+                <button class="clear-btn" data-target="repo-objects">
+                    (clear)
+                </button>
+            </td>
+        </tr>
+        <tr>
+            <td class="label">cached objects (host)</td>
+            <td>
+                5678 (56.78 MB)
+                <button class="clear-btn" data-target="all-objects">
+                    (clear)
+                </button>
+            </td>
+        </tr>
+        
+    </tbody>
+</table>
