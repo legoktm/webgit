@@ -1,0 +1,13 @@
+[build]
+public_url = "/assets/"
+
+# Trunk emits hashed CSS/JS/WASM at the dist root and only rewrites the URL
+# prefix via public_url. This hook relocates those files into an `assets/`
+# subdir so they actually live where index.html now references them.
+[[hooks]]
+stage = "post_build"
+command = "sh"
+command_arguments = [
+    "-c",
+    "cd \"$TRUNK_STAGING_DIR\" && mkdir -p assets && find . -maxdepth 1 -type f ! -name index.html -exec mv {} assets/ \\;",
+]
