@@ -66,19 +66,11 @@ fn fire(req_delta: u32, byte_delta: u64, cache_delta: u64) {
     });
 }
 
-enum Method {
-    Head,
-    Get,
-}
-
-async fn send(url: &str, method: Method, headers: &Headers) -> Result<Response, FileSystemError> {
+async fn send(url: &str, headers: &Headers) -> Result<Response, FileSystemError> {
     let window = web_sys::window()
         .ok_or_else(|| FileSystemError::Other(Box::new("no window".to_string())))?;
     let opts = RequestInit::new();
-    opts.set_method(match method {
-        Method::Get => "GET",
-        Method::Head => "HEAD",
-    });
+    opts.set_method("GET");
     opts.set_mode(RequestMode::Cors);
     opts.set_headers_headers(headers);
     let request = Request::new_with_str_and_init(url, &opts)
@@ -89,16 +81,6 @@ async fn send(url: &str, method: Method, headers: &Headers) -> Result<Response, 
     resp_value
         .dyn_into::<Response>()
         .map_err(|_| FileSystemError::Other(Box::new("not a Response".to_string())))
-}
-
-pub(crate) async fn check_exists(url: &str) -> Result<(), FileSystemError> {
-    let resp = send(url, Method::Head, &Headers::new().unwrap()).await?;
-    fire_progress(1, 0);
-    if resp.status() == 404 {
-        Err(FileSystemError::NotFound(Box::new(url.to_string())))
-    } else {
-        Ok(())
-    }
 }
 
 pub(crate) async fn fetch_bytes(
@@ -118,7 +100,7 @@ pub(crate) async fn fetch_bytes(
         headers.set("Range", &range).unwrap();
     }
 
-    let resp = send(url, Method::Get, &headers).await?;
+    let resp = send(url, &headers).await?;
     if resp.status() == 404 {
         fire_progress(1, 0);
         return Err(FileSystemError::NotFound(Box::new(url.to_string())));

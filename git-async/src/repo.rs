@@ -1,10 +1,12 @@
 use crate::{
     error::{Error, GResult},
-    file_system::{DirEntry, Directory, File, FileSystem, FileSystemError, search_for_files},
+    file_system::{
+        DirEntry, Directory, FileSystem, FileSystemError, read_file_if_exists, search_for_files,
+    },
     object::{Object, ObjectId},
     object_store::{ObjectSize, ObjectType, RawObject, cache::IndexCache, lookup::PackName},
     reference::{
-        Ref, RefEntry, RefName, RefTarget, lookup_loose_ref, parse_info_refs, read_packed_refs,
+        Ref, RefEntry, RefName, RefTarget, lookup_loose_ref, parse_info_refs, parse_packed_refs,
     },
 };
 use alloc::collections::{BTreeMap, BTreeSet};
@@ -99,33 +101,28 @@ impl<F: FileSystem> Repo<F> {
         if matches!(&listed, Ok(packs) if !packs.is_empty()) {
             return listed;
         }
-        let mut file = match objects_dir.open_subdir(b"info").await {
-            Ok(info_dir) => match info_dir.open_file(b"packs").await {
-                Ok(file) => file,
-                Err(FileSystemError::NotFound(_)) => return listed,
-                Err(e) => return Err(e.into()),
-            },
+        let info_dir = match objects_dir.open_subdir(b"info").await {
+            Ok(info_dir) => info_dir,
             Err(FileSystemError::NotFound(_)) => return listed,
             Err(e) => return Err(e.into()),
         };
-        let data = file.read_all().await?;
+        let Some(data) = read_file_if_exists(&info_dir, b"packs").await? else {
+            return listed;
+        };
         parse_info_packs(&data)
     }
 
     pub(crate) async fn resolve_git_dir(open_dir: F::Directory) -> GResult<F::Directory> {
-        let head = open_dir.open_file(b"HEAD").await;
-        match head {
-            Ok(_) => Ok(open_dir),
-            Err(FileSystemError::NotFound(_)) => {
-                let git_dir = open_dir.open_subdir(b".git").await?;
-                let head = git_dir.open_file(b"HEAD").await;
-                match head {
-                    Ok(_) => Ok(git_dir),
-                    Err(FileSystemError::NotFound(_)) => Err(Error::NotAGitRepository),
-                    Err(e) => Err(e.into()),
-                }
-            }
-            Err(e) => Err(e.into()),
+        // Probe for HEAD by reading it: with lazily-opened files, existence is
+        // only known once a read is attempted.
+        if read_file_if_exists(&open_dir, b"HEAD").await?.is_some() {
+            return Ok(open_dir);
+        }
+        let git_dir = open_dir.open_subdir(b".git").await?;
+        if read_file_if_exists(&git_dir, b"HEAD").await?.is_some() {
+            Ok(git_dir)
+        } else {
+            Err(Error::NotAGitRepository)
         }
     }
 
@@ -140,14 +137,9 @@ impl<F: FileSystem> Repo<F> {
     pub async fn ref_names(&self) -> GResult<BTreeSet<RefName>> {
         let mut out: BTreeSet<RefName> = BTreeSet::new();
         out.insert(RefName::Head);
-        match self.git_dir.open_file(b"packed-refs").await {
-            Err(FileSystemError::NotFound(_)) => {}
-            Err(e) => return Err(e.into()),
-            Ok(mut packed_refs_file) => {
-                let packed_refs = read_packed_refs(&mut packed_refs_file).await?;
-                for (ref_name, _) in packed_refs {
-                    out.insert(ref_name);
-                }
+        if let Some(data) = read_file_if_exists(&self.git_dir, b"packed-refs").await? {
+            for (ref_name, _) in parse_packed_refs(&data)? {
+                out.insert(ref_name);
             }
         }
         out.extend(self.loose_ref_names().await?);
@@ -182,23 +174,16 @@ impl<F: FileSystem> Repo<F> {
             Err(e) => return Err(e.into()),
             Ok(dir) => dir,
         };
-        let mut file = match info_dir.open_file(b"refs").await {
-            Err(FileSystemError::NotFound(_)) => return Ok(None),
-            Err(e) => return Err(e.into()),
-            Ok(f) => f,
+        let Some(data) = read_file_if_exists(&info_dir, b"refs").await? else {
+            return Ok(None);
         };
-        let data = file.read_all().await?;
         Ok(Some(parse_info_refs(&data)?.into_iter().collect()))
     }
 
     async fn packed_and_loose_refs(&self) -> GResult<BTreeMap<RefName, RefEntry>> {
         let mut out: BTreeMap<RefName, RefEntry> = BTreeMap::new();
-        match self.git_dir.open_file(b"packed-refs").await {
-            Err(FileSystemError::NotFound(_)) => {}
-            Err(e) => return Err(e.into()),
-            Ok(mut packed_refs_file) => {
-                out.extend(read_packed_refs(&mut packed_refs_file).await?);
-            }
+        if let Some(data) = read_file_if_exists(&self.git_dir, b"packed-refs").await? {
+            out.extend(parse_packed_refs(&data)?);
         }
         for name in self.loose_ref_names().await? {
             let Some(target) = lookup_loose_ref(self, &name).await? else {

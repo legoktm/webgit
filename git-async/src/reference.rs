@@ -8,7 +8,7 @@
 
 use crate::{
     error::{Error, GResult},
-    file_system::{Directory, File, FileSystem, FileSystemError},
+    file_system::{Directory, File, FileSystem, FileSystemError, read_file_if_exists},
     object::{Commit, ObjectId, Tree},
     parsing::ParseResult,
     repo::Repo,
@@ -130,8 +130,10 @@ impl Ref {
             if let Some(reference) = lookup_loose_ref(repo, name).await? {
                 reference
             } else {
-                let mut packed_refs_file = repo.git_dir.open_file(b"packed-refs").await?;
-                let packed_refs = read_packed_refs(&mut packed_refs_file).await?;
+                let Some(data) = read_file_if_exists(&repo.git_dir, b"packed-refs").await? else {
+                    return Err(Error::RefNotFound(name.clone()));
+                };
+                let packed_refs = parse_packed_refs(&data)?;
                 if let Some((_, entry)) = packed_refs
                     .into_iter()
                     .find(|(ref_name, _)| ref_name == name)
@@ -195,10 +197,7 @@ impl RefTarget {
     }
 }
 
-pub(crate) async fn read_packed_refs<F: File>(
-    packed_refs_file: &mut F,
-) -> GResult<Vec<(RefName, RefEntry)>> {
-    let packed_refs_data = packed_refs_file.read_all().await?;
+pub(crate) fn parse_packed_refs(packed_refs_data: &[u8]) -> GResult<Vec<(RefName, RefEntry)>> {
     let parse_one_ref = (
         terminated(ObjectId::parse, char(' ')),
         delimited(
@@ -213,7 +212,7 @@ pub(crate) async fn read_packed_refs<F: File>(
     let parse_comment = (space0, char('#'), not_line_ending, opt(newline)).map(|_| None);
     let mut parser = all_consuming(many0(alt((parse_one_ref, parse_comment))));
     let (_, refs) = parser
-        .parse(packed_refs_data.as_ref())
+        .parse(packed_refs_data)
         .map_err(|_| Error::MalformedPackedRefs)?;
     Ok(refs.into_iter().flatten().collect())
 }
@@ -257,7 +256,12 @@ pub(crate) async fn lookup_loose_ref<F: FileSystem>(
     let Some(mut ref_file) = name.open_loose_ref(repo).await? else {
         return Ok(None);
     };
-    let ref_content = ref_file.read_all().await?;
+    let ref_content = match ref_file.read_all().await {
+        Ok(content) => content,
+        // A lazily-opened ref file that turns out not to exist.
+        Err(FileSystemError::NotFound(_)) => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
     let (_, ref_type) =
         RefTarget::parse_loose_ref(&ref_content).map_err(|_| Error::MalformedRef(name.clone()))?;
     Ok(Some(ref_type))
@@ -335,28 +339,13 @@ mod test {
     #[test]
     fn read_stash_packed_ref() {}
 
-    struct MemFile(Vec<u8>);
-    impl File for MemFile {
-        async fn read_all(&mut self) -> Result<Vec<u8>, FileSystemError> {
-            Ok(self.0.clone())
-        }
-        async fn read_segment(
-            &mut self,
-            _offset: crate::file_system::Offset,
-            _dest: &mut [u8],
-        ) -> Result<usize, FileSystemError> {
-            unimplemented!()
-        }
-    }
-
     #[test]
     fn parse_packed_refs_with_peeled() {
         let data = b"# pack-refs with: peeled fully-peeled sorted \n\
 6121d0b97779278fcc32cc8a02754e7c588d9c18 refs/heads/main\n\
 21810577ec46dcb1623e1a1c1e8fe55ed3151118 refs/tags/fat-tag\n\
 ^6121d0b97779278fcc32cc8a02754e7c588d9c18\n";
-        let mut file = MemFile(data.to_vec());
-        let refs = block_on(read_packed_refs(&mut file)).unwrap();
+        let refs = parse_packed_refs(data).unwrap();
         assert_eq!(refs.len(), 2);
         let commit = ObjectId::from_bytes(hex!("6121d0b97779278fcc32cc8a02754e7c588d9c18"));
         let tag = ObjectId::from_bytes(hex!("21810577ec46dcb1623e1a1c1e8fe55ed3151118"));

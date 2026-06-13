@@ -175,7 +175,7 @@ mod tests {
     fn test_find_object_idx() {
         let repo = make_packfile_repo().unwrap();
         let pack_id = get_pack_id(&repo).unwrap();
-        let mut idx_file = repo.pack_idx_file(&pack_id).unwrap();
+        let mut idx_file = repo.pack_idx_file(&pack_id);
         let fanout = block_on(FanoutTable::load(&mut idx_file)).unwrap();
         let obj_idx = block_on(find_object_idx(
             &fanout,
@@ -204,7 +204,7 @@ mod tests {
     fn test_get_obj_packfile_offset_normal() {
         let repo = make_packfile_repo().unwrap();
         let pack_id = get_pack_id(&repo).unwrap();
-        let mut idx_file = repo.pack_idx_file(&pack_id).unwrap();
+        let mut idx_file = repo.pack_idx_file(&pack_id);
         let fanout = block_on(FanoutTable::load(&mut idx_file)).unwrap();
         let offsets = block_on(ShortOffsetTable::load(
             &mut idx_file,
@@ -272,7 +272,7 @@ mod tests {
             ObjectId::from_bytes(hex!("ead5be8e71f3cb2e585e14436087fd84119dd354"));
         repo.run_git(["gc"]).unwrap();
         let pack_file_id = get_pack_id(&repo).unwrap();
-        let mut idx_file = repo.pack_idx_file(&pack_file_id).unwrap();
+        let mut idx_file = repo.pack_idx_file(&pack_file_id);
         let fanout = block_on(FanoutTable::load(&mut idx_file)).unwrap();
         let offsets = block_on(ShortOffsetTable::load(
             &mut idx_file,

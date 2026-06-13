@@ -9,7 +9,6 @@ use crate::{
 use futures::executor::block_on;
 use std::{
     ffi::OsStr,
-    fs::OpenOptions,
     io::{self, Read},
     os::unix::ffi::OsStrExt,
     path::{Path, PathBuf},
@@ -174,17 +173,14 @@ impl TestRepo {
             .clone()
     }
 
-    pub fn pack_idx_file(&self, pack_id: &[u8]) -> io::Result<TestRepoFile> {
+    pub fn pack_idx_file(&self, pack_id: &[u8]) -> TestRepoFile {
         let mut idx_name = Vec::new();
         idx_name.extend_from_slice(b"pack-");
         idx_name.extend_from_slice(pack_id);
         idx_name.extend_from_slice(b".idx");
-        let file = OpenOptions::new()
-            .read(true)
-            .open(self.pack_dir_path().join(OsStr::from_bytes(&idx_name)))?;
-        Ok(TestRepoFile {
-            file,
+        TestRepoFile {
+            path: self.pack_dir_path().join(OsStr::from_bytes(&idx_name)),
             _dir: self.location.clone(),
-        })
+        }
     }
 }

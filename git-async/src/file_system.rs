@@ -101,6 +101,11 @@ pub trait Directory<File>: Sized + Clone {
     fn list_dir(&self) -> impl Future<Output = Result<Vec<DirEntry>, FileSystemError>>;
 
     /// Open a file (for reading)
+    ///
+    /// Implementations may open lazily: a missing file may be reported either
+    /// here as [`FileSystemError::NotFound`], or by the first read on the
+    /// returned handle. Callers that treat absence as a normal outcome should
+    /// use [`read_file_if_exists`], which handles both.
     fn open_file(&self, name: &[u8]) -> impl Future<Output = Result<File, FileSystemError>>;
 }
 
@@ -155,6 +160,30 @@ pub trait File: Sized {
         offset: Offset,
         dest: &mut [u8],
     ) -> impl Future<Output = Result<usize, FileSystemError>>;
+}
+
+/// Open a file and read it in full, returning `None` if it does not exist.
+///
+/// A [`Directory::open_file`] implementation may report a missing file
+/// eagerly (failing the open) or lazily (succeeding the open but failing the
+/// first read — e.g. an HTTP-backed file that only discovers a 404 when
+/// fetched). This helper maps a [`FileSystemError::NotFound`] from *either*
+/// stage to `None`, so callers needn't care which strategy the filesystem
+/// uses.
+pub(crate) async fn read_file_if_exists<F: File, D: Directory<F>>(
+    dir: &D,
+    name: &[u8],
+) -> Result<Option<Vec<u8>>, FileSystemError> {
+    let mut file = match dir.open_file(name).await {
+        Ok(file) => file,
+        Err(FileSystemError::NotFound(_)) => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    match file.read_all().await {
+        Ok(data) => Ok(Some(data)),
+        Err(FileSystemError::NotFound(_)) => Ok(None),
+        Err(e) => Err(e),
+    }
 }
 
 pub(crate) type PathComponent = Vec<u8>;

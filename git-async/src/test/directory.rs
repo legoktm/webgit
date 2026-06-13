@@ -15,10 +15,25 @@ pub struct TestRepoDirectory {
     pub sub_path: PathBuf,
 }
 
+/// A lazily-opened file: like the HTTP-backed filesystem used in production,
+/// the underlying file is not opened until the first read, so a missing file
+/// surfaces as [`FileSystemError::NotFound`] from `read_*` rather than from
+/// `open_file`. This keeps the native test suite exercising the same code
+/// paths as the lazy production implementation.
 #[derive(Debug)]
 pub struct TestRepoFile {
-    pub file: fs::File,
+    pub path: PathBuf,
     pub _dir: TestDirectory,
+}
+
+fn open_for_read(path: &PathBuf) -> Result<fs::File, FileSystemError> {
+    match fs::OpenOptions::new().read(true).open(path) {
+        Ok(f) => Ok(f),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            Err(FileSystemError::NotFound(Box::new(e)))
+        }
+        Err(e) => Err(FileSystemError::Other(Box::new(e))),
+    }
 }
 
 impl Directory<TestRepoFile> for TestRepoDirectory {
@@ -58,23 +73,14 @@ impl Directory<TestRepoFile> for TestRepoDirectory {
     }
 
     async fn open_file(&self, name: &[u8]) -> Result<TestRepoFile, FileSystemError> {
-        let file = fs::OpenOptions::new().read(true).open(
-            self.root
+        // Lazy: record the path but don't open it. Absence is reported by the
+        // first read, mirroring the HTTP-backed filesystem.
+        Ok(TestRepoFile {
+            path: self
+                .root
                 .path()
                 .join(&self.sub_path)
                 .join(str::from_utf8(name).unwrap()),
-        );
-        let file = match file {
-            Ok(f) => f,
-            Err(e) => {
-                if e.kind() == io::ErrorKind::NotFound {
-                    return Err(FileSystemError::NotFound(Box::new(e)));
-                }
-                return Err(FileSystemError::Other(Box::new(e)));
-            }
-        };
-        Ok(TestRepoFile {
-            file,
             _dir: self.root.clone(),
         })
     }
@@ -82,9 +88,9 @@ impl Directory<TestRepoFile> for TestRepoDirectory {
 
 impl File for TestRepoFile {
     async fn read_all(&mut self) -> Result<Vec<u8>, FileSystemError> {
-        self.file.seek(io::SeekFrom::Start(0)).unwrap();
+        let mut file = open_for_read(&self.path)?;
         let mut out = vec![];
-        self.file.read_to_end(&mut out).unwrap();
+        file.read_to_end(&mut out).unwrap();
         Ok(out)
     }
 
@@ -93,11 +99,14 @@ impl File for TestRepoFile {
         offset: Offset,
         dest: &mut [u8],
     ) -> Result<usize, FileSystemError> {
-        let metadata = self.file.metadata().unwrap();
-        let available_len = metadata.len() - offset.0;
+        let mut file = open_for_read(&self.path)?;
+        let metadata = file.metadata().unwrap();
+        // Saturate so a read starting at or past EOF yields zero bytes rather
+        // than panicking, matching the HTTP filesystem's range behaviour.
+        let available_len = metadata.len().saturating_sub(offset.0);
         let read_len = min(usize::try_from(available_len).unwrap(), dest.len());
-        self.file.seek(io::SeekFrom::Start(offset.0)).unwrap();
-        self.file.read_exact(&mut dest[0..read_len]).unwrap();
+        file.seek(io::SeekFrom::Start(offset.0)).unwrap();
+        file.read_exact(&mut dest[0..read_len]).unwrap();
         Ok(read_len)
     }
 }

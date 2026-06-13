@@ -47,7 +47,12 @@ pub(crate) async fn read_loose_object_size_type<F: FileSystem>(
         return Ok(None);
     };
     let mut buf = [0u8; 32];
-    file.read_segment(Offset(0), &mut buf).await?;
+    match file.read_segment(Offset(0), &mut buf).await {
+        Ok(_) => {}
+        // A lazily-opened object file that turns out not to exist.
+        Err(FileSystemError::NotFound(_)) => return Ok(None),
+        Err(e) => return Err(e.into()),
+    }
     let (_, (size, object_type)) = parse_header(&buf).map_err(|_| Error::MalformedObject(id))?;
     Ok(Some((size, object_type)))
 }
@@ -60,7 +65,12 @@ pub(crate) async fn read_loose_object<F: FileSystem>(
     let Some(mut file) = file else {
         return Ok(None);
     };
-    let data = file.read_all().await?;
+    let data = match file.read_all().await {
+        Ok(data) => data,
+        // A lazily-opened object file that turns out not to exist.
+        Err(FileSystemError::NotFound(_)) => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
     let data = decompress_to_vec_zlib(&data).map_err(|e| Error::LooseObjectDecompressError {
         id,
         status: e.status,

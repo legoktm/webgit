@@ -1,6 +1,6 @@
 use crate::{
     console_log,
-    fetch::{check_exists, fetch_bytes, fetch_text},
+    fetch::{fetch_bytes, fetch_text},
 };
 use git_async::file_system::{DirEntry, Directory, File, FileSystem, FileSystemError, Offset};
 use wasm_bindgen::{JsCast, JsValue};
@@ -158,7 +158,6 @@ impl Directory<HttpFile> for HttpDirectory {
         let name_str = std::str::from_utf8(name)
             .map_err(|e| FileSystemError::Other(Box::new(e.to_string())))?;
         let url = format!("{}/{}", self.base_url, name_str);
-        check_exists(&url).await?;
         Ok(HttpFile { url })
     }
 }
