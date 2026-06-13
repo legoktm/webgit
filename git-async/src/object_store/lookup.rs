@@ -102,7 +102,8 @@ pub(crate) async fn find_packed_object<'p, F: FileSystem>(
         // since body pages have little cross-lookup reuse.
         let mut idx_file = CachingPageReader::with_cache(idx_file, pack.idx_pages.clone());
         if let Some(offset) =
-            find_object_in_pack_index(&pack.fanout, pack.offsets.as_ref(), &mut idx_file, id).await?
+            find_object_in_pack_index(&pack.fanout, pack.offsets.as_ref(), &mut idx_file, id)
+                .await?
         {
             let pack_file = repo.pack_dir.open_file(&pack.name.pack_filename).await?;
             return Ok(Some((

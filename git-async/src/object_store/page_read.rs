@@ -1,5 +1,5 @@
-use core::cmp::min;
 use core::cell::RefCell;
+use core::cmp::min;
 
 use crate::file_system::{File, FileSystemError, Offset};
 use alloc::{collections::BTreeMap, rc::Rc, vec, vec::Vec};

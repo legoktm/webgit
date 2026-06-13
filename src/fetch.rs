@@ -158,16 +158,13 @@ mod tests {
     #[test]
     fn volatile_metadata_matches_mutable_manifests() {
         let base = "https://host/repo.git";
-        for path in [
-            "/HEAD",
-            "/packed-refs",
-            "/info/refs",
-            "/objects/info/packs",
-        ] {
+        for path in ["/HEAD", "/packed-refs", "/info/refs", "/objects/info/packs"] {
             assert!(is_volatile_metadata(&format!("{base}{path}")), "{path}");
         }
         // Query/fragment suffixes (e.g. smart-HTTP service params) still match.
-        assert!(is_volatile_metadata(&format!("{base}/info/refs?service=git-upload-pack")));
+        assert!(is_volatile_metadata(&format!(
+            "{base}/info/refs?service=git-upload-pack"
+        )));
     }
 
     #[test]

@@ -4,8 +4,8 @@ use crate::{
     object_store::{
         index::{FanoutTable, ShortOffsetTable},
         lookup::PackName,
-        page_read::{PageCache, new_page_cache},
         pack::validate_packfile_version,
+        page_read::{PageCache, new_page_cache},
     },
     repo::RepoConfig,
 };
