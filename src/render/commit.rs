@@ -134,9 +134,12 @@ async fn build_diff(repo: &CachingRepo, td: &TreeDiff) -> (Vec<FileDiff>, Vec<Di
     let mut files: Vec<FileDiff> = Vec::new();
     let mut diff_lines: Vec<DiffLine> = Vec::new();
 
-    for entry in td.entries() {
+    // Phase 1: load every changed file's blobs concurrently, so the per-object
+    // IndexedDB/network round-trips overlap across files instead of being
+    // serialised one file at a time. The diffing itself (phase 2) is CPU-bound
+    // and stays sequential to preserve output order.
+    let loaded = futures::future::join_all(td.entries().iter().map(|entry| async move {
         let path = String::from_utf8_lossy(entry.path().as_slice()).into_owned();
-
         let (old_data, new_data) = match entry {
             DiffEntry::LeftOnly {
                 content: (old_id, _),
@@ -153,7 +156,11 @@ async fn build_diff(repo: &CachingRepo, td: &TreeDiff) -> (Vec<FileDiff>, Vec<Di
                 futures::join!(load_blob(repo, *old_id), load_blob(repo, *new_id))
             }
         };
+        (path, old_data, new_data)
+    }))
+    .await;
 
+    for (path, old_data, new_data) in loaded {
         let text_diff = TextDiffConfig::default().diff_lines(old_data, new_data);
         let udiff = text_diff
             .unified_diff()
