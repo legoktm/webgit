@@ -95,17 +95,20 @@ pub(crate) async fn find_packed_object<'p, F: FileSystem>(
     pack_cache: &'p IndexCache,
     id: ObjectId,
 ) -> GResult<Option<(IndexedPackFile<'p, F::File>, Offset)>> {
-    for (pack_meta, fanout, offsets) in &pack_cache.indexes {
-        let idx_file = repo.pack_dir.open_file(&pack_meta.index_filename).await?;
-        let mut idx_file = CachingPageReader::new(idx_file);
+    for pack in &pack_cache.indexes {
+        let idx_file = repo.pack_dir.open_file(&pack.name.index_filename).await?;
+        // Reuse the pack's persistent index page cache so binary-search reads
+        // are shared across lookups; the pack body reader stays per-lookup
+        // since body pages have little cross-lookup reuse.
+        let mut idx_file = CachingPageReader::with_cache(idx_file, pack.idx_pages.clone());
         if let Some(offset) =
-            find_object_in_pack_index(fanout, offsets.as_ref(), &mut idx_file, id).await?
+            find_object_in_pack_index(&pack.fanout, pack.offsets.as_ref(), &mut idx_file, id).await?
         {
-            let pack_file = repo.pack_dir.open_file(&pack_meta.pack_filename).await?;
+            let pack_file = repo.pack_dir.open_file(&pack.name.pack_filename).await?;
             return Ok(Some((
                 IndexedPackFile {
-                    fanout,
-                    offsets: offsets.as_ref(),
+                    fanout: &pack.fanout,
+                    offsets: pack.offsets.as_ref(),
                     index: idx_file,
                     pack: CachingPageReader::new(pack_file),
                 },

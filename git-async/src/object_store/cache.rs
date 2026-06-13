@@ -4,15 +4,27 @@ use crate::{
     object_store::{
         index::{FanoutTable, ShortOffsetTable},
         lookup::PackName,
+        page_read::{PageCache, new_page_cache},
         pack::validate_packfile_version,
     },
     repo::RepoConfig,
 };
 use alloc::vec::Vec;
 
+/// A single pack's index metadata, plus a page cache for its `.idx` file that
+/// persists across object lookups so the binary-search reads are not re-fetched
+/// every time.
+#[derive(Clone)]
+pub(crate) struct PackIndex {
+    pub name: PackName,
+    pub fanout: FanoutTable,
+    pub offsets: Option<ShortOffsetTable>,
+    pub idx_pages: PageCache,
+}
+
 #[derive(Clone)]
 pub(crate) struct IndexCache {
-    pub indexes: Vec<(PackName, FanoutTable, Option<ShortOffsetTable>)>,
+    pub indexes: Vec<PackIndex>,
 }
 
 impl IndexCache {
@@ -37,7 +49,12 @@ impl IndexCache {
                 };
             let mut pack_file = pack_dir.open_file(&pack_id.pack_filename).await?;
             validate_packfile_version(&mut pack_file).await?;
-            indexes.push((pack_id, fanout, offset_table));
+            indexes.push(PackIndex {
+                name: pack_id,
+                fanout,
+                offsets: offset_table,
+                idx_pages: new_page_cache(),
+            });
         }
         Ok(Self { indexes })
     }

@@ -1,32 +1,58 @@
 use core::cmp::min;
+use core::cell::RefCell;
 
 use crate::file_system::{File, FileSystemError, Offset};
-use alloc::{boxed::Box, collections::BTreeMap, vec, vec::Vec};
+use alloc::{collections::BTreeMap, rc::Rc, vec, vec::Vec};
 
 const PAGE_SIZE: usize = 4096;
 const PAGE_SIZE_U64: u64 = 4096;
 
+/// A page cache that can be shared between successive [`CachingPageReader`]s
+/// over the same file, so pages fetched by one lookup are reused by the next.
+///
+/// Pages are stored as `Rc<[u8]>` and borrows of the map are never held across
+/// an `await`, so concurrently-polled reads (e.g. via `join_all`) can share a
+/// cache without risking a `RefCell` double-borrow panic. The worst case for a
+/// race is two reads fetching the same page, which is merely redundant.
+pub(crate) type PageCache = Rc<RefCell<BTreeMap<Offset, Rc<[u8]>>>>;
+
+pub(crate) fn new_page_cache() -> PageCache {
+    Rc::new(RefCell::new(BTreeMap::new()))
+}
+
 pub(crate) struct CachingPageReader<F> {
     file: F,
-    pages: BTreeMap<Offset, Box<[u8]>>,
+    pages: PageCache,
 }
 
 impl<F: File> CachingPageReader<F> {
+    /// Create a reader with its own private page cache.
     pub fn new(file: F) -> Self {
         Self {
             file,
-            pages: BTreeMap::new(),
+            pages: new_page_cache(),
         }
     }
 
-    async fn get_page(&mut self, page_offset: Offset) -> Result<&[u8], FileSystemError> {
-        if !self.pages.contains_key(&page_offset) {
-            let mut page = vec![0u8; PAGE_SIZE];
-            let read_len = self.file.read_segment(page_offset, &mut page).await?;
-            page.truncate(read_len);
-            self.pages.insert(page_offset, page.into_boxed_slice());
+    /// Create a reader backed by an existing, shared page cache.
+    pub fn with_cache(file: F, pages: PageCache) -> Self {
+        Self { file, pages }
+    }
+
+    fn cached_page(&self, page_offset: Offset) -> Option<Rc<[u8]>> {
+        self.pages.borrow().get(&page_offset).cloned()
+    }
+
+    async fn get_page(&mut self, page_offset: Offset) -> Result<Rc<[u8]>, FileSystemError> {
+        if let Some(page) = self.cached_page(page_offset) {
+            return Ok(page);
         }
-        let page = self.pages.get(&page_offset).unwrap();
+        let mut page = vec![0u8; PAGE_SIZE];
+        let read_len = self.file.read_segment(page_offset, &mut page).await?;
+        page.truncate(read_len);
+        let page: Rc<[u8]> = Rc::from(page.into_boxed_slice());
+        // Borrow only to insert; never across the await above.
+        self.pages.borrow_mut().insert(page_offset, page.clone());
         Ok(page)
     }
 
@@ -39,18 +65,24 @@ impl<F: File> CachingPageReader<F> {
         first_page: Offset,
         last_page: Offset,
     ) -> Result<(), FileSystemError> {
-        let mut first_missing: Option<Offset> = None;
-        let mut last_missing = first_page;
-        let mut page = first_page;
-        while page <= last_page {
-            if !self.pages.contains_key(&page) {
-                first_missing.get_or_insert(page);
-                last_missing = page;
+        // Find the contiguous run of missing pages under a short borrow, then
+        // drop it before the await below.
+        let (start, last_missing) = {
+            let pages = self.pages.borrow();
+            let mut first_missing: Option<Offset> = None;
+            let mut last_missing = first_page;
+            let mut page = first_page;
+            while page <= last_page {
+                if !pages.contains_key(&page) {
+                    first_missing.get_or_insert(page);
+                    last_missing = page;
+                }
+                page = page + PAGE_SIZE_U64;
             }
-            page = page + PAGE_SIZE_U64;
-        }
-        let Some(start) = first_missing else {
-            return Ok(());
+            match first_missing {
+                Some(start) => (start, last_missing),
+                None => return Ok(()),
+            }
         };
         // One read covering the whole missing run. Any already-cached pages
         // caught in the middle are simply re-read and overwritten with the same
@@ -60,9 +92,9 @@ impl<F: File> CachingPageReader<F> {
         let read_len = self.file.read_segment(start, &mut buf).await?;
         buf.truncate(read_len);
         let mut page_offset = start;
+        let mut pages = self.pages.borrow_mut();
         for chunk in buf.chunks(PAGE_SIZE) {
-            self.pages
-                .insert(page_offset, chunk.to_vec().into_boxed_slice());
+            pages.insert(page_offset, Rc::from(chunk.to_vec().into_boxed_slice()));
             page_offset = page_offset + PAGE_SIZE_U64;
         }
         Ok(())
