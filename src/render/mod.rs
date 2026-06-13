@@ -136,11 +136,20 @@ impl serde::Serialize for Age {
 /// be tested without depending on the wall clock.
 fn format_age(secs: u64, dt: &chrono::DateTime<chrono::FixedOffset>) -> String {
     match secs {
-        s if s < 90 => format!("{s} seconds"),
-        s if s < 90 * 60 => format!("{} minutes", s / 60),
-        s if s < 36 * 3600 => format!("{} hours", s / 3600),
-        s if s < 14 * 86400 => format!("{} days", s / 86400),
+        s if s < 90 => plural(s, "second"),
+        s if s < 90 * 60 => plural(s / 60, "minute"),
+        s if s < 36 * 3600 => plural(s / 3600, "hour"),
+        s if s < 14 * 86400 => plural(s / 86400, "day"),
         _ => dt.format("%Y-%m-%d").to_string(),
+    }
+}
+
+/// `<n> <unit>`, with the unit pluralised unless `n` is exactly 1.
+fn plural(n: u64, unit: &str) -> String {
+    if n == 1 {
+        format!("{n} {unit}")
+    } else {
+        format!("{n} {unit}s")
     }
 }
 
@@ -415,12 +424,13 @@ mod tests {
     fn test_format_age_relative_buckets() {
         let dt = fixed_dt();
         assert_eq!(format_age(0, &dt), "0 seconds");
+        assert_eq!(format_age(1, &dt), "1 second");
         assert_eq!(format_age(89, &dt), "89 seconds");
-        assert_eq!(format_age(90, &dt), "1 minutes");
+        assert_eq!(format_age(90, &dt), "1 minute");
         assert_eq!(format_age(89 * 60, &dt), "89 minutes");
-        assert_eq!(format_age(90 * 60, &dt), "1 hours");
+        assert_eq!(format_age(90 * 60, &dt), "1 hour");
         assert_eq!(format_age(35 * 3600, &dt), "35 hours");
-        assert_eq!(format_age(36 * 3600, &dt), "1 days");
+        assert_eq!(format_age(36 * 3600, &dt), "1 day");
         assert_eq!(format_age(13 * 86400, &dt), "13 days");
     }
 
