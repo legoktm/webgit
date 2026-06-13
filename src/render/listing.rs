@@ -114,22 +114,14 @@ mod tests {
     #[test]
     fn test_listing_html() {
         let template = ListingTemplate {
-            groups: group_repos(&entries(&[
-                "public/foo.git",
-                "public/bar.git",
-                "top.git",
-            ])),
+            groups: group_repos(&entries(&["public/foo.git", "public/bar.git", "top.git"])),
         };
-        insta::assert_snapshot!(
-            render_to_string(&init_tera(), "listing.html", &template).unwrap()
-        );
+        insta::assert_snapshot!(render_to_string(&init_tera(), "listing.html", &template).unwrap());
     }
 
     #[test]
     fn test_listing_html_empty() {
         let template = ListingTemplate { groups: vec![] };
-        insta::assert_snapshot!(
-            render_to_string(&init_tera(), "listing.html", &template).unwrap()
-        );
+        insta::assert_snapshot!(render_to_string(&init_tera(), "listing.html", &template).unwrap());
     }
 }

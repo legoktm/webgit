@@ -210,10 +210,11 @@ fn resolve_repo_url(window: &web_sys::Window) -> Option<String> {
     // The ?url= override lets a local dev build point at any remote repo. It's
     // only honored on a loopback host, so a deployed instance can't be coaxed
     // into fetching arbitrary URLs on a visitor's behalf.
-    let on_loopback = location.hostname().map(|h| h == "127.0.0.1").unwrap_or(false);
-    if on_loopback
-        && let Ok(search) = location.search()
-    {
+    let on_loopback = location
+        .hostname()
+        .map(|h| h == "127.0.0.1")
+        .unwrap_or(false);
+    if on_loopback && let Ok(search) = location.search() {
         for param in search.trim_start_matches('?').split('&') {
             if let Some(val) = param.strip_prefix("url=") {
                 let decoded = js_sys::decode_uri_component(val)
@@ -262,7 +263,10 @@ mod tests {
         assert_eq!(repo_path("https://example.org/foo/bar.git"), "foo/bar.git");
         assert_eq!(repo_path("https://example.org/foo/bar.git/"), "foo/bar.git");
         assert_eq!(repo_path("https://example.org/foo/bar"), "foo/bar");
-        assert_eq!(repo_path("https://git.example.com/public/webgit.git/"), "public/webgit.git");
+        assert_eq!(
+            repo_path("https://git.example.com/public/webgit.git/"),
+            "public/webgit.git"
+        );
         // No host component: the whole string is the path.
         assert_eq!(repo_path("bar.git"), "bar.git");
         assert_eq!(repo_path(""), "");
