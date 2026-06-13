@@ -3,7 +3,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
-use web_sys::{Headers, Request, RequestInit, RequestMode, Response};
+use web_sys::{Headers, Request, RequestCache, RequestInit, RequestMode, Response};
 
 // ---------------------------------------------------------------------------
 // Per-load stats + progress hook
@@ -21,6 +21,21 @@ thread_local! {
 
 fn is_session_cacheable(url: &str) -> bool {
     url.ends_with("/packed-refs")
+}
+
+/// Mutable dumb-HTTP metadata: small files that are rewritten as the repo
+/// changes (refs move, `update-server-info` regenerates the pack/ref manifests).
+/// Unlike content-addressed objects and packs, these must not be served stale
+/// from the browser's HTTP cache — a stale `objects/info/packs` names a pack
+/// that no longer exists, which fails the whole repo open. They are tiny, so
+/// revalidating them on every load (a conditional request answered with 304
+/// when unchanged) is cheap.
+fn is_volatile_metadata(url: &str) -> bool {
+    let url = url.split(['?', '#']).next().unwrap_or(url);
+    url.ends_with("/HEAD")
+        || url.ends_with("/packed-refs")
+        || url.ends_with("/info/refs")
+        || url.ends_with("/objects/info/packs")
 }
 
 thread_local! {
@@ -73,6 +88,11 @@ async fn send(url: &str, headers: &Headers) -> Result<Response, FileSystemError>
     opts.set_method("GET");
     opts.set_mode(RequestMode::Cors);
     opts.set_headers_headers(headers);
+    // Force revalidation of the mutable manifests so a repacked/renamed repo
+    // isn't read through a heuristically-cached (no Cache-Control) stale copy.
+    if is_volatile_metadata(url) {
+        opts.set_cache(RequestCache::NoCache);
+    }
     let request = Request::new_with_str_and_init(url, &opts)
         .map_err(|e| FileSystemError::Other(Box::new(e.as_string().unwrap_or_default())))?;
     let resp_value = JsFuture::from(window.fetch_with_request(&request))
@@ -129,4 +149,38 @@ pub(crate) async fn fetch_bytes(
 pub(crate) async fn fetch_text(url: &str) -> Result<String, FileSystemError> {
     let bytes = fetch_bytes(url, None).await?;
     String::from_utf8(bytes).map_err(|e| FileSystemError::Other(Box::new(e.to_string())))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_volatile_metadata;
+
+    #[test]
+    fn volatile_metadata_matches_mutable_manifests() {
+        let base = "https://host/repo.git";
+        for path in [
+            "/HEAD",
+            "/packed-refs",
+            "/info/refs",
+            "/objects/info/packs",
+        ] {
+            assert!(is_volatile_metadata(&format!("{base}{path}")), "{path}");
+        }
+        // Query/fragment suffixes (e.g. smart-HTTP service params) still match.
+        assert!(is_volatile_metadata(&format!("{base}/info/refs?service=git-upload-pack")));
+    }
+
+    #[test]
+    fn volatile_metadata_excludes_immutable_objects() {
+        let base = "https://host/repo.git";
+        for path in [
+            "/objects/pack/pack-52dea9ac.pack",
+            "/objects/pack/pack-52dea9ac.idx",
+            "/objects/ab/cdef0123456789",
+            // A ref literally named HEAD-ish but not the HEAD file.
+            "/refs/heads/HEADER",
+        ] {
+            assert!(!is_volatile_metadata(&format!("{base}{path}")), "{path}");
+        }
+    }
 }
