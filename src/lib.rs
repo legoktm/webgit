@@ -67,7 +67,9 @@ async fn try_load_repo(url: String, doc: Document) -> anyhow::Result<()> {
         .context("Failed to peel HEAD to commit")?
         .ok_or_else(|| anyhow::anyhow!("HEAD does not point to a commit"))?;
 
-    set_text(&doc, "repo-path-name", &repo_path(&url));
+    let path = repo_path(&url);
+    doc.set_title(&path);
+    set_text(&doc, "repo-path-name", &path);
 
     let root_tree = repo
         .lookup_object(commit.tree())
