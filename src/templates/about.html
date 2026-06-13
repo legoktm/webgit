@@ -1,19 +1,60 @@
 <h3 class="summary-heading">repository</h3>
-<table class="tag-table"><tbody>
-    <tr><td class="label">clone URL</td><td class="mono">{{ clone_url }}</td></tr>
-    <tr><td class="label">HEAD branch</td><td>{{ head_branch }}</td></tr>
-    <tr><td class="label">branches</td><td>{{ branch_count }}</td></tr>
-    <tr><td class="label">tags</td><td>{{ tag_count }}</td></tr>
-</tbody></table>
+<table class="tag-table">
+    <tbody>
+        <tr>
+            <td class="label">clone URL</td>
+            <td class="mono">{{ clone_url }}</td>
+        </tr>
+        <tr>
+            <td class="label">HEAD branch</td>
+            <td>{{ head_branch }}</td>
+        </tr>
+        <tr>
+            <td class="label">branches</td>
+            <td>{{ branch_count }}</td>
+        </tr>
+        <tr>
+            <td class="label">tags</td>
+            <td>{{ tag_count }}</td>
+        </tr>
+    </tbody>
+</table>
 
 <h3 class="summary-heading">webgit</h3>
-<p>webgit allows you to view Git repositories entirely client-side.</p>
-<table class="tag-table"><tbody>
-    <tr><td class="label">version</td><td>{{ version }}</td></tr>
-    {% if idb_available %}
-    <tr><td class="label">cached objects (repository)</td><td>{{ repo_objects }} ({{ repo_size_mb }} MB) <button class="clear-btn" data-target="repo-objects">(clear)</button></td></tr>
-    <tr><td class="label">cached objects (host)</td><td>{{ global_objects }} ({{ global_size_mb }} MB) <button class="clear-btn" data-target="all-objects">(clear)</button></td></tr>
-    {% else %}
-    <tr><td class="label">cache</td><td>IndexedDB unavailable</td></tr>
-    {% endif %}
-</tbody></table>
+<p>
+    webgit allows you to view Git repositories entirely client-side. Objects are
+    fetched as needed and stored in IndexedDB.
+</p>
+<table class="tag-table">
+    <tbody>
+        <tr>
+            <td class="label">version</td>
+            <td>{{ version }}</td>
+        </tr>
+        {% if idb_available %}
+        <tr>
+            <td class="label">cached objects (repository)</td>
+            <td>
+                {{ repo_objects }} ({{ repo_size_mb }} MB)
+                <button class="clear-btn" data-target="repo-objects">
+                    (clear)
+                </button>
+            </td>
+        </tr>
+        <tr>
+            <td class="label">cached objects (host)</td>
+            <td>
+                {{ global_objects }} ({{ global_size_mb }} MB)
+                <button class="clear-btn" data-target="all-objects">
+                    (clear)
+                </button>
+            </td>
+        </tr>
+        {% else %}
+        <tr>
+            <td class="label">cache</td>
+            <td>IndexedDB unavailable</td>
+        </tr>
+        {% endif %}
+    </tbody>
+</table>
