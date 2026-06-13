@@ -12,8 +12,8 @@ async fn build_refs_all(repo: &CachingRepo) -> RefsAllTemplate {
         fetch_ref_rows(&branch_refs, repo),
         fetch_ref_rows(&tag_refs, repo),
     );
-    branches.sort_by_key(|b| b.age);
-    tags.sort_by_key(|t| t.age);
+    branches.sort_by_key(|b| b.age.secs());
+    tags.sort_by_key(|t| t.age.secs());
 
     RefsAllTemplate {
         branches,
@@ -53,13 +53,13 @@ mod tests {
                 "main",
                 "Fix non-annotated tags",
                 "Kunal Mehta",
-                3600,
+                fixtures::relative_age(3600),
             )],
             tags: vec![fixtures::ref_row(
                 "v1.0.0",
                 "Release 1.0.0",
                 "Kunal Mehta",
-                86400 * 400,
+                fixtures::date_age("2000-03-15"),
             )],
             more_branches: false,
             more_tags: false,

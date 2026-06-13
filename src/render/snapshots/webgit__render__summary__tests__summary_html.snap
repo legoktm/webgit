@@ -28,7 +28,7 @@ expression: "render_to_string(&init_tera(), \"summary.html\", &template).unwrap(
             <td class="name"><a href="#!/tree?h=develop">develop</a></td>
             <td class="msg">WIP: new parser</td>
             <td class="author">Someone Else</td>
-            <td class="age">4 weeks</td>
+            <td class="age">2001-01-05</td>
         </tr>
         
         
@@ -57,7 +57,7 @@ expression: "render_to_string(&init_tera(), \"summary.html\", &template).unwrap(
             <td class="name"><a href="#!/refs/tags/v1.0.0">v1.0.0</a></td>
             <td class="msg">Release 1.0.0</td>
             <td class="author">Kunal Mehta</td>
-            <td class="age">13 months</td>
+            <td class="age">2000-03-15</td>
         </tr>
         
         

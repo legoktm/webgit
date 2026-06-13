@@ -14,7 +14,7 @@
             <td class="name"><a href="#!/tree?h={{ b.name }}">{{ b.name }}</a></td>
             <td class="msg">{{ b.message }}</td>
             <td class="author">{{ b.author }}</td>
-            <td class="age">{{ b.age | age_string }}</td>
+            <td class="age">{{ b.age }}</td>
         </tr>
         {% endfor %}
         {% if more_branches %}

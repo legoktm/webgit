@@ -39,8 +39,18 @@ mod tests {
     fn test_refs_heads_html() {
         let template = RefsHeadsTemplate {
             branches: vec![
-                fixtures::ref_row("main", "Fix non-annotated tags", "Kunal Mehta", 3600),
-                fixtures::ref_row("develop", "WIP: new parser", "Someone Else", 86400 * 30),
+                fixtures::ref_row(
+                    "main",
+                    "Fix non-annotated tags",
+                    "Kunal Mehta",
+                    fixtures::relative_age(3600),
+                ),
+                fixtures::ref_row(
+                    "develop",
+                    "WIP: new parser",
+                    "Someone Else",
+                    fixtures::date_age("2001-01-05"),
+                ),
             ],
             more_branches: false,
         };

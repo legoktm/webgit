@@ -8,7 +8,7 @@ use tera::Tera;
 async fn build_refs_tags(repo: &CachingRepo) -> RefsTagsTemplate {
     let (_, tags) = collect_refs(repo).await;
     let mut tags = fetch_ref_rows(&tags, repo).await;
-    tags.sort_by_key(|t| t.age);
+    tags.sort_by_key(|t| t.age.secs());
     RefsTagsTemplate {
         tags,
         // This page lists every tag, so there is never a "more" link.
@@ -40,8 +40,18 @@ mod tests {
     fn test_refs_tags_html() {
         let template = RefsTagsTemplate {
             tags: vec![
-                fixtures::ref_row("v1.1.0", "Release 1.1.0", "Kunal Mehta", 86400),
-                fixtures::ref_row("v1.0.0", "Release 1.0.0", "Kunal Mehta", 86400 * 400),
+                fixtures::ref_row(
+                    "v1.1.0",
+                    "Release 1.1.0",
+                    "Kunal Mehta",
+                    fixtures::relative_age(86400),
+                ),
+                fixtures::ref_row(
+                    "v1.0.0",
+                    "Release 1.0.0",
+                    "Kunal Mehta",
+                    fixtures::date_age("2000-03-15"),
+                ),
             ],
             more_tags: false,
         };

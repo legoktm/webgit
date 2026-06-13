@@ -15,7 +15,7 @@
             <td class="name"><a href="#!/refs/tags/{{t.name}}">{{ t.name }}</a></td>
             <td class="msg">{{ t.message }}</td>
             <td class="author">{{ t.author }}</td>
-            <td class="age">{{ t.age | age_string }}</td>
+            <td class="age">{{ t.age }}</td>
         </tr>
         {% endfor %}
         {% if more_tags %}

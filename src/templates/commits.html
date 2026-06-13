@@ -10,7 +10,7 @@
     <tbody>
         {% for c in commits %}
         <tr>
-            <td class="age">{{ c.age | age_string }}</td>
+            <td class="age">{{ c.age }}</td>
             <td class="name"><a href="#!/commit/{{ c.hash }}">{{ c.short_hash }}</a></td>
             <td class="msg">{{ c.message }}{% for r in c.refs %}{% if r.kind == "tag" %} <a class="ref-label tag" href="#!/refs/tags/{{ r.name }}">{{ r.name }}</a>{% else %} <a class="ref-label branch" href="#!/log?h={{ r.name }}">{{ r.name }}</a>{% endif %}{% endfor %}</td>
             <td class="author">{{ c.author }}</td>

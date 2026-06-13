@@ -89,20 +89,40 @@ mod tests {
     fn test_summary_html() {
         let template = SummaryTemplate {
             branches: vec![
-                fixtures::ref_row("main", "Fix non-annotated tags", "Kunal Mehta", 3600),
-                fixtures::ref_row("develop", "WIP: new parser", "Someone Else", 86400 * 30),
+                fixtures::ref_row(
+                    "main",
+                    "Fix non-annotated tags",
+                    "Kunal Mehta",
+                    fixtures::relative_age(3600),
+                ),
+                fixtures::ref_row(
+                    "develop",
+                    "WIP: new parser",
+                    "Someone Else",
+                    fixtures::date_age("2001-01-05"),
+                ),
             ],
             more_branches: true,
             tags: vec![fixtures::ref_row(
                 "v1.0.0",
                 "Release 1.0.0",
                 "Kunal Mehta",
-                86400 * 400,
+                fixtures::date_age("2000-03-15"),
             )],
             more_tags: true,
             commits: vec![
-                fixtures::commit_row("0123abcd", "Fix non-annotated tags", "Kunal Mehta", 3600),
-                fixtures::commit_row("89abcdef", "Add README", "Kunal Mehta", 86400 * 3),
+                fixtures::commit_row(
+                    "0123abcd",
+                    "Fix non-annotated tags",
+                    "Kunal Mehta",
+                    fixtures::relative_age(3600),
+                ),
+                fixtures::commit_row(
+                    "89abcdef",
+                    "Add README",
+                    "Kunal Mehta",
+                    fixtures::relative_age(86400 * 3),
+                ),
             ],
             clone_url: "https://example.org/repo.git".to_string(),
         };

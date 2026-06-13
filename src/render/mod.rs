@@ -3,7 +3,7 @@ use git_async::object::{Commit, ObjectId};
 use git_async::reference::{RefEntry, RefName, RefTarget};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
-use tera::{Context, Kwargs, State, Tera, TeraResult, Value};
+use tera::{Context, Tera};
 
 pub(crate) mod about;
 pub(crate) mod blob;
@@ -37,7 +37,6 @@ pub(crate) fn render_template(
 
 pub(crate) fn init_tera() -> Tera {
     let mut tera = Tera::default();
-    tera.register_filter("age_string", age_string);
     tera.add_raw_templates(vec![
         ("about.html", include_str!("../templates/about.html")),
         ("blob.html", include_str!("../templates/blob.html")),
@@ -67,7 +66,7 @@ pub(crate) struct RefRow {
     short_hash: String,
     message: String,
     author: String,
-    age: u64,
+    age: Age,
 }
 
 #[derive(Serialize)]
@@ -76,7 +75,7 @@ pub(crate) struct CommitRow {
     short_hash: String,
     message: String,
     author: String,
-    age: u64,
+    age: Age,
     refs: Vec<RefLabel>,
 }
 
@@ -100,18 +99,47 @@ fn age(dt: &chrono::DateTime<chrono::FixedOffset>) -> u64 {
     ((now_ms - then_ms) / 1000.0).max(0.0) as u64
 }
 
-fn age_string(value: Value, _: Kwargs, _: &State) -> TeraResult<Value> {
-    let secs = value.as_u128().unwrap() as u64;
-    let formatted = match secs {
-        s if s < 90 => format!("{} seconds", s),
+/// A commit/ref timestamp that keeps both representations: the elapsed seconds
+/// (for sorting by recency and choosing a format) and the absolute timestamp.
+/// It sorts by recency and serializes — at render time — to a coarse relative
+/// age within the last two weeks, or an absolute `YYYY-MM-DD` date (in the
+/// commit's own timezone) beyond that.
+#[derive(Clone, Copy)]
+pub(crate) struct Age {
+    secs: u64,
+    when: chrono::DateTime<chrono::FixedOffset>,
+}
+
+impl Age {
+    fn new(when: &chrono::DateTime<chrono::FixedOffset>) -> Self {
+        Self {
+            secs: age(when),
+            when: *when,
+        }
+    }
+
+    /// Elapsed seconds, the sort key (smaller is more recent).
+    pub(crate) fn secs(&self) -> u64 {
+        self.secs
+    }
+}
+
+impl serde::Serialize for Age {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&format_age(self.secs, &self.when))
+    }
+}
+
+/// The display rule, split out as a pure function so the bucket boundaries can
+/// be tested without depending on the wall clock.
+fn format_age(secs: u64, dt: &chrono::DateTime<chrono::FixedOffset>) -> String {
+    match secs {
+        s if s < 90 => format!("{s} seconds"),
         s if s < 90 * 60 => format!("{} minutes", s / 60),
         s if s < 36 * 3600 => format!("{} hours", s / 3600),
         s if s < 14 * 86400 => format!("{} days", s / 86400),
-        s if s < 8 * 7 * 86400 => format!("{} weeks", s / (7 * 86400)),
-        s if s < 24 * 30 * 86400 => format!("{} months", s / (30 * 86400)),
-        s => format!("{} years", s / (365 * 86400)),
-    };
-    Ok(Value::from(formatted))
+        _ => dt.format("%Y-%m-%d").to_string(),
+    }
 }
 
 fn commit_first_line(message: &[u8]) -> String {
@@ -256,7 +284,7 @@ pub(crate) async fn walk_commits(
                 hash,
                 message: commit_first_line(current.message()),
                 author: String::from_utf8_lossy(current.author_name()).into_owned(),
-                age: age(&current.author_date()),
+                age: Age::new(&current.author_date()),
                 refs: decorations.get(&current.id()).cloned().unwrap_or_default(),
             });
         } else if commits.len() == limit {
@@ -286,15 +314,44 @@ fn ref_row(name: String, c: &Commit) -> RefRow {
         short_hash: hash[..8].to_string(),
         message: commit_first_line(c.message()),
         author: String::from_utf8_lossy(c.author_name()).into_owned(),
-        age: age(&c.author_date()),
+        age: Age::new(&c.author_date()),
     }
 }
 
 #[cfg(test)]
 pub(crate) mod fixtures {
-    use super::{CommitRow, RefLabel, RefLabelKind, RefRow};
+    use super::{Age, CommitRow, RefLabel, RefLabelKind, RefRow};
 
-    pub(crate) fn ref_row(name: &str, message: &str, author: &str, age: u64) -> RefRow {
+    /// An [`Age`] that renders as a relative bucket; `secs` must be under the
+    /// two-week cutoff for the (placeholder) date to stay hidden.
+    pub(crate) fn relative_age(secs: u64) -> Age {
+        Age {
+            secs,
+            when: ymd("2000-01-01"),
+        }
+    }
+
+    /// An [`Age`] old enough to render as the given absolute `YYYY-MM-DD` date.
+    pub(crate) fn date_age(date: &str) -> Age {
+        Age {
+            secs: 365 * 86400,
+            when: ymd(date),
+        }
+    }
+
+    fn ymd(date: &str) -> chrono::DateTime<chrono::FixedOffset> {
+        use chrono::TimeZone;
+        let naive = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap();
+        chrono::FixedOffset::east_opt(0)
+            .unwrap()
+            .from_local_datetime(&naive)
+            .unwrap()
+    }
+
+    pub(crate) fn ref_row(name: &str, message: &str, author: &str, age: Age) -> RefRow {
         RefRow {
             name: name.to_string(),
             short_hash: "0123abcd".to_string(),
@@ -304,7 +361,7 @@ pub(crate) mod fixtures {
         }
     }
 
-    pub(crate) fn commit_row(short_hash: &str, message: &str, author: &str, age: u64) -> CommitRow {
+    pub(crate) fn commit_row(short_hash: &str, message: &str, author: &str, age: Age) -> CommitRow {
         CommitRow {
             hash: format!("{short_hash}{}", "0".repeat(40 - short_hash.len())),
             short_hash: short_hash.to_string(),
@@ -319,7 +376,7 @@ pub(crate) mod fixtures {
         short_hash: &str,
         message: &str,
         author: &str,
-        age: u64,
+        age: Age,
         branches: &[&str],
         tags: &[&str],
     ) -> CommitRow {
@@ -344,32 +401,57 @@ pub(crate) mod fixtures {
 mod tests {
     use super::*;
 
-    fn render_age(secs: u64) -> String {
-        let mut tera = Tera::default();
-        tera.register_filter("age_string", age_string);
-        tera.add_raw_template("age.html", "{{ s | age_string }}")
-            .unwrap();
-        let mut ctx = Context::new();
-        ctx.insert("s", &secs);
-        tera.render("age.html", &ctx).unwrap()
+    fn fixed_dt() -> chrono::DateTime<chrono::FixedOffset> {
+        use chrono::TimeZone;
+        chrono::FixedOffset::east_opt(0)
+            .unwrap()
+            .with_ymd_and_hms(2001, 2, 3, 4, 5, 6)
+            .unwrap()
     }
 
     #[test]
-    fn test_age_string_buckets() {
-        assert_eq!(render_age(0), "0 seconds");
-        assert_eq!(render_age(89), "89 seconds");
-        assert_eq!(render_age(90), "1 minutes");
-        assert_eq!(render_age(89 * 60), "89 minutes");
-        assert_eq!(render_age(90 * 60), "1 hours");
-        assert_eq!(render_age(35 * 3600), "35 hours");
-        assert_eq!(render_age(36 * 3600), "1 days");
-        assert_eq!(render_age(13 * 86400), "13 days");
-        assert_eq!(render_age(14 * 86400), "2 weeks");
-        assert_eq!(render_age(8 * 7 * 86400 - 1), "7 weeks");
-        assert_eq!(render_age(8 * 7 * 86400), "1 months");
-        assert_eq!(render_age(24 * 30 * 86400 - 1), "23 months");
-        assert_eq!(render_age(24 * 30 * 86400), "1 years");
-        assert_eq!(render_age(3 * 365 * 86400), "3 years");
+    fn test_format_age_relative_buckets() {
+        let dt = fixed_dt();
+        assert_eq!(format_age(0, &dt), "0 seconds");
+        assert_eq!(format_age(89, &dt), "89 seconds");
+        assert_eq!(format_age(90, &dt), "1 minutes");
+        assert_eq!(format_age(89 * 60, &dt), "89 minutes");
+        assert_eq!(format_age(90 * 60, &dt), "1 hours");
+        assert_eq!(format_age(35 * 3600, &dt), "35 hours");
+        assert_eq!(format_age(36 * 3600, &dt), "1 days");
+        assert_eq!(format_age(13 * 86400, &dt), "13 days");
+    }
+
+    #[test]
+    fn test_format_age_two_weeks_and_older_is_date() {
+        let dt = fixed_dt();
+        // From exactly two weeks on, show the commit's own date instead.
+        assert_eq!(format_age(14 * 86400, &dt), "2001-02-03");
+        assert_eq!(format_age(86400 * 400, &dt), "2001-02-03");
+    }
+
+    #[test]
+    fn age_sorts_by_recency_regardless_of_display() {
+        let dt = fixed_dt();
+        // A mix of relative-rendered and date-rendered ages; sorting must order
+        // them by elapsed seconds (most recent first), not by the display text.
+        let mut ages = [
+            Age {
+                secs: 86400 * 400,
+                when: dt,
+            },
+            Age { secs: 60, when: dt },
+            Age {
+                secs: 3600,
+                when: dt,
+            },
+        ];
+        ages.sort_by_key(Age::secs);
+        assert_eq!(
+            ages.map(|a| a.secs()),
+            [60, 3600, 86400 * 400],
+            "expected ascending recency order"
+        );
     }
 
     #[test]
