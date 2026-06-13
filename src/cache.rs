@@ -54,6 +54,11 @@ impl CachingRepo {
         }
     }
 
+    /// Whether IndexedDB-backed caching is active for this session.
+    pub(crate) fn idb_available(&self) -> bool {
+        self.db.is_some()
+    }
+
     // --- Core cached lookup ---------------------------------------------------
 
     pub(crate) async fn lookup_object(&self, id: ObjectId) -> GResult<Object> {

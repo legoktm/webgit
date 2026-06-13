@@ -51,6 +51,14 @@ async fn try_load_repo(url: String, doc: Document) -> anyhow::Result<()> {
         .context("Failed to open repo")?;
     let repo = CachingRepo::open(repo, url.clone()).await;
 
+    // Surface a banner when caching is disabled so the slow performance is
+    // explained rather than mysterious.
+    if !repo.idb_available()
+        && let Some(el) = doc.get_element_by_id("idb-warning")
+    {
+        el.class_list().remove_1("hide").ok();
+    }
+
     let head = repo.head().await.context("Failed to read HEAD")?;
 
     let commit = repo
