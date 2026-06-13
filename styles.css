@@ -65,14 +65,6 @@ a:hover {
     padding: 0.6rem 1rem;
 }
 
-#header-logo {
-    font-size: 1.5rem;
-    font-weight: bold;
-    color: var(--link);
-    letter-spacing: 0.03em;
-    white-space: nowrap;
-}
-
 #header-sub {
     display: flex;
     flex-direction: column;

@@ -20,17 +20,21 @@
     </tbody>
 </table>
 
-<h3 class="summary-heading">webgit</h3>
+<h3 class="summary-heading">viewer</h3>
 <p>
-    webgit allows you to view Git repositories entirely client-side. Objects are
-    fetched as needed and stored in IndexedDB.
+    This viewer allows you to view repositories entirely client-side. Objects
+    are fetched as needed and stored in IndexedDB, similar to how
+    <code>git</code> normally works.
+    <br />
+    The <a href="https://git.legoktm.com/public/webgit.git/">source code</a> is
+    available.
 </p>
 <table class="tag-table">
     <tbody>
-        <tr>
+        <!--<tr>
             <td class="label">version</td>
             <td>{{ version }}</td>
-        </tr>
+            </tr>-->
         {% if idb_available %}
         <tr>
             <td class="label">cached objects (repository)</td>
