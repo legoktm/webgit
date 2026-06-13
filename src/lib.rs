@@ -67,7 +67,7 @@ async fn try_load_repo(url: String, doc: Document) -> anyhow::Result<()> {
         .context("Failed to peel HEAD to commit")?
         .ok_or_else(|| anyhow::anyhow!("HEAD does not point to a commit"))?;
 
-    set_text(&doc, "repo-path-name", &repo_name(&url));
+    set_text(&doc, "repo-path-name", &repo_path(&url));
 
     let root_tree = repo
         .lookup_object(commit.tree())
@@ -147,13 +147,17 @@ async fn try_load_repo(url: String, doc: Document) -> anyhow::Result<()> {
 // URL resolution
 // ---------------------------------------------------------------------------
 
-fn repo_name(url: &str) -> String {
-    url.trim_end_matches('/')
-        .rsplit('/')
-        .next()
-        .unwrap_or(url)
-        .trim_end_matches(".git")
-        .to_string()
+/// The path portion of the repository URL, used as its display name —
+/// e.g. `https://git.example.com/public/webgit.git/` becomes
+/// `public/webgit.git`.
+fn repo_path(url: &str) -> String {
+    let without_scheme = url.split_once("://").map_or(url, |(_, rest)| rest);
+    // Drop the host (everything up to the first '/'); if there is no '/', there
+    // is no host component, so treat the whole string as the path.
+    let path = without_scheme
+        .split_once('/')
+        .map_or(without_scheme, |(_host, path)| path);
+    path.trim_matches('/').to_string()
 }
 
 fn resolve_repo_url(window: &web_sys::Window) -> Option<String> {
@@ -214,11 +218,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_repo_name() {
-        assert_eq!(repo_name("https://example.org/foo/bar.git"), "bar");
-        assert_eq!(repo_name("https://example.org/foo/bar.git/"), "bar");
-        assert_eq!(repo_name("https://example.org/foo/bar"), "bar");
-        assert_eq!(repo_name("bar.git"), "bar");
-        assert_eq!(repo_name(""), "");
+    fn test_repo_path() {
+        assert_eq!(repo_path("https://example.org/foo/bar.git"), "foo/bar.git");
+        assert_eq!(repo_path("https://example.org/foo/bar.git/"), "foo/bar.git");
+        assert_eq!(repo_path("https://example.org/foo/bar"), "foo/bar");
+        assert_eq!(repo_path("https://git.example.com/public/webgit.git/"), "public/webgit.git");
+        // No host component: the whole string is the path.
+        assert_eq!(repo_path("bar.git"), "bar.git");
+        assert_eq!(repo_path(""), "");
     }
 }
