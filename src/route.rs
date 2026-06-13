@@ -9,7 +9,8 @@ use crate::render::refs_heads::render_refs_heads;
 use crate::render::refs_tags::render_refs_tags;
 use crate::render::tag::render_tag;
 use crate::render::{
-    blob::render_blob, head_branch_name, summary::render_summary, tree::render_tree,
+    blob::render_blob, commit_for_entry, head_branch_name, summary::render_summary,
+    tree::render_tree,
 };
 use git_async::object::{ObjectId, Tree, TreeEntryType};
 use git_async::reference::RefName;
@@ -259,21 +260,19 @@ async fn resolve_ref_to_commit(
     repo: &CachingRepo,
     name: &str,
 ) -> anyhow::Result<(git_async::object::Commit, RefKind)> {
+    let refs = repo.all_refs().await.context("list refs")?;
     let tags_ref = RefName::Ref(format!("tags/{name}").into_bytes());
-    if let Ok(r) = repo.lookup_ref(&tags_ref).await
-        && let Ok(Some(commit)) = repo.peel_ref_to_commit(&r).await
+    if let Some(entry) = refs.get(&tags_ref)
+        && let Some(commit) = commit_for_entry(entry, repo).await
     {
         return Ok((commit, RefKind::Tag));
     }
     let heads_ref = RefName::Ref(format!("heads/{name}").into_bytes());
-    let r = repo
-        .lookup_ref(&heads_ref)
+    let entry = refs
+        .get(&heads_ref)
+        .ok_or_else(|| anyhow::anyhow!("ref not found: {name}"))?;
+    let commit = commit_for_entry(entry, repo)
         .await
-        .context(format!("ref not found: {name}"))?;
-    let commit = repo
-        .peel_ref_to_commit(&r)
-        .await
-        .context(format!("peel ref {name}"))?
         .ok_or_else(|| anyhow::anyhow!("ref {name} does not point to a commit"))?;
     Ok((commit, RefKind::Branch))
 }
@@ -442,8 +441,6 @@ fn attach_about_handlers(
         let target = match target_str.as_str() {
             "repo-objects" => ClearTarget::RepoObjects,
             "all-objects" => ClearTarget::AllObjects,
-            "repo-tags" => ClearTarget::RepoTags,
-            "all-tags" => ClearTarget::AllTags,
             _ => continue,
         };
         let repo = Rc::clone(repo);

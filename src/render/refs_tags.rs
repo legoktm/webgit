@@ -1,13 +1,13 @@
 use crate::{
     cache::CachingRepo,
-    render::{RefRow, collect_ref_names, fetch_tag_rows, render_template},
+    render::{RefRow, collect_refs, fetch_ref_rows, render_template},
 };
 use serde::Serialize;
 use tera::Tera;
 
 async fn build_refs_tags(repo: &CachingRepo) -> RefsTagsTemplate {
-    let (_, tag_names) = collect_ref_names(repo).await;
-    let mut tags = fetch_tag_rows(&tag_names, repo).await;
+    let (_, tags) = collect_refs(repo).await;
+    let mut tags = fetch_ref_rows(&tags, repo).await;
     tags.sort_by_key(|t| t.age);
     RefsTagsTemplate {
         tags,

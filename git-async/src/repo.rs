@@ -1,11 +1,13 @@
 use crate::{
     error::{Error, GResult},
-    file_system::{Directory, FileSystem, FileSystemError, search_for_files},
+    file_system::{DirEntry, Directory, File, FileSystem, FileSystemError, search_for_files},
     object::{Object, ObjectId},
-    object_store::{ObjectSize, ObjectType, RawObject, cache::IndexCache},
-    reference::{Ref, RefName, read_packed_refs},
+    object_store::{ObjectSize, ObjectType, RawObject, cache::IndexCache, lookup::PackName},
+    reference::{
+        Ref, RefEntry, RefName, RefTarget, lookup_loose_ref, parse_info_refs, read_packed_refs,
+    },
 };
-use alloc::collections::BTreeSet;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 
 /// Configuration for opening a repository
@@ -58,17 +60,56 @@ impl<F: FileSystem> Repo<F> {
         config: &RepoConfig,
     ) -> GResult<Self> {
         let git_dir = Self::resolve_git_dir(open_dir).await?;
-        let pack_dir = git_dir
-            .open_subdir(b"objects")
-            .await?
-            .open_subdir(b"pack")
-            .await?;
-        let index_cache = IndexCache::new(&pack_dir, config).await?;
+        let objects_dir = git_dir.open_subdir(b"objects").await?;
+        let pack_dir = objects_dir.open_subdir(b"pack").await?;
+        let pack_ids = Self::discover_packs(&objects_dir, &pack_dir).await?;
+        let index_cache = IndexCache::new(&pack_dir, pack_ids, config).await?;
         Ok(Repo {
             git_dir,
             pack_dir,
             index_cache,
         })
+    }
+
+    /// Find the repository's packfiles.
+    ///
+    /// Listing the pack directory is authoritative when it works. When it
+    /// fails or comes back empty (e.g. an HTTP server without directory
+    /// indexes), fall back to `objects/info/packs`, which is written by
+    /// `git update-server-info` for fetching over dumb HTTP.
+    async fn discover_packs(
+        objects_dir: &F::Directory,
+        pack_dir: &F::Directory,
+    ) -> GResult<Vec<PackName>> {
+        let listed = pack_dir
+            .list_dir()
+            .await
+            .map(|entries| {
+                entries
+                    .into_iter()
+                    .filter_map(|dirent| {
+                        let DirEntry::File(name) = dirent else {
+                            return None;
+                        };
+                        PackName::new(name)
+                    })
+                    .collect::<Vec<PackName>>()
+            })
+            .map_err(Error::from);
+        if matches!(&listed, Ok(packs) if !packs.is_empty()) {
+            return listed;
+        }
+        let mut file = match objects_dir.open_subdir(b"info").await {
+            Ok(info_dir) => match info_dir.open_file(b"packs").await {
+                Ok(file) => file,
+                Err(FileSystemError::NotFound(_)) => return listed,
+                Err(e) => return Err(e.into()),
+            },
+            Err(FileSystemError::NotFound(_)) => return listed,
+            Err(e) => return Err(e.into()),
+        };
+        let data = file.read_all().await?;
+        parse_info_packs(&data)
     }
 
     pub(crate) async fn resolve_git_dir(open_dir: F::Directory) -> GResult<F::Directory> {
@@ -104,24 +145,101 @@ impl<F: FileSystem> Repo<F> {
             Err(e) => return Err(e.into()),
             Ok(mut packed_refs_file) => {
                 let packed_refs = read_packed_refs(&mut packed_refs_file).await?;
-                for (_, ref_name) in packed_refs {
+                for (ref_name, _) in packed_refs {
                     out.insert(ref_name);
                 }
             }
         }
-        let refs_dir = self.git_dir.open_subdir(b"refs").await?;
-        let refs_paths = search_for_files(&refs_dir).await?;
-        for path in refs_paths {
-            let mut name: Vec<u8> = Vec::new();
-            for component in path {
-                if !name.is_empty() {
-                    name.push(b'/');
-                }
-                name.extend_from_slice(&component);
+        out.extend(self.loose_ref_names().await?);
+        Ok(out)
+    }
+
+    /// Resolve every ref under `refs/` to its object ID in as few reads as
+    /// possible.
+    ///
+    /// If the repository has an `info/refs` file (written by
+    /// `git update-server-info`; present on servers prepared for fetching over
+    /// dumb HTTP), it is used as the single source — note it is only as fresh
+    /// as the last `update-server-info` run. Otherwise refs are assembled from
+    /// `packed-refs` plus a walk of the `refs/` directory, with loose refs
+    /// shadowing stale packed entries.
+    ///
+    /// `HEAD` is not included; use [`Repo::head`] for it.
+    ///
+    /// For annotated tags, [`RefEntry::peeled`] carries the peeled commit ID
+    /// when the source recorded one; otherwise callers must peel the tag
+    /// object themselves.
+    pub async fn all_refs(&self) -> GResult<BTreeMap<RefName, RefEntry>> {
+        if let Some(refs) = self.info_refs().await? {
+            return Ok(refs);
+        }
+        self.packed_and_loose_refs().await
+    }
+
+    async fn info_refs(&self) -> GResult<Option<BTreeMap<RefName, RefEntry>>> {
+        let info_dir = match self.git_dir.open_subdir(b"info").await {
+            Err(FileSystemError::NotFound(_)) => return Ok(None),
+            Err(e) => return Err(e.into()),
+            Ok(dir) => dir,
+        };
+        let mut file = match info_dir.open_file(b"refs").await {
+            Err(FileSystemError::NotFound(_)) => return Ok(None),
+            Err(e) => return Err(e.into()),
+            Ok(f) => f,
+        };
+        let data = file.read_all().await?;
+        Ok(Some(parse_info_refs(&data)?.into_iter().collect()))
+    }
+
+    async fn packed_and_loose_refs(&self) -> GResult<BTreeMap<RefName, RefEntry>> {
+        let mut out: BTreeMap<RefName, RefEntry> = BTreeMap::new();
+        match self.git_dir.open_file(b"packed-refs").await {
+            Err(FileSystemError::NotFound(_)) => {}
+            Err(e) => return Err(e.into()),
+            Ok(mut packed_refs_file) => {
+                out.extend(read_packed_refs(&mut packed_refs_file).await?);
             }
-            out.insert(RefName::Ref(name));
+        }
+        for name in self.loose_ref_names().await? {
+            let Some(target) = lookup_loose_ref(self, &name).await? else {
+                continue;
+            };
+            let target = match target {
+                RefTarget::Direct(oid) => oid,
+                RefTarget::Symbolic(next) => {
+                    self.lookup_ref(&next)
+                        .await?
+                        .resolve_object_id(self)
+                        .await?
+                }
+            };
+            out.insert(
+                name,
+                RefEntry {
+                    target,
+                    peeled: None,
+                },
+            );
         }
         Ok(out)
+    }
+
+    async fn loose_ref_names(&self) -> GResult<Vec<RefName>> {
+        let refs_dir = self.git_dir.open_subdir(b"refs").await?;
+        let refs_paths = search_for_files(&refs_dir).await?;
+        Ok(refs_paths
+            .into_iter()
+            .map(|path| {
+                let mut name: Vec<u8> = Vec::new();
+                for component in path {
+                    if !name.is_empty() {
+                        name.push(b'/');
+                    }
+                    name.extend_from_slice(&component);
+                }
+                RefName::Ref(name)
+            })
+            .collect())
     }
 
     /// Get the repository's HEAD ref.
@@ -153,6 +271,21 @@ impl<F: FileSystem> Repo<F> {
     pub async fn lookup_object_size_type(&self, id: ObjectId) -> GResult<(ObjectSize, ObjectType)> {
         Object::lookup_size_type(self, id).await
     }
+}
+
+/// Parse the `objects/info/packs` file written by `git update-server-info`.
+///
+/// Each line is `P <packfile-name>`.
+fn parse_info_packs(data: &[u8]) -> GResult<Vec<PackName>> {
+    let mut packs = Vec::new();
+    for line in data.split(|&b| b == b'\n') {
+        if line.is_empty() {
+            continue;
+        }
+        let name = line.strip_prefix(b"P ").ok_or(Error::MalformedInfoPacks)?;
+        packs.push(PackName::from_pack_filename(name.to_vec()).ok_or(Error::MalformedInfoPacks)?);
+    }
+    Ok(packs)
 }
 
 #[cfg(test)]
@@ -213,5 +346,151 @@ mod tests {
         let test_repo = make_basic_repo().unwrap();
         let root_dir = test_repo.root_dir();
         block_on(Repo::<TestFileSystem>::open(root_dir)).unwrap();
+    }
+
+    fn head_oid(test_repo: &TestRepo) -> ObjectId {
+        let hex = test_repo.run_git(["rev-parse", "HEAD"]).unwrap();
+        ObjectId::from_hex(hex.trim_ascii_end()).unwrap()
+    }
+
+    #[test]
+    fn all_refs_loose() {
+        let test_repo = make_basic_repo().unwrap();
+        test_repo.run_git(["branch", "a-branch"]).unwrap();
+        let repo = test_repo.repo();
+        let refs = block_on(repo.all_refs()).unwrap();
+
+        let head = head_oid(&test_repo);
+        let main = refs.get(&RefName::Ref(b"heads/main".to_vec())).unwrap();
+        let branch = refs.get(&RefName::Ref(b"heads/a-branch".to_vec())).unwrap();
+        assert_eq!(main.target(), head);
+        assert_eq!(branch.target(), head);
+        // Loose refs carry no peeled info; the annotated tag's target is the
+        // tag object, not the commit.
+        let fat_tag = refs.get(&RefName::Ref(b"tags/a-fat-tag".to_vec())).unwrap();
+        assert_eq!(fat_tag.peeled(), None);
+        assert_ne!(fat_tag.target(), head);
+        assert!(!refs.contains_key(&RefName::Head));
+    }
+
+    /// `git gc` (via repack) runs `update-server-info`, so repos that have
+    /// been packed also carry an `info/refs`. Remove it so a test exercises
+    /// the packed-refs + loose-refs fallback rather than the info/refs path.
+    fn remove_info_refs(test_repo: &TestRepo) {
+        std::fs::remove_file(
+            test_repo
+                .location
+                .path()
+                .join(".git")
+                .join("info")
+                .join("refs"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn all_refs_packed_with_peeled() {
+        let test_repo = crate::test::helpers::make_packfile_repo().unwrap();
+        remove_info_refs(&test_repo);
+        let repo = test_repo.repo();
+        let refs = block_on(repo.all_refs()).unwrap();
+
+        let head = head_oid(&test_repo);
+        let main = refs.get(&RefName::Ref(b"heads/main".to_vec())).unwrap();
+        assert_eq!(main.target(), head);
+        assert_eq!(main.peeled(), None);
+        let fat_tag = refs.get(&RefName::Ref(b"tags/a-fat-tag".to_vec())).unwrap();
+        assert_ne!(fat_tag.target(), head);
+        assert_eq!(fat_tag.peeled(), Some(head));
+        assert_eq!(fat_tag.commit_target(), head);
+    }
+
+    #[test]
+    fn all_refs_loose_shadows_packed() {
+        let test_repo = crate::test::helpers::make_packfile_repo().unwrap();
+        remove_info_refs(&test_repo);
+        crate::test::helpers::make_file(&test_repo, "shadow-file").unwrap();
+        test_repo.run_git(["add", "--all"]).unwrap();
+        test_repo
+            .commit(
+                "another commit",
+                "a user",
+                "an-email-address",
+                "2000-01-02T00:00:00Z",
+            )
+            .unwrap();
+
+        let repo = test_repo.repo();
+        let refs = block_on(repo.all_refs()).unwrap();
+        // The new commit wrote a loose refs/heads/main which must win over
+        // the stale entry still present in packed-refs.
+        let main = refs.get(&RefName::Ref(b"heads/main".to_vec())).unwrap();
+        assert_eq!(main.target(), head_oid(&test_repo));
+    }
+
+    #[test]
+    fn all_refs_from_info_refs() {
+        let test_repo = crate::test::helpers::make_packfile_repo().unwrap();
+        test_repo.run_git(["update-server-info"]).unwrap();
+        let head = head_oid(&test_repo);
+        // Remove packed-refs to prove info/refs alone is consulted.
+        std::fs::remove_file(test_repo.location.path().join(".git").join("packed-refs")).unwrap();
+
+        let repo = test_repo.repo();
+        let refs = block_on(repo.all_refs()).unwrap();
+        let main = refs.get(&RefName::Ref(b"heads/main".to_vec())).unwrap();
+        assert_eq!(main.target(), head);
+        let fat_tag = refs.get(&RefName::Ref(b"tags/a-fat-tag".to_vec())).unwrap();
+        assert_ne!(fat_tag.target(), head);
+        assert_eq!(fat_tag.peeled(), Some(head));
+    }
+
+    #[test]
+    fn parse_info_packs_lines() {
+        let packs = parse_info_packs(b"P pack-0123abcd.pack\nP pack-fedcba98.pack\n\n").unwrap();
+        assert_eq!(packs.len(), 2);
+        assert_eq!(packs[0].pack_filename, b"pack-0123abcd.pack");
+        assert_eq!(packs[0].index_filename, b"pack-0123abcd.idx");
+        assert!(matches!(
+            parse_info_packs(b"garbage\n"),
+            Err(Error::MalformedInfoPacks)
+        ));
+    }
+
+    #[test]
+    fn discover_packs_falls_back_to_info_packs() {
+        let test_repo = crate::test::helpers::make_packfile_repo().unwrap();
+        test_repo.run_git(["update-server-info"]).unwrap();
+        let git_dir = test_repo.git_dir();
+        let objects_dir = block_on(git_dir.open_subdir(b"objects")).unwrap();
+        let pack_dir = block_on(objects_dir.open_subdir(b"pack")).unwrap();
+        let listed = block_on(Repo::<TestFileSystem>::discover_packs(
+            &objects_dir,
+            &pack_dir,
+        ))
+        .unwrap();
+        assert_eq!(listed.len(), 1);
+
+        // An empty directory stands in for a server whose pack listing is
+        // unavailable; discovery must come up with the same pack via
+        // objects/info/packs.
+        std::fs::create_dir(
+            test_repo
+                .location
+                .path()
+                .join(".git")
+                .join("objects")
+                .join("empty"),
+        )
+        .unwrap();
+        let empty_dir = block_on(objects_dir.open_subdir(b"empty")).unwrap();
+        let from_info = block_on(Repo::<TestFileSystem>::discover_packs(
+            &objects_dir,
+            &empty_dir,
+        ))
+        .unwrap();
+        assert_eq!(from_info.len(), 1);
+        assert_eq!(from_info[0].index_filename, listed[0].index_filename);
+        assert_eq!(from_info[0].pack_filename, listed[0].pack_filename);
     }
 }

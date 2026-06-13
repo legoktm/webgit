@@ -45,6 +45,8 @@ pub enum Error {
     UnsupportedPackVersion,
     CorruptPackFile,
     MalformedPackedRefs,
+    MalformedInfoRefs,
+    MalformedInfoPacks,
     MalformedRef(RefName),
     RefNotFound(RefName),
     MalformedPackObject(ObjectId),

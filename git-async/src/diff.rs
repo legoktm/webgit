@@ -217,8 +217,7 @@ async fn tree_diff_impl(
         let mut left_entries: Option<TreeEntryIter> = left.as_ref().map(Tree::entries);
         let mut right_entries: Option<TreeEntryIter> = right.as_ref().map(Tree::entries);
         let mut left_entry: Option<TreeEntry> = left_entries.as_mut().and_then(Iterator::next);
-        let mut right_entry: Option<TreeEntry> =
-            right_entries.as_mut().and_then(Iterator::next);
+        let mut right_entry: Option<TreeEntry> = right_entries.as_mut().and_then(Iterator::next);
         while left_entry.is_some() || right_entry.is_some() {
             let name_ordering: Ordering = match (&left_entry, &right_entry) {
                 (None, None) => Ordering::Equal,
@@ -227,8 +226,7 @@ async fn tree_diff_impl(
                 (Some(l), Some(r)) => l.name().cmp(r.name()),
             };
             if name_ordering == Ordering::Equal
-                && left_entry.as_ref().map(TreeEntry::id)
-                    == right_entry.as_ref().map(TreeEntry::id)
+                && left_entry.as_ref().map(TreeEntry::id) == right_entry.as_ref().map(TreeEntry::id)
             {
                 left_entry = left_entries.as_mut().and_then(Iterator::next);
                 right_entry = right_entries.as_mut().and_then(Iterator::next);

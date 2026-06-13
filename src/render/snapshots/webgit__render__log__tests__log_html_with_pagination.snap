@@ -16,7 +16,7 @@ expression: "render_to_string(&init_tera(), \"log.html\", &template).unwrap()"
         <tr>
             <td class="age">60 minutes</td>
             <td class="name"><a href="#!/commit/0123abcd00000000000000000000000000000000">0123abcd</a></td>
-            <td class="msg">Fix non-annotated tags</td>
+            <td class="msg">Fix non-annotated tags <a class="ref-label branch" href="#!/log?h=main">main</a> <a class="ref-label tag" href="#!/refs/tags/v1.0.0">v1.0.0</a></td>
             <td class="author">Kunal Mehta</td>
         </tr>
         

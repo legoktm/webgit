@@ -31,6 +31,17 @@ impl PackName {
             pack_filename,
         })
     }
+
+    pub(crate) fn from_pack_filename(filename: Vec<u8>) -> Option<Self> {
+        let stripped = filename.strip_suffix(b".pack")?;
+        let mut index_filename = Vec::with_capacity(filename.len());
+        index_filename.extend_from_slice(stripped);
+        index_filename.extend_from_slice(b".idx");
+        Some(Self {
+            index_filename,
+            pack_filename: filename,
+        })
+    }
 }
 
 pub(crate) struct IndexedPackFile<'f, F> {

@@ -1,8 +1,8 @@
 use crate::cache::CachingRepo;
 use git_async::object::{Commit, ObjectId};
-use git_async::reference::{RefName, RefTarget};
+use git_async::reference::{RefEntry, RefName, RefTarget};
 use serde::Serialize;
-use std::collections::{BTreeSet, BinaryHeap};
+use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
 use tera::{Context, Kwargs, State, Tera, TeraResult, Value};
 
 pub(crate) mod about;
@@ -77,6 +77,21 @@ pub(crate) struct CommitRow {
     message: String,
     author: String,
     age: u64,
+    refs: Vec<RefLabel>,
+}
+
+/// A branch or tag decoration shown next to a commit, cgit-style.
+#[derive(Serialize, Clone)]
+pub(crate) struct RefLabel {
+    name: String,
+    kind: RefLabelKind,
+}
+
+#[derive(Serialize, Clone, Copy)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum RefLabelKind {
+    Branch,
+    Tag,
 }
 
 fn age(dt: &chrono::DateTime<chrono::FixedOffset>) -> u64 {
@@ -118,35 +133,41 @@ pub(crate) async fn head_branch_name(repo: &CachingRepo) -> Option<String> {
     }
 }
 
-pub(crate) async fn collect_ref_names(repo: &CachingRepo) -> (Vec<String>, Vec<String>) {
-    let ref_names = repo.ref_names().await.unwrap_or_default();
-    let mut branch_names = Vec::new();
-    let mut tag_names = Vec::new();
-    for ref_name in &ref_names {
+/// Split the session's ref snapshot into short-named branches and tags.
+pub(crate) async fn collect_refs(
+    repo: &CachingRepo,
+) -> (Vec<(String, RefEntry)>, Vec<(String, RefEntry)>) {
+    let Ok(all_refs) = repo.all_refs().await else {
+        return (Vec::new(), Vec::new());
+    };
+    let mut branches = Vec::new();
+    let mut tags = Vec::new();
+    for (ref_name, entry) in all_refs.iter() {
         let label = match ref_name {
             RefName::Head => continue,
             RefName::Ref(b) => String::from_utf8_lossy(b),
         };
         if let Some(short) = label.strip_prefix("heads/") {
-            branch_names.push(short.to_string());
+            branches.push((short.to_string(), *entry));
         } else if let Some(short) = label.strip_prefix("tags/") {
-            tag_names.push(short.to_string());
+            tags.push((short.to_string(), *entry));
         }
     }
-    (branch_names, tag_names)
+    (branches, tags)
 }
 
-async fn fetch_ref_rows(prefix: &'static str, names: &[String], repo: &CachingRepo) -> Vec<RefRow> {
-    futures::future::join_all(names.iter().map(|short| {
+/// Resolve a ref entry to the commit it points at, fetching the tag object
+/// only when no peeled OID was recorded.
+pub(crate) async fn commit_for_entry(entry: &RefEntry, repo: &CachingRepo) -> Option<Commit> {
+    let obj = repo.lookup_object(entry.commit_target()).await.ok()?;
+    repo.peel_to_commit(&obj).await.ok().flatten()
+}
+
+pub(crate) async fn fetch_ref_rows(refs: &[(String, RefEntry)], repo: &CachingRepo) -> Vec<RefRow> {
+    futures::future::join_all(refs.iter().map(|(short, entry)| {
         let short = short.clone();
         async move {
-            let rn = RefName::Ref(format!("{prefix}/{short}").into_bytes());
-            let Ok(r) = repo.lookup_ref(&rn).await else {
-                return None;
-            };
-            let Ok(Some(commit)) = repo.peel_ref_to_commit(&r).await else {
-                return None;
-            };
+            let commit = commit_for_entry(entry, repo).await?;
             Some(ref_row(short, &commit))
         }
     }))
@@ -156,12 +177,36 @@ async fn fetch_ref_rows(prefix: &'static str, names: &[String], repo: &CachingRe
     .collect()
 }
 
-pub(crate) async fn fetch_branch_rows(branch_names: &[String], repo: &CachingRepo) -> Vec<RefRow> {
-    fetch_ref_rows("heads", branch_names, repo).await
-}
-
-pub(crate) async fn fetch_tag_rows(tag_names: &[String], repo: &CachingRepo) -> Vec<RefRow> {
-    fetch_ref_rows("tags", tag_names, repo).await
+/// Map each decorated commit to its branch/tag labels, for cgit-style
+/// decorations in commit lists.
+pub(crate) async fn decoration_map(repo: &CachingRepo) -> BTreeMap<ObjectId, Vec<RefLabel>> {
+    let (branches, tags) = collect_refs(repo).await;
+    let mut map: BTreeMap<ObjectId, Vec<RefLabel>> = BTreeMap::new();
+    for (name, entry) in branches {
+        map.entry(entry.commit_target())
+            .or_default()
+            .push(RefLabel {
+                name,
+                kind: RefLabelKind::Branch,
+            });
+    }
+    let tag_oids = futures::future::join_all(tags.into_iter().map(|(name, entry)| async move {
+        // Without a recorded peeled OID this costs one (cached) object
+        // lookup per tag.
+        let oid = match entry.peeled() {
+            Some(oid) => oid,
+            None => commit_for_entry(&entry, repo).await?.id(),
+        };
+        Some((name, oid))
+    }))
+    .await;
+    for (name, oid) in tag_oids.into_iter().flatten() {
+        map.entry(oid).or_default().push(RefLabel {
+            name,
+            kind: RefLabelKind::Tag,
+        });
+    }
+    map
 }
 
 pub(crate) async fn walk_commits(
@@ -169,6 +214,7 @@ pub(crate) async fn walk_commits(
     repo: &CachingRepo,
     skip: usize,
     limit: usize,
+    decorations: &BTreeMap<ObjectId, Vec<RefLabel>>,
 ) -> (Vec<CommitRow>, bool) {
     let mut heap: BinaryHeap<(chrono::DateTime<chrono::FixedOffset>, Commit)> = BinaryHeap::new();
     let mut visited: BTreeSet<ObjectId> = BTreeSet::new();
@@ -188,6 +234,7 @@ pub(crate) async fn walk_commits(
                 message: commit_first_line(current.message()),
                 author: String::from_utf8_lossy(current.author_name()).into_owned(),
                 age: age(&current.author_date()),
+                refs: decorations.get(&current.id()).cloned().unwrap_or_default(),
             });
         } else if commits.len() == limit {
             has_more = true;
@@ -222,7 +269,7 @@ fn ref_row(name: String, c: &Commit) -> RefRow {
 
 #[cfg(test)]
 pub(crate) mod fixtures {
-    use super::{CommitRow, RefRow};
+    use super::{CommitRow, RefLabel, RefLabelKind, RefRow};
 
     pub(crate) fn ref_row(name: &str, message: &str, author: &str, age: u64) -> RefRow {
         RefRow {
@@ -241,7 +288,32 @@ pub(crate) mod fixtures {
             message: message.to_string(),
             author: author.to_string(),
             age,
+            refs: Vec::new(),
         }
+    }
+
+    pub(crate) fn decorated_commit_row(
+        short_hash: &str,
+        message: &str,
+        author: &str,
+        age: u64,
+        branches: &[&str],
+        tags: &[&str],
+    ) -> CommitRow {
+        let mut row = commit_row(short_hash, message, author, age);
+        for name in branches {
+            row.refs.push(RefLabel {
+                name: name.to_string(),
+                kind: RefLabelKind::Branch,
+            });
+        }
+        for name in tags {
+            row.refs.push(RefLabel {
+                name: name.to_string(),
+                kind: RefLabelKind::Tag,
+            });
+        }
+        row
     }
 }
 

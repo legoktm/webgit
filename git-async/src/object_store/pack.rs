@@ -335,10 +335,7 @@ mod tests {
 
     use crate::{
         object::ObjectId,
-        object_store::{
-            cache::IndexCache,
-            lookup::{find_packed_object, lookup},
-        },
+        object_store::lookup::{find_packed_object, lookup},
         repo::RepoConfig,
         test::{
             helpers::{make_basic_repo, make_packfile_repo, make_similar_commits},
@@ -426,7 +423,7 @@ a tag
         make_similar_commits(&test_repo).unwrap();
         test_repo.run_git(["gc"]).unwrap();
         let repo = test_repo.repo();
-        let cache = block_on(IndexCache::new(&repo.pack_dir, &RepoConfig::default())).unwrap();
+        let cache = repo.index_cache.clone();
         let (mut pack, offset) = block_on(find_packed_object(
             &repo,
             &cache,
@@ -452,7 +449,7 @@ a tag
         make_similar_commits(&test_repo).unwrap();
         test_repo.run_git(["gc"]).unwrap();
         let repo = test_repo.repo();
-        let cache = block_on(IndexCache::new(&repo.pack_dir, &RepoConfig::default())).unwrap();
+        let cache = repo.index_cache.clone();
         let (mut pack, offset) = block_on(find_packed_object(
             &repo,
             &cache,

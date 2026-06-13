@@ -242,7 +242,7 @@ mod tests {
                 b"a-commit".as_slice(),
             ),
         ];
-        for (received, (entry_type, id, name)) in entries.zip(expected.into_iter()) {
+        for (received, (entry_type, id, name)) in entries.zip(expected) {
             assert_eq!(received.entry_type(), entry_type);
             assert_eq!(received.id(), id);
             assert_eq!(received.name(), name);

@@ -1,16 +1,16 @@
 use crate::{
     cache::CachingRepo,
-    render::{RefRow, collect_ref_names, fetch_branch_rows, fetch_tag_rows, render_template},
+    render::{RefRow, collect_refs, fetch_ref_rows, render_template},
 };
 use serde::Serialize;
 use tera::Tera;
 
 async fn build_refs_all(repo: &CachingRepo) -> RefsAllTemplate {
-    let (branch_names, tag_names) = collect_ref_names(repo).await;
+    let (branch_refs, tag_refs) = collect_refs(repo).await;
 
     let (mut branches, mut tags) = futures::join!(
-        fetch_branch_rows(&branch_names, repo),
-        fetch_tag_rows(&tag_names, repo),
+        fetch_ref_rows(&branch_refs, repo),
+        fetch_ref_rows(&tag_refs, repo),
     );
     branches.sort_by_key(|b| b.age);
     tags.sort_by_key(|t| t.age);

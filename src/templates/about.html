@@ -13,8 +13,6 @@
     {% if idb_available %}
     <tr><td class="label">cached objects (repository)</td><td>{{ repo_objects }} ({{ repo_size_mb }} MB) <button class="clear-btn" data-target="repo-objects">(clear)</button></td></tr>
     <tr><td class="label">cached objects (host)</td><td>{{ global_objects }} ({{ global_size_mb }} MB) <button class="clear-btn" data-target="all-objects">(clear)</button></td></tr>
-    <tr><td class="label">cached tags (repository)</td><td>{{ repo_tag_refs }} <button class="clear-btn" data-target="repo-tags">(clear)</button></td></tr>
-    <tr><td class="label">cached tags (host)</td><td>{{ global_tag_refs }} <button class="clear-btn" data-target="all-tags">(clear)</button></td></tr>
     {% else %}
     <tr><td class="label">cache</td><td>IndexedDB unavailable</td></tr>
     {% endif %}

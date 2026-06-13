@@ -1,6 +1,6 @@
 use crate::{
     error::GResult,
-    file_system::{DirEntry, Directory, File},
+    file_system::{Directory, File},
     object_store::{
         index::{FanoutTable, ShortOffsetTable},
         lookup::PackName,
@@ -16,17 +16,11 @@ pub(crate) struct IndexCache {
 }
 
 impl IndexCache {
-    pub async fn new<F: File, D: Directory<F>>(pack_dir: &D, config: &RepoConfig) -> GResult<Self> {
-        let pack_ids: Vec<PackName> = pack_dir
-            .list_dir()
-            .await?
-            .into_iter()
-            .filter_map(|dirent| -> Option<PackName> {
-                use DirEntry::*;
-                let File(name) = dirent else { None? };
-                PackName::new(name)
-            })
-            .collect();
+    pub async fn new<F: File, D: Directory<F>>(
+        pack_dir: &D,
+        pack_ids: Vec<PackName>,
+        config: &RepoConfig,
+    ) -> GResult<Self> {
         let mut indexes = Vec::with_capacity(pack_ids.len());
         let mut objects_in_offset_cache: usize = 0;
         let max_objects_in_offset_cache = config.index_offset_cache_max / size_of::<u32>();

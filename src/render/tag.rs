@@ -1,29 +1,25 @@
 use crate::cache::CachingRepo;
 use crate::error::GitContext;
 use crate::render::render_template;
-use git_async::reference::{RefName, RefTarget};
+use git_async::reference::RefName;
 use serde::Serialize;
 use tera::Tera;
 
 async fn build_tag(repo: &CachingRepo, tag: String) -> anyhow::Result<TagTemplate> {
     let ref_name = RefName::Ref(format!("tags/{tag}").into_bytes());
-    let ref_ = repo
-        .lookup_ref(&ref_name)
+    let refs = repo.all_refs().await.context("list refs")?;
+    let entry = refs
+        .get(&ref_name)
+        .ok_or_else(|| anyhow::anyhow!("tag not found: {tag}"))?;
+    let object = repo
+        .lookup_object(entry.target())
         .await
-        .context(format!("lookup ref for {tag}"))?;
+        .context(format!("lookup tag object {tag}"))?;
     let commit = repo
-        .peel_ref_to_commit(&ref_)
+        .peel_to_commit(&object)
         .await
         .context(format!("peel ref for {tag}"))?
         .ok_or_else(|| anyhow::anyhow!("no commit for {tag}"))?;
-    let tag_object_id = match ref_.target() {
-        RefTarget::Direct(object_id) => object_id,
-        _ => anyhow::bail!("ref target for {tag} is not direct"),
-    };
-    let object = repo
-        .lookup_object(*tag_object_id)
-        .await
-        .context(format!("lookup tag object {tag}"))?;
 
     // Annotated (and signed) tags point at a tag object that carries its own
     // tagger and message. Lightweight tags point straight at the commit and

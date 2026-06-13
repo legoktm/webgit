@@ -1,6 +1,6 @@
 use crate::{
     cache::CachingRepo,
-    render::{CommitRow, render_template, walk_commits},
+    render::{CommitRow, decoration_map, render_template, walk_commits},
     route::log_url,
 };
 use git_async::object::Commit;
@@ -15,7 +15,9 @@ async fn build_log(
     offset: usize,
     head: Option<&str>,
 ) -> LogTemplate {
-    let (commits, has_next) = walk_commits(head_commit, repo, offset, PAGE_SIZE).await;
+    let decorations = decoration_map(repo).await;
+    let (commits, has_next) =
+        walk_commits(head_commit, repo, offset, PAGE_SIZE, &decorations).await;
     LogTemplate {
         commits,
         prev_url: (offset > 0).then(|| log_url(offset.saturating_sub(PAGE_SIZE), head)),
@@ -51,7 +53,14 @@ mod tests {
     fn test_log_html_with_pagination() {
         let template = LogTemplate {
             commits: vec![
-                fixtures::commit_row("0123abcd", "Fix non-annotated tags", "Kunal Mehta", 3600),
+                fixtures::decorated_commit_row(
+                    "0123abcd",
+                    "Fix non-annotated tags",
+                    "Kunal Mehta",
+                    3600,
+                    &["main"],
+                    &["v1.0.0"],
+                ),
                 fixtures::commit_row("89abcdef", "Add README", "Kunal Mehta", 86400 * 3),
             ],
             prev_url: Some(log_url(0, Some("main"))),

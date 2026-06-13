@@ -66,6 +66,29 @@ impl RefName {
     }
 }
 
+/// A ref resolved during bulk listing, as returned by [`Repo::all_refs`]
+///
+/// [`Repo::all_refs`]: crate::repo::Repo::all_refs
+#[derive(Accessors, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RefEntry {
+    /// The object the ref points to directly
+    #[access(get(cp))]
+    pub(crate) target: ObjectId,
+
+    /// For annotated tags, the commit the tag object points to, when the
+    /// source (`info/refs` or `packed-refs`) recorded a peeled entry
+    #[access(get(cp))]
+    pub(crate) peeled: Option<ObjectId>,
+}
+
+impl RefEntry {
+    /// The object ID to use when treating this ref as a commit: the peeled
+    /// target if one was recorded, otherwise the direct target.
+    pub fn commit_target(&self) -> ObjectId {
+        self.peeled.unwrap_or(self.target)
+    }
+}
+
 /// The contents of a git ref
 #[derive(Accessors, Clone)]
 pub struct Ref {
@@ -109,11 +132,11 @@ impl Ref {
             } else {
                 let mut packed_refs_file = repo.git_dir.open_file(b"packed-refs").await?;
                 let packed_refs = read_packed_refs(&mut packed_refs_file).await?;
-                if let Some((object_id, _)) = packed_refs
+                if let Some((_, entry)) = packed_refs
                     .into_iter()
-                    .find(|(_, ref_name)| ref_name == name)
+                    .find(|(ref_name, _)| ref_name == name)
                 {
-                    RefTarget::Direct(object_id)
+                    RefTarget::Direct(entry.target)
                 } else {
                     return Err(Error::RefNotFound(name.clone()));
                 }
@@ -174,26 +197,57 @@ impl RefTarget {
 
 pub(crate) async fn read_packed_refs<F: File>(
     packed_refs_file: &mut F,
-) -> GResult<Vec<(ObjectId, RefName)>> {
+) -> GResult<Vec<(RefName, RefEntry)>> {
     let packed_refs_data = packed_refs_file.read_all().await?;
-    let parse_one_ref = terminated(
-        (
-            terminated(ObjectId::parse, char(' ')),
-            delimited(
-                tag("refs/"),
-                not_line_ending.map(|name: &[u8]| RefName::Ref(name.to_vec())),
-                newline,
-            ),
+    let parse_one_ref = (
+        terminated(ObjectId::parse, char(' ')),
+        delimited(
+            tag("refs/"),
+            not_line_ending.map(|name: &[u8]| RefName::Ref(name.to_vec())),
+            newline,
         ),
-        opt(delimited(char('^'), not_line_ending, newline)),
+        // A `^<oid>` line records the commit an annotated tag peels to.
+        opt(delimited(char('^'), ObjectId::parse, newline)),
     )
-    .map(Some);
+        .map(|(target, name, peeled)| Some((name, RefEntry { target, peeled })));
     let parse_comment = (space0, char('#'), not_line_ending, opt(newline)).map(|_| None);
     let mut parser = all_consuming(many0(alt((parse_one_ref, parse_comment))));
     let (_, refs) = parser
         .parse(packed_refs_data.as_ref())
         .map_err(|_| Error::MalformedPackedRefs)?;
     Ok(refs.into_iter().flatten().collect())
+}
+
+/// Parse the `info/refs` file written by `git update-server-info`.
+///
+/// Each line is `<oid>\t<refname>`; a `<refname>^{}` line records the commit
+/// the preceding annotated tag peels to.
+pub(crate) fn parse_info_refs(data: &[u8]) -> GResult<Vec<(RefName, RefEntry)>> {
+    let parse_one_line = (
+        terminated(ObjectId::parse, char('\t')),
+        delimited(tag("refs/"), not_line_ending, newline),
+    );
+    let mut parser = all_consuming(many0(parse_one_line));
+    let (_, lines) = parser.parse(data).map_err(|_| Error::MalformedInfoRefs)?;
+    let mut refs: Vec<(RefName, RefEntry)> = Vec::new();
+    for (oid, name) in lines {
+        if let Some(base) = name.strip_suffix(b"^{}") {
+            if let Some((last_name, last_entry)) = refs.last_mut()
+                && *last_name == RefName::Ref(base.to_vec())
+            {
+                last_entry.peeled = Some(oid);
+            }
+            continue;
+        }
+        refs.push((
+            RefName::Ref(name.to_vec()),
+            RefEntry {
+                target: oid,
+                peeled: None,
+            },
+        ));
+    }
+    Ok(refs)
 }
 
 pub(crate) async fn lookup_loose_ref<F: FileSystem>(
@@ -280,4 +334,82 @@ mod test {
 
     #[test]
     fn read_stash_packed_ref() {}
+
+    struct MemFile(Vec<u8>);
+    impl File for MemFile {
+        async fn read_all(&mut self) -> Result<Vec<u8>, FileSystemError> {
+            Ok(self.0.clone())
+        }
+        async fn read_segment(
+            &mut self,
+            _offset: crate::file_system::Offset,
+            _dest: &mut [u8],
+        ) -> Result<usize, FileSystemError> {
+            unimplemented!()
+        }
+    }
+
+    #[test]
+    fn parse_packed_refs_with_peeled() {
+        let data = b"# pack-refs with: peeled fully-peeled sorted \n\
+6121d0b97779278fcc32cc8a02754e7c588d9c18 refs/heads/main\n\
+21810577ec46dcb1623e1a1c1e8fe55ed3151118 refs/tags/fat-tag\n\
+^6121d0b97779278fcc32cc8a02754e7c588d9c18\n";
+        let mut file = MemFile(data.to_vec());
+        let refs = block_on(read_packed_refs(&mut file)).unwrap();
+        assert_eq!(refs.len(), 2);
+        let commit = ObjectId::from_bytes(hex!("6121d0b97779278fcc32cc8a02754e7c588d9c18"));
+        let tag = ObjectId::from_bytes(hex!("21810577ec46dcb1623e1a1c1e8fe55ed3151118"));
+        assert_eq!(refs[0].0, RefName::Ref(b"heads/main".to_vec()));
+        assert_eq!(
+            refs[0].1,
+            RefEntry {
+                target: commit,
+                peeled: None
+            }
+        );
+        assert_eq!(refs[1].0, RefName::Ref(b"tags/fat-tag".to_vec()));
+        assert_eq!(
+            refs[1].1,
+            RefEntry {
+                target: tag,
+                peeled: Some(commit)
+            }
+        );
+    }
+
+    #[test]
+    fn parse_info_refs_with_peeled() {
+        let data = b"6121d0b97779278fcc32cc8a02754e7c588d9c18\trefs/heads/main\n\
+21810577ec46dcb1623e1a1c1e8fe55ed3151118\trefs/tags/fat-tag\n\
+6121d0b97779278fcc32cc8a02754e7c588d9c18\trefs/tags/fat-tag^{}\n";
+        let refs = parse_info_refs(data).unwrap();
+        assert_eq!(refs.len(), 2);
+        let commit = ObjectId::from_bytes(hex!("6121d0b97779278fcc32cc8a02754e7c588d9c18"));
+        let tag = ObjectId::from_bytes(hex!("21810577ec46dcb1623e1a1c1e8fe55ed3151118"));
+        assert_eq!(refs[0].0, RefName::Ref(b"heads/main".to_vec()));
+        assert_eq!(
+            refs[0].1,
+            RefEntry {
+                target: commit,
+                peeled: None
+            }
+        );
+        assert_eq!(refs[1].0, RefName::Ref(b"tags/fat-tag".to_vec()));
+        assert_eq!(
+            refs[1].1,
+            RefEntry {
+                target: tag,
+                peeled: Some(commit)
+            }
+        );
+    }
+
+    #[test]
+    fn parse_info_refs_malformed() {
+        assert!(matches!(
+            parse_info_refs(b"not a refs file\n"),
+            Err(Error::MalformedInfoRefs)
+        ));
+    }
 }

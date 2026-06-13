@@ -284,7 +284,7 @@ the commit message
         ];
         let iter = commit.additional_headers();
         assert_eq!(iter.len(), 2);
-        for (received, (expected_name, expected_value)) in iter.zip(expected.into_iter()) {
+        for (received, (expected_name, expected_value)) in iter.zip(expected) {
             assert_eq!(received.name(), expected_name);
             assert_eq!(received.value(), expected_value);
         }

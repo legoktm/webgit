@@ -1,18 +1,19 @@
-use crate::console_log;
 use crate::fs::HttpFilesystem;
 use git_async::Repo;
 use git_async::diff::TreeDiff;
 use git_async::error::{Error as GitError, GResult};
 use git_async::object::{Commit, Object, ObjectId, ObjectType, RawObject, Tree};
-use git_async::reference::{Ref, RefName, RefTarget};
-use std::collections::BTreeSet;
+use git_async::reference::{Ref, RefEntry, RefName};
+use std::cell::RefCell;
+use std::collections::BTreeMap;
+use std::rc::Rc;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{IdbDatabase, IdbOpenDbRequest, IdbRequest, IdbTransactionMode};
 
 const DB_NAME: &str = "webgit";
-const DB_VERSION: u32 = 3;
+const DB_VERSION: u32 = 4;
 const STORE_OBJECTS: &str = "objects";
 const STORE_TAG_REFS: &str = "tag_refs";
 
@@ -24,14 +25,14 @@ const STORE_TAG_REFS: &str = "tag_refs";
 pub(crate) enum ClearTarget {
     RepoObjects,
     AllObjects,
-    RepoTags,
-    AllTags,
 }
 
 pub(crate) struct CachingRepo {
     inner: Repo<HttpFilesystem>,
     db: Option<IdbDatabase>,
     repo_url: String,
+    /// Refs resolved once per session; navigation reuses the same snapshot.
+    all_refs: RefCell<Option<Rc<BTreeMap<RefName, RefEntry>>>>,
 }
 
 impl CachingRepo {
@@ -49,6 +50,7 @@ impl CachingRepo {
             inner,
             db,
             repo_url,
+            all_refs: RefCell::new(None),
         }
     }
 
@@ -108,28 +110,15 @@ impl CachingRepo {
         self.inner.head().await
     }
 
-    pub(crate) async fn ref_names(&self) -> GResult<BTreeSet<RefName>> {
-        self.inner.ref_names().await
-    }
-
-    pub(crate) async fn lookup_ref(&self, name: &RefName) -> GResult<Ref> {
-        // Tag refs are immutable: cache the name → OID mapping permanently.
-        if let RefName::Ref(b) = name
-            && let Some(short) = b.strip_prefix(b"tags/")
-        {
-            let short = String::from_utf8_lossy(short).into_owned();
-            if let Some(oid) = self.tag_ref_get(&short).await {
-                console_log(&format!("cache hit: tags/{short}"));
-                return Ok(Ref::new_direct(name.clone(), oid));
-            }
-            let r = self.inner.lookup_ref(name).await?;
-            if let RefTarget::Direct(oid) = r.target() {
-                console_log(&format!("cache set: tags/{short}"));
-                self.tag_ref_set(&short, *oid).await;
-            }
-            return Ok(r);
+    /// All refs resolved to object IDs, fetched once and reused for the rest
+    /// of the session.
+    pub(crate) async fn all_refs(&self) -> GResult<Rc<BTreeMap<RefName, RefEntry>>> {
+        if let Some(refs) = self.all_refs.borrow().as_ref() {
+            return Ok(Rc::clone(refs));
         }
-        self.inner.lookup_ref(name).await
+        let refs = Rc::new(self.inner.all_refs().await?);
+        *self.all_refs.borrow_mut() = Some(Rc::clone(&refs));
+        Ok(refs)
     }
 
     // --- Cache clearing ------------------------------------------------------
@@ -138,8 +127,6 @@ impl CachingRepo {
         match target {
             ClearTarget::RepoObjects => self.clear_store_by_prefix(STORE_OBJECTS).await,
             ClearTarget::AllObjects => self.clear_store(STORE_OBJECTS).await,
-            ClearTarget::RepoTags => self.clear_store_by_prefix(STORE_TAG_REFS).await,
-            ClearTarget::AllTags => self.clear_store(STORE_TAG_REFS).await,
         }
     }
 
@@ -207,19 +194,10 @@ impl CachingRepo {
 
     // --- Stats ---------------------------------------------------------------
 
-    /// Returns `(repo_objects, repo_mb, global_objects, global_mb, repo_tag_refs, global_tag_refs)`,
+    /// Returns `(repo_objects, repo_mb, global_objects, global_mb)`,
     /// or `None` if IndexedDB is unavailable.
-    pub(crate) async fn about_stats(&self) -> Option<(usize, f64, usize, f64, usize, usize)> {
-        let (repo_obj, repo_mb, global_obj, global_mb) = self.object_store_stats().await?;
-        let (repo_tags, global_tags) = self.tag_ref_stats().await.unwrap_or((0, 0));
-        Some((
-            repo_obj,
-            repo_mb,
-            global_obj,
-            global_mb,
-            repo_tags,
-            global_tags,
-        ))
+    pub(crate) async fn about_stats(&self) -> Option<(usize, f64, usize, f64)> {
+        self.object_store_stats().await
     }
 
     async fn object_store_stats(&self) -> Option<(usize, f64, usize, f64)> {
@@ -259,61 +237,7 @@ impl CachingRepo {
         ))
     }
 
-    async fn tag_ref_stats(&self) -> Option<(usize, usize)> {
-        let db = self.db.as_ref()?;
-        let tx = db.transaction_with_str(STORE_TAG_REFS).ok()?;
-        let store = tx.object_store(STORE_TAG_REFS).ok()?;
-        let req = store.get_all_keys().ok()?;
-        let result = await_request(&req).await.ok()?;
-        let keys = js_sys::Array::from(&result);
-        let prefix = format!("{}::", self.repo_url);
-        let global_count = keys.length() as usize;
-        let repo_count = (0..keys.length())
-            .filter(|&i| {
-                keys.get(i)
-                    .as_string()
-                    .is_some_and(|k| k.starts_with(&prefix))
-            })
-            .count();
-        Some((repo_count, global_count))
-    }
-
     // --- IndexedDB helpers ---------------------------------------------------
-
-    async fn tag_ref_get(&self, short: &str) -> Option<ObjectId> {
-        let db = self.db.as_ref()?;
-        let key = format!("{}::tags/{}", self.repo_url, short);
-        let tx = db.transaction_with_str(STORE_TAG_REFS).ok()?;
-        let store = tx.object_store(STORE_TAG_REFS).ok()?;
-        let req = store.get(&JsValue::from_str(&key)).ok()?;
-        let result = await_request(&req).await.ok()?;
-        if result.is_undefined() || result.is_null() {
-            return None;
-        }
-        let oid_str = js_sys::Reflect::get(&result, &"oid".into())
-            .ok()?
-            .as_string()?;
-        ObjectId::from_hex(oid_str.as_bytes())
-    }
-
-    async fn tag_ref_set(&self, short: &str, oid: ObjectId) {
-        let Some(db) = self.db.as_ref() else { return };
-        let key = format!("{}::tags/{}", self.repo_url, short);
-        let Ok(tx) =
-            db.transaction_with_str_and_mode(STORE_TAG_REFS, IdbTransactionMode::Readwrite)
-        else {
-            return;
-        };
-        let Ok(store) = tx.object_store(STORE_TAG_REFS) else {
-            return;
-        };
-        let record = js_sys::Object::new();
-        js_sys::Reflect::set(&record, &"id".into(), &JsValue::from_str(&key)).ok();
-        js_sys::Reflect::set(&record, &"oid".into(), &JsValue::from_str(&oid.to_string())).ok();
-        if let Ok(req) = store.put(&record) {
-            await_request(&req).await.ok();
-        }
-    }
 
     async fn idb_get(&self, id: ObjectId) -> Option<RawObject> {
         let db = self.db.as_ref()?;
@@ -404,12 +328,6 @@ async fn open_db() -> Result<IdbDatabase, JsValue> {
             let db: IdbDatabase = req.result().unwrap().dyn_into().unwrap();
             let old = event.old_version() as u32;
 
-            if old < 2 {
-                let params = web_sys::IdbObjectStoreParameters::new();
-                params.set_key_path(&JsValue::from_str("id"));
-                db.create_object_store_with_optional_parameters(STORE_TAG_REFS, &params)
-                    .ok();
-            }
             if old < 3 {
                 // Recreate objects store keyed by "{repo_url}::{oid}" instead of bare "{oid}".
                 // Existing cached objects are discarded; they will be re-fetched on demand.
@@ -420,6 +338,13 @@ async fn open_db() -> Result<IdbDatabase, JsValue> {
                 params.set_key_path(&JsValue::from_str("id"));
                 db.create_object_store_with_optional_parameters(STORE_OBJECTS, &params)
                     .ok();
+            }
+            if old < 4 {
+                // Tag refs are now resolved in bulk (info/refs or packed-refs)
+                // once per session; the per-tag cache store is obsolete.
+                if (2..4).contains(&old) {
+                    db.delete_object_store(STORE_TAG_REFS).ok();
+                }
             }
         },
     );
