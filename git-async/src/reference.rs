@@ -126,27 +126,26 @@ impl Ref {
     }
 
     pub(crate) async fn lookup<F: FileSystem>(repo: &Repo<F>, name: &RefName) -> GResult<Ref> {
-        let ref_type = {
-            if let Some(reference) = lookup_loose_ref(repo, name).await? {
-                reference
-            } else {
-                let Some(data) = read_file_if_exists(&repo.git_dir, b"packed-refs").await? else {
-                    return Err(Error::RefNotFound(name.clone()));
-                };
-                let packed_refs = parse_packed_refs(&data)?;
-                if let Some((_, entry)) = packed_refs
-                    .into_iter()
-                    .find(|(ref_name, _)| ref_name == name)
-                {
-                    RefTarget::Direct(entry.target)
-                } else {
-                    return Err(Error::RefNotFound(name.clone()));
-                }
-            }
+        // Consult the freshest direct sources first — a loose ref file, then
+        // packed-refs — and only then fall back to the info/refs snapshot.
+        // The fallback keeps single-ref resolution consistent with
+        // [`Repo::all_refs`], which reads info/refs on hosts prepared with
+        // `update-server-info`: without it, a ref recorded only in info/refs
+        // (e.g. a packed branch on a server that doesn't serve individual loose
+        // ref files) would be listed by `all_refs` yet fail to resolve when
+        // peeling HEAD.
+        let target = if let Some(target) = lookup_loose_ref(repo, name).await? {
+            target
+        } else if let Some(target) = lookup_packed_ref(repo, name).await? {
+            target
+        } else if let Some(target) = lookup_info_ref(repo, name).await? {
+            target
+        } else {
+            return Err(Error::RefNotFound(name.clone()));
         };
         Ok(Self {
             name: name.clone(),
-            target: ref_type,
+            target,
         })
     }
 
@@ -249,6 +248,42 @@ pub(crate) fn parse_info_refs(data: &[u8]) -> GResult<Vec<(RefName, RefEntry)>> 
     Ok(refs)
 }
 
+/// Look up a single ref in `packed-refs`, returning `None` when the file is
+/// absent or doesn't contain the ref.
+async fn lookup_packed_ref<F: FileSystem>(
+    repo: &Repo<F>,
+    name: &RefName,
+) -> GResult<Option<RefTarget>> {
+    let Some(data) = read_file_if_exists(&repo.git_dir, b"packed-refs").await? else {
+        return Ok(None);
+    };
+    Ok(parse_packed_refs(&data)?
+        .into_iter()
+        .find(|(ref_name, _)| ref_name == name)
+        .map(|(_, entry)| RefTarget::Direct(entry.target)))
+}
+
+/// Look up a single ref in the `info/refs` snapshot written by
+/// `git update-server-info`, returning `None` when there is no such file or it
+/// doesn't contain the ref.
+async fn lookup_info_ref<F: FileSystem>(
+    repo: &Repo<F>,
+    name: &RefName,
+) -> GResult<Option<RefTarget>> {
+    let info_dir = match repo.git_dir.open_subdir(b"info").await {
+        Ok(dir) => dir,
+        Err(FileSystemError::NotFound(_)) => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+    let Some(data) = read_file_if_exists(&info_dir, b"refs").await? else {
+        return Ok(None);
+    };
+    Ok(parse_info_refs(&data)?
+        .into_iter()
+        .find(|(ref_name, _)| ref_name == name)
+        .map(|(_, entry)| RefTarget::Direct(entry.target)))
+}
+
 pub(crate) async fn lookup_loose_ref<F: FileSystem>(
     repo: &Repo<F>,
     name: &RefName,
@@ -334,6 +369,23 @@ mod test {
         let oid = block_on(reference.resolve_object_id(&repo)).unwrap();
         let object = block_on(repo.lookup_object(oid)).unwrap();
         assert!(matches!(object, Object::Tag(_)));
+    }
+
+    #[test]
+    fn lookup_ref_falls_back_to_info_refs() {
+        let test_repo = make_packfile_repo().unwrap();
+        test_repo.run_git(["update-server-info"]).unwrap();
+        // Remove packed-refs so heads/main lives only in info/refs (it has no
+        // loose ref file either, having been packed). This mirrors a server
+        // that lists refs via info/refs but won't serve them individually.
+        std::fs::remove_file(test_repo.location.path().join(".git").join("packed-refs")).unwrap();
+
+        let repo = test_repo.repo();
+        let ref_name = RefName::Ref(b"heads/main".to_vec());
+        let reference = block_on(repo.lookup_ref(&ref_name)).unwrap();
+        let oid = block_on(reference.resolve_object_id(&repo)).unwrap();
+        let object = block_on(repo.lookup_object(oid)).unwrap();
+        assert!(matches!(object, Object::Commit(_)));
     }
 
     #[test]
