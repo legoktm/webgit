@@ -75,41 +75,54 @@ impl<F: FileSystem> Repo<F> {
 
     /// Find the repository's packfiles.
     ///
-    /// Listing the pack directory is authoritative when it works. When it
-    /// fails or comes back empty (e.g. an HTTP server without directory
-    /// indexes), fall back to `objects/info/packs`, which is written by
-    /// `git update-server-info` for fetching over dumb HTTP.
+    /// Prefer `objects/info/packs` — the manifest written by
+    /// `git update-server-info` for fetching over dumb HTTP — so a repository
+    /// prepared for static serving is discovered without ever listing a
+    /// directory. This matters because many HTTP servers disable directory
+    /// indexes, and listing them would be a guaranteed wasted (often failing)
+    /// request. Only when the manifest is absent do we fall back to listing
+    /// the pack directory, which still works on servers that expose an
+    /// autoindex.
+    ///
+    /// The manifest is only as fresh as the last `update-server-info` run;
+    /// this mirrors how [`Repo::all_refs`] prefers `info/refs` over a `refs/`
+    /// walk for the same reason.
     async fn discover_packs(
         objects_dir: &F::Directory,
         pack_dir: &F::Directory,
     ) -> GResult<Vec<PackName>> {
-        let listed = pack_dir
-            .list_dir()
-            .await
-            .map(|entries| {
-                entries
-                    .into_iter()
-                    .filter_map(|dirent| {
-                        let DirEntry::File(name) = dirent else {
-                            return None;
-                        };
-                        PackName::new(name)
-                    })
-                    .collect::<Vec<PackName>>()
-            })
-            .map_err(Error::from);
-        if matches!(&listed, Ok(packs) if !packs.is_empty()) {
-            return listed;
+        if let Some(packs) = Self::info_packs(objects_dir).await? {
+            return Ok(packs);
         }
+        Self::list_packs(pack_dir).await
+    }
+
+    /// Read `objects/info/packs` if present, returning `None` when there is no
+    /// such manifest (the repository wasn't prepared with `update-server-info`).
+    async fn info_packs(objects_dir: &F::Directory) -> GResult<Option<Vec<PackName>>> {
         let info_dir = match objects_dir.open_subdir(b"info").await {
             Ok(info_dir) => info_dir,
-            Err(FileSystemError::NotFound(_)) => return listed,
+            Err(FileSystemError::NotFound(_)) => return Ok(None),
             Err(e) => return Err(e.into()),
         };
         let Some(data) = read_file_if_exists(&info_dir, b"packs").await? else {
-            return listed;
+            return Ok(None);
         };
-        parse_info_packs(&data)
+        Ok(Some(parse_info_packs(&data)?))
+    }
+
+    /// Discover packs by listing the pack directory's autoindex.
+    async fn list_packs(pack_dir: &F::Directory) -> GResult<Vec<PackName>> {
+        let entries = pack_dir.list_dir().await?;
+        Ok(entries
+            .into_iter()
+            .filter_map(|dirent| {
+                let DirEntry::File(name) = dirent else {
+                    return None;
+                };
+                PackName::new(name)
+            })
+            .collect())
     }
 
     pub(crate) async fn resolve_git_dir(open_dir: F::Directory) -> GResult<F::Directory> {
@@ -443,22 +456,22 @@ mod tests {
     }
 
     #[test]
-    fn discover_packs_falls_back_to_info_packs() {
+    fn discover_packs_prefers_info_packs() {
         let test_repo = crate::test::helpers::make_packfile_repo().unwrap();
         test_repo.run_git(["update-server-info"]).unwrap();
         let git_dir = test_repo.git_dir();
         let objects_dir = block_on(git_dir.open_subdir(b"objects")).unwrap();
         let pack_dir = block_on(objects_dir.open_subdir(b"pack")).unwrap();
-        let listed = block_on(Repo::<TestFileSystem>::discover_packs(
+        let expected = block_on(Repo::<TestFileSystem>::discover_packs(
             &objects_dir,
             &pack_dir,
         ))
         .unwrap();
-        assert_eq!(listed.len(), 1);
+        assert_eq!(expected.len(), 1);
 
-        // An empty directory stands in for a server whose pack listing is
-        // unavailable; discovery must come up with the same pack via
-        // objects/info/packs.
+        // objects/info/packs is consulted before the pack directory is listed,
+        // so a server with no autoindex (an empty stand-in pack directory)
+        // still discovers the same pack without a single directory listing.
         std::fs::create_dir(
             test_repo
                 .location
@@ -475,7 +488,35 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(from_info.len(), 1);
-        assert_eq!(from_info[0].index_filename, listed[0].index_filename);
-        assert_eq!(from_info[0].pack_filename, listed[0].pack_filename);
+        assert_eq!(from_info[0].index_filename, expected[0].index_filename);
+        assert_eq!(from_info[0].pack_filename, expected[0].pack_filename);
+    }
+
+    #[test]
+    fn discover_packs_falls_back_to_listing() {
+        let test_repo = crate::test::helpers::make_packfile_repo().unwrap();
+        test_repo.run_git(["update-server-info"]).unwrap();
+        // Remove the manifest so discovery must list the pack directory, as on
+        // a repo that was never prepared with update-server-info but is served
+        // from a host that does expose an autoindex.
+        std::fs::remove_file(
+            test_repo
+                .location
+                .path()
+                .join(".git")
+                .join("objects")
+                .join("info")
+                .join("packs"),
+        )
+        .unwrap();
+        let git_dir = test_repo.git_dir();
+        let objects_dir = block_on(git_dir.open_subdir(b"objects")).unwrap();
+        let pack_dir = block_on(objects_dir.open_subdir(b"pack")).unwrap();
+        let listed = block_on(Repo::<TestFileSystem>::discover_packs(
+            &objects_dir,
+            &pack_dir,
+        ))
+        .unwrap();
+        assert_eq!(listed.len(), 1);
     }
 }

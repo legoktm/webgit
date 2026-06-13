@@ -571,6 +571,10 @@ a tag
         assert!(git_process.wait().unwrap().success());
         rename(objects_dir.join("pack"), objects_dir.join("pack-old")).unwrap();
         rename(objects_dir.join("pack-new"), objects_dir.join("pack")).unwrap();
+        // The earlier `git gc` left an objects/info/packs naming the old pack;
+        // refresh it so pack discovery (which prefers the manifest) finds the
+        // swapped-in pack.
+        test_repo.run_git(["update-server-info"]).unwrap();
         assert!(test_repo.run_git(["rev-parse", "HEAD^"]).is_ok());
         let raw_object = block_on(lookup(
             &test_repo.repo(),
