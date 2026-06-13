@@ -93,9 +93,14 @@ impl CachingRepo {
     }
 
     pub(crate) async fn lookup_parents(&self, commit: &Commit) -> GResult<Vec<Commit>> {
-        let mut out = Vec::with_capacity(commit.parents().len());
-        for &id in commit.parents() {
-            out.push(self.lookup_object(id).await?.commit()?);
+        // Fetch a (merge) commit's parents concurrently rather than serially.
+        let results = futures::future::join_all(
+            commit.parents().iter().map(|&id| self.lookup_object(id)),
+        )
+        .await;
+        let mut out = Vec::with_capacity(results.len());
+        for result in results {
+            out.push(result?.commit()?);
         }
         Ok(out)
     }

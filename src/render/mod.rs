@@ -224,8 +224,31 @@ pub(crate) async fn walk_commits(
     let mut count = 0usize;
     let mut commits: Vec<CommitRow> = Vec::new();
     let mut has_more = false;
+    // Ids whose objects we've already issued a (concurrent) prefetch for, so we
+    // don't re-request them on later iterations.
+    let mut prefetched: BTreeSet<ObjectId> = BTreeSet::new();
 
-    while let Some((_, current)) = heap.pop() {
+    while !heap.is_empty() {
+        // Look-ahead: concurrently fetch the parent objects of every commit
+        // currently on the frontier, warming the cache so the `lookup_parents`
+        // calls below resolve without further round-trips. This only populates
+        // the cache — emission order is still driven solely by the heap, so the
+        // output is identical to a purely sequential walk. A linear history has
+        // a frontier of one and sees no benefit (it is inherently sequential);
+        // merges and parallel branches are fetched as wide as the frontier.
+        if commits.len() < limit {
+            let to_prefetch: Vec<ObjectId> = heap
+                .iter()
+                .flat_map(|(_, commit)| commit.parents().iter().copied())
+                .filter(|id| !visited.contains(id) && prefetched.insert(*id))
+                .collect();
+            if !to_prefetch.is_empty() {
+                futures::future::join_all(to_prefetch.iter().map(|id| repo.lookup_object(*id)))
+                    .await;
+            }
+        }
+
+        let (_, current) = heap.pop().unwrap();
         if count >= skip && commits.len() < limit {
             let hash = format!("{}", current.id());
             commits.push(CommitRow {
