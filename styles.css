@@ -319,6 +319,17 @@ code {
     min-width: 8em;
 }
 
+/* ── Repository index ─────────────────────────────────────────── */
+/* Section header rows (the shared path prefix), cgit-style. */
+.repo-listing tr.repo-section td {
+    font-style: italic;
+    color: var(--text-dim);
+}
+/* Indent repositories beneath their section header. */
+.repo-listing td.name {
+    padding-left: 1.5rem;
+}
+
 .summary-table td.msg {
     width: 100%;
     white-space: nowrap;

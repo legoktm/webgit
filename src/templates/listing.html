@@ -1,0 +1,26 @@
+<h3 class="summary-heading">Repositories</h3>
+{% if groups %}
+<table class="summary-table repo-listing">
+    <thead>
+        <tr>
+            <th>Name</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for g in groups %}
+        {% if g.section %}
+        <tr class="repo-section">
+            <td>{{ g.section }}</td>
+        </tr>
+        {% endif %}
+        {% for r in g.repos %}
+        <tr>
+            <td class="name"><a href="{{ r.href }}">{{ r.name }}</a></td>
+        </tr>
+        {% endfor %}
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p class="msg">No repositories found.</p>
+{% endif %}

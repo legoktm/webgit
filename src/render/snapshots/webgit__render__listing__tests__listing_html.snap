@@ -1,0 +1,38 @@
+---
+source: src/render/listing.rs
+expression: "render_to_string(&init_tera(), \"listing.html\", &template).unwrap()"
+---
+<h3 class="summary-heading">Repositories</h3>
+
+<table class="summary-table repo-listing">
+    <thead>
+        <tr>
+            <th>Name</th>
+        </tr>
+    </thead>
+    <tbody>
+        
+        
+        
+        <tr>
+            <td class="name"><a href="/top.git/">top.git</a></td>
+        </tr>
+        
+        
+        
+        <tr class="repo-section">
+            <td>public</td>
+        </tr>
+        
+        
+        <tr>
+            <td class="name"><a href="/public/bar.git/">bar.git</a></td>
+        </tr>
+        
+        <tr>
+            <td class="name"><a href="/public/foo.git/">foo.git</a></td>
+        </tr>
+        
+        
+    </tbody>
+</table>

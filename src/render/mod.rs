@@ -8,6 +8,7 @@ use tera::{Context, Tera};
 pub(crate) mod about;
 pub(crate) mod blob;
 pub(crate) mod commit;
+pub(crate) mod listing;
 pub(crate) mod log;
 pub(crate) mod refs_all;
 pub(crate) mod refs_heads;
@@ -40,6 +41,7 @@ pub(crate) fn init_tera() -> Tera {
     tera.add_raw_templates(vec![
         ("about.html", include_str!("../templates/about.html")),
         ("blob.html", include_str!("../templates/blob.html")),
+        ("listing.html", include_str!("../templates/listing.html")),
         (
             "refs_heads.html",
             include_str!("../templates/refs_heads.html"),

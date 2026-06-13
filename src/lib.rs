@@ -146,6 +146,41 @@ async fn try_load_repo(url: String, doc: Document) -> anyhow::Result<()> {
 }
 
 // ---------------------------------------------------------------------------
+// Repository index
+// ---------------------------------------------------------------------------
+
+/// Shown when the URL doesn't name a repository: lists the server's repos from
+/// `/listing.json`.
+async fn load_index(doc: Document) {
+    let output = doc.get_element_by_id("output").unwrap();
+    // The repo-scoped chrome (nav tabs, fetch stats) is meaningless here.
+    for id in ["nav", "fetch-stats"] {
+        if let Some(el) = doc.get_element_by_id(id) {
+            el.class_list().add_1("hide").ok();
+        }
+    }
+    set_text(&doc, "repo-path-name", "repositories");
+    doc.set_title("repositories");
+    if let Err(e) = try_load_index(&output).await {
+        output.set_inner_html(&error_html(&format!("{e:#}")));
+    }
+}
+
+async fn try_load_index(output: &web_sys::Element) -> anyhow::Result<()> {
+    let origin = web_sys::window()
+        .and_then(|w| w.location().origin().ok())
+        .unwrap_or_default();
+    let url = format!("{origin}/listing.json");
+    let text = fetch::fetch_text(&url)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to load {url}: {e:?}"))?;
+    let paths: Vec<String> = serde_json::from_str(&text)
+        .map_err(|e| anyhow::anyhow!("Failed to parse listing.json: {e}"))?;
+    let tera = render::init_tera();
+    render::listing::render_listing(&tera, paths, output)
+}
+
+// ---------------------------------------------------------------------------
 // URL resolution
 // ---------------------------------------------------------------------------
 
@@ -172,7 +207,13 @@ fn resolve_repo_url(window: &web_sys::Window) -> Option<String> {
         }
     }
 
-    if let Ok(search) = location.search() {
+    // The ?url= override lets a local dev build point at any remote repo. It's
+    // only honored on a loopback host, so a deployed instance can't be coaxed
+    // into fetching arbitrary URLs on a visitor's behalf.
+    let on_loopback = location.hostname().map(|h| h == "127.0.0.1").unwrap_or(false);
+    if on_loopback
+        && let Ok(search) = location.search()
+    {
         for param in search.trim_start_matches('?').split('&') {
             if let Some(val) = param.strip_prefix("url=") {
                 let decoded = js_sys::decode_uri_component(val)
@@ -199,13 +240,10 @@ pub fn main() {
     let url = match resolve_repo_url(&window) {
         Some(u) => u,
         None => {
-            if let Some(output) = document.get_element_by_id("output") {
-                output.set_inner_html(
-                    "<p class=\"msg error\">No repository URL found. \
-                     Navigate to a <code>.git</code> URL or add a \
-                     <code>?url=https://\u{2026}/repo.git</code> query parameter.</p>",
-                );
-            }
+            // No repository in the URL: show the server's repository index.
+            wasm_bindgen_futures::spawn_local(async move {
+                load_index(document).await;
+            });
             return;
         }
     };
