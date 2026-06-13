@@ -66,7 +66,11 @@ impl CachingRepo {
             .lookup_raw(id)
             .await?
             .ok_or(GitError::MissingObject(id))?;
-        self.idb_set(id, &raw).await;
+        // Queue the cache write but don't await it: the returned object doesn't
+        // depend on the write completing, and IndexedDB keeps the transaction
+        // alive until the queued `put` finishes on its own. Awaiting here would
+        // make every caller block on a disk write it doesn't care about.
+        self.idb_set(id, &raw);
         Object::from_raw(id, raw)
     }
 
@@ -264,7 +268,14 @@ impl CachingRepo {
         })
     }
 
-    async fn idb_set(&self, id: ObjectId, raw: &RawObject) {
+    /// Queue a write of `raw` into the object store without awaiting it.
+    ///
+    /// The synchronous JS work (building the record, copying the body into a
+    /// JS buffer) happens now while `raw` is borrowed, but the `put` request is
+    /// left to complete in the background. IndexedDB keeps the transaction open
+    /// until the queued request finishes even after the Rust handles are
+    /// dropped, so the write still commits.
+    fn idb_set(&self, id: ObjectId, raw: &RawObject) {
         let Some(db) = self.db.as_ref() else { return };
         let Ok(tx) = db.transaction_with_str_and_mode(STORE_OBJECTS, IdbTransactionMode::Readwrite)
         else {
@@ -286,9 +297,7 @@ impl CachingRepo {
         let buf = js_sys::Uint8Array::from(raw.body.as_slice()).buffer();
         js_sys::Reflect::set(&record, &"data".into(), &buf).ok();
 
-        if let Ok(req) = store.put(&record) {
-            await_request(&req).await.ok();
-        }
+        store.put(&record).ok();
     }
 }
 
