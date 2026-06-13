@@ -27,15 +27,17 @@ fn is_session_cacheable(url: &str) -> bool {
 /// changes (refs move, `update-server-info` regenerates the pack/ref manifests).
 /// Unlike content-addressed objects and packs, these must not be served stale
 /// from the browser's HTTP cache — a stale `objects/info/packs` names a pack
-/// that no longer exists, which fails the whole repo open. They are tiny, so
-/// revalidating them on every load (a conditional request answered with 304
-/// when unchanged) is cheap.
+/// that no longer exists, and a stale loose `refs/heads/<branch>` resolves HEAD
+/// to a superseded commit. They are tiny, so revalidating them on every load (a
+/// conditional request answered with 304 when unchanged) is cheap.
 fn is_volatile_metadata(url: &str) -> bool {
     let url = url.split(['?', '#']).next().unwrap_or(url);
     url.ends_with("/HEAD")
         || url.ends_with("/packed-refs")
         || url.ends_with("/info/refs")
         || url.ends_with("/objects/info/packs")
+        // Loose ref files (refs/heads/*, refs/tags/*, …) move on every push.
+        || url.contains("/refs/")
 }
 
 thread_local! {
@@ -158,7 +160,16 @@ mod tests {
     #[test]
     fn volatile_metadata_matches_mutable_manifests() {
         let base = "https://host/repo.git";
-        for path in ["/HEAD", "/packed-refs", "/info/refs", "/objects/info/packs"] {
+        for path in [
+            "/HEAD",
+            "/packed-refs",
+            "/info/refs",
+            "/objects/info/packs",
+            // Loose refs move on every push, so they must revalidate too.
+            "/refs/heads/main",
+            "/refs/tags/v1.0",
+            "/refs/heads/HEADER",
+        ] {
             assert!(is_volatile_metadata(&format!("{base}{path}")), "{path}");
         }
         // Query/fragment suffixes (e.g. smart-HTTP service params) still match.
@@ -174,8 +185,6 @@ mod tests {
             "/objects/pack/pack-52dea9ac.pack",
             "/objects/pack/pack-52dea9ac.idx",
             "/objects/ab/cdef0123456789",
-            // A ref literally named HEAD-ish but not the HEAD file.
-            "/refs/heads/HEADER",
         ] {
             assert!(!is_volatile_metadata(&format!("{base}{path}")), "{path}");
         }
