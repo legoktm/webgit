@@ -55,39 +55,39 @@ pub(crate) async fn lookup_size_type<F: FileSystem>(
     repo: &Repo<F>,
     id: ObjectId,
 ) -> GResult<Option<(ObjectSize, ObjectType)>> {
-    let opt_size_type = read_loose_object_size_type(repo, id).await?;
-    if opt_size_type.is_some() {
-        return Ok(opt_size_type);
-    }
+    // Look in packs first; see `lookup` for the rationale.
     let pack_cache = &repo.index_cache;
-    let Some((mut pack, offset)) = find_packed_object(repo, pack_cache, id).await? else {
-        return Ok(None);
-    };
-    let (_, object_type, final_object) = form_deltified_chain(&mut pack, offset)
-        .await
-        .map_err(annotate_with_object_id(id))?;
-    Ok(Some((final_object.size, object_type)))
+    if let Some((mut pack, offset)) = find_packed_object(repo, pack_cache, id).await? {
+        let (_, object_type, final_object) = form_deltified_chain(&mut pack, offset)
+            .await
+            .map_err(annotate_with_object_id(id))?;
+        return Ok(Some((final_object.size, object_type)));
+    }
+    read_loose_object_size_type(repo, id).await
 }
 
 pub(crate) async fn lookup<F: FileSystem>(
     repo: &Repo<F>,
     id: ObjectId,
 ) -> GResult<Option<RawObject>> {
-    let loose_object = read_loose_object(repo, id).await?;
-    if loose_object.is_some() {
-        return Ok(loose_object);
-    }
+    // Look in packs first, falling back to loose objects only on a miss. Most
+    // objects are packed, so probing loose first would mean a guaranteed-404
+    // request per lookup on a packed repo. A loose object (e.g. from a recent
+    // push) is still found by the fallback, and since git objects are
+    // content-addressed a packed copy is byte-identical to any loose copy, so
+    // the order does not affect correctness.
     let pack_cache = &repo.index_cache;
-    let Some((mut indexed_pack, offset)) = find_packed_object(repo, pack_cache, id).await? else {
-        return Ok(None);
-    };
-    let (chain, object_type, final_object) = form_deltified_chain(&mut indexed_pack, offset)
-        .await
-        .map_err(annotate_with_object_id(id))?;
-    let body = reconstruct_deltified_object_from_chain(&mut indexed_pack, &chain, &final_object)
-        .await
-        .map_err(annotate_with_object_id(id))?;
-    Ok(Some(RawObject { object_type, body }))
+    if let Some((mut indexed_pack, offset)) = find_packed_object(repo, pack_cache, id).await? {
+        let (chain, object_type, final_object) = form_deltified_chain(&mut indexed_pack, offset)
+            .await
+            .map_err(annotate_with_object_id(id))?;
+        let body =
+            reconstruct_deltified_object_from_chain(&mut indexed_pack, &chain, &final_object)
+                .await
+                .map_err(annotate_with_object_id(id))?;
+        return Ok(Some(RawObject { object_type, body }));
+    }
+    read_loose_object(repo, id).await
 }
 
 pub(crate) async fn find_packed_object<'p, F: FileSystem>(
