@@ -5,7 +5,8 @@
 }
 
 .hide {
-    display: none;
+    /* !important so the utility beats ID-selector rules like `#nav { display: flex }`. */
+    display: none !important;
 }
 
 /* ── IndexedDB unavailable warning banner ───────────────────────── */
