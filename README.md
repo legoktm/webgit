@@ -35,6 +35,8 @@ RewriteCond %{REQUEST_URI} ^/(public|mirrors)/[^/]+\.git/$
 RewriteRule ^ /var/www/webgit/dist/index.html [L]
 ```
 
+You should definitely enable HTTP/2 on your webserver too.
+
 ### Repositories
 
 Your webserver should be set up to serve bare Git repositories. It's strongly recommended that you
