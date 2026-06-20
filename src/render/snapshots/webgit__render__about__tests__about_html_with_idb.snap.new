@@ -1,6 +1,7 @@
 ---
 source: src/render/about.rs
-expression: "render_to_string(&init_tera(), \"about.html\", &fixture(false)).unwrap()"
+assertion_line: 96
+expression: "render_to_string(&init_tera(), \"about.html\", &fixture(true)).unwrap()"
 ---
 <h3 class="summary-heading">repository</h3>
 <table class="tag-table">
@@ -41,8 +42,22 @@ expression: "render_to_string(&init_tera(), \"about.html\", &fixture(false)).unw
             </tr>-->
         
         <tr>
-            <td class="label">cache</td>
-            <td>IndexedDB unavailable</td>
+            <td class="label">cached objects (repository)</td>
+            <td>
+                1234 (12.34 MB)
+                <button class="clear-btn" data-target="repo-objects">
+                    (clear)
+                </button>
+            </td>
+        </tr>
+        <tr>
+            <td class="label">cached objects (host)</td>
+            <td>
+                5678 (56.78 MB)
+                <button class="clear-btn" data-target="all-objects">
+                    (clear)
+                </button>
+            </td>
         </tr>
         
     </tbody>

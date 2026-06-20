@@ -1,5 +1,6 @@
 ---
 source: src/render/about.rs
+assertion_line: 103
 expression: "render_to_string(&init_tera(), \"about.html\", &fixture(false)).unwrap()"
 ---
 <h3 class="summary-heading">repository</h3>
