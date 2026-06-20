@@ -119,6 +119,12 @@ async fn build_commit(repo: &CachingRepo, sha: &str) -> anyhow::Result<CommitTem
     })
 }
 
+/// Heuristic matching git's: a blob is treated as binary if a NUL byte appears
+/// in its leading bytes. git scans the first 8000 bytes, so do the same.
+fn is_binary(data: &[u8]) -> bool {
+    data.iter().take(8000).any(|&b| b == 0)
+}
+
 async fn load_blob(repo: &CachingRepo, id: ObjectId) -> Vec<u8> {
     if id.bytes() == &[0u8; 20] {
         return Vec::new();
@@ -161,16 +167,34 @@ async fn build_diff(repo: &CachingRepo, td: &TreeDiff) -> (Vec<FileDiff>, Vec<Di
     .await;
 
     for (path, old_data, new_data) in loaded {
+        diff_lines.push(DiffLine {
+            kind: "hunk".to_string(),
+            content: format!("diff --git a/{path} b/{path}"),
+        });
+
+        // Git treats a blob as binary if it contains a NUL byte; in that case
+        // it shows "Binary files differ" rather than a line-by-line diff, which
+        // would be meaningless (and potentially huge). Mirror that here.
+        if is_binary(&old_data) || is_binary(&new_data) {
+            diff_lines.push(DiffLine {
+                kind: "ctx".to_string(),
+                content: format!("Binary files a/{path} and b/{path} differ"),
+            });
+            files.push(FileDiff {
+                path,
+                additions: 0,
+                deletions: 0,
+                bar_add: 0,
+                bar_del: 0,
+            });
+            continue;
+        }
+
         let text_diff = TextDiffConfig::default().diff_lines(old_data, new_data);
         let udiff = text_diff
             .unified_diff()
             .header(&format!("a/{path}"), &format!("b/{path}"))
             .to_string();
-
-        diff_lines.push(DiffLine {
-            kind: "hunk".to_string(),
-            content: format!("diff --git a/{path} b/{path}"),
-        });
 
         let mut additions = 0usize;
         let mut deletions = 0usize;
@@ -261,6 +285,20 @@ mod tests {
             files: vec![],
             diff_lines: vec![],
         }
+    }
+
+    #[test]
+    fn test_is_binary() {
+        assert!(!is_binary(b""));
+        assert!(!is_binary(b"hello\nworld\n"));
+        // UTF-8 multibyte content has no NUL bytes and must stay textual.
+        assert!(!is_binary("café — résumé".as_bytes()));
+        assert!(is_binary(b"PK\x03\x04\x00\x00"));
+        assert!(is_binary(b"text then \0 nul"));
+        // A NUL past the 8000-byte scan window is not flagged, matching git.
+        let mut late_nul = vec![b'a'; 8000];
+        late_nul.push(0);
+        assert!(!is_binary(&late_nul));
     }
 
     #[test]
