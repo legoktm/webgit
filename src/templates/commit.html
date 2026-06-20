@@ -25,7 +25,7 @@
     </tbody>
 </table>
 
-<pre class="tag-message">{{ message }}</pre>
+<pre class="tag-message">{{ message_html | safe }}</pre>
 
 {% if files %}
 <div class="diffstat">

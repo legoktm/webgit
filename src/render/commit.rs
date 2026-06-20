@@ -40,7 +40,7 @@ struct CommitTemplate {
     committer_date: String,
     parents: Vec<ParentRef>,
     tree_hash: String,
-    message: String,
+    message_html: String,
     total_additions: usize,
     total_deletions: usize,
     files: Vec<FileDiff>,
@@ -111,12 +111,70 @@ async fn build_commit(repo: &CachingRepo, sha: &str) -> anyhow::Result<CommitTem
         committer_date: commit.commit_date().to_string(),
         parents,
         tree_hash: format!("{}", commit.tree()),
-        message: String::from_utf8_lossy(commit.message()).into_owned(),
+        message_html: linkify_message(&String::from_utf8_lossy(commit.message())),
         total_additions,
         total_deletions,
         files,
         diff_lines,
     })
+}
+
+fn escape_char(c: char, out: &mut String) {
+    match c {
+        '&' => out.push_str("&amp;"),
+        '<' => out.push_str("&lt;"),
+        '>' => out.push_str("&gt;"),
+        '"' => out.push_str("&quot;"),
+        '\'' => out.push_str("&#x27;"),
+        _ => out.push(c),
+    }
+}
+
+/// A token is treated as a commit reference if it is a run of 7-40 lowercase
+/// hex digits, i.e. a full SHA-1 or one of git's abbreviated forms.
+fn is_sha1(token: &str) -> bool {
+    (7..=40).contains(&token.len())
+        && token
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// Turn SHA-1 references in a commit message into links to the referenced
+/// commit, HTML-escaping everything else. The result is trusted HTML, so it
+/// must be rendered with Tera's `safe` filter.
+fn linkify_message(message: &str) -> String {
+    let mut out = String::with_capacity(message.len());
+    let mut token = String::new();
+
+    let flush = |token: &str, out: &mut String| {
+        if is_sha1(token) {
+            // `token` is pure lowercase hex, so it is safe both as an attribute
+            // value and as text without further escaping.
+            out.push_str("<a href=\"#!/commit/");
+            out.push_str(token);
+            out.push_str("\">");
+            out.push_str(token);
+            out.push_str("</a>");
+        } else {
+            for c in token.chars() {
+                escape_char(c, out);
+            }
+        }
+    };
+
+    for c in message.chars() {
+        // Word boundaries are ASCII alphanumerics; anything else ends the
+        // current token so e.g. a hash inside "word_abc1234" is not matched.
+        if c.is_ascii_alphanumeric() {
+            token.push(c);
+        } else {
+            flush(&token, &mut out);
+            token.clear();
+            escape_char(c, &mut out);
+        }
+    }
+    flush(&token, &mut out);
+    out
 }
 
 /// Heuristic matching git's: a blob is treated as binary if a NUL byte appears
@@ -279,7 +337,9 @@ mod tests {
             committer_date: "2026-01-15 13:00:00 +00:00".to_string(),
             parents: vec![],
             tree_hash: "fedcba98fedcba98fedcba98fedcba98fedcba98".to_string(),
-            message: "Fix the thing\n\nLonger explanation with <html> & \"chars\".".to_string(),
+            message_html: linkify_message(
+                "Fix the thing\n\nLonger explanation with <html> & \"chars\".\nSee 0123abcd for context.",
+            ),
             total_additions: 0,
             total_deletions: 0,
             files: vec![],
@@ -299,6 +359,46 @@ mod tests {
         let mut late_nul = vec![b'a'; 8000];
         late_nul.push(0);
         assert!(!is_binary(&late_nul));
+    }
+
+    #[test]
+    fn test_linkify_message() {
+        // A 7-40 char hex run becomes a link; surrounding text is escaped.
+        assert_eq!(
+            linkify_message("see 0123abcd <ok>"),
+            "see <a href=\"#!/commit/0123abcd\">0123abcd</a> &lt;ok&gt;"
+        );
+        // Full 40-char SHA-1.
+        let full = "0123456789abcdef0123456789abcdef01234567";
+        assert_eq!(
+            linkify_message(full),
+            format!("<a href=\"#!/commit/{full}\">{full}</a>")
+        );
+        // Too short (<7), too long (>40), uppercase, or embedded in a word: no link.
+        assert_eq!(linkify_message("abc123"), "abc123");
+        assert_eq!(linkify_message("0123ABCD"), "0123ABCD");
+        assert_eq!(linkify_message("x0123abcd"), "x0123abcd");
+        assert_eq!(linkify_message(&"a".repeat(41)), "a".repeat(41));
+    }
+
+    #[test]
+    fn test_linkify_message_escapes_xss() {
+        // A script-injection attempt must be fully neutralised: no raw angle
+        // brackets, quotes, or ampersands survive into the trusted HTML.
+        let attack = "<script>alert('xss')</script> & \"quotes\"";
+        let html = linkify_message(attack);
+        assert_eq!(
+            html,
+            "&lt;script&gt;alert(&#x27;xss&#x27;)&lt;/script&gt; &amp; &quot;quotes&quot;"
+        );
+        assert!(!html.contains('<'));
+        assert!(!html.contains('>'));
+        // Escaping still happens around a linkified hash on the same line.
+        let mixed = linkify_message("<b>0123abcd</b>");
+        assert_eq!(
+            mixed,
+            "&lt;b&gt;<a href=\"#!/commit/0123abcd\">0123abcd</a>&lt;/b&gt;"
+        );
     }
 
     #[test]

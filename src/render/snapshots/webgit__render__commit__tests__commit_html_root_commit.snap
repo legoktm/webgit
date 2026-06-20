@@ -26,4 +26,5 @@ expression: "render_to_string(&init_tera(), \"commit.html\", &base_fixture()).un
 
 <pre class="tag-message">Fix the thing
 
-Longer explanation with &lt;html&gt; &amp; &quot;chars&quot;.</pre>
+Longer explanation with &lt;html&gt; &amp; &quot;chars&quot;.
+See <a href="#!/commit/0123abcd">0123abcd</a> for context.</pre>
