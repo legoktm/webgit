@@ -212,7 +212,7 @@ fn resolve_repo_url(window: &web_sys::Window) -> Option<String> {
     // into fetching arbitrary URLs on a visitor's behalf.
     let on_loopback = location
         .hostname()
-        .map(|h| h == "127.0.0.1")
+        .map(|h| h == "127.0.0.1" || h == "localhost")
         .unwrap_or(false);
     if on_loopback && let Ok(search) = location.search() {
         for param in search.trim_start_matches('?').split('&') {
