@@ -42,6 +42,7 @@ pub enum Error {
     FromHexError(hex::FromHexError),
     UnsupportedIndexVersion,
     CorruptIndexFile,
+    CorruptCommitGraph,
     UnsupportedPackVersion,
     CorruptPackFile,
     MalformedPackedRefs,

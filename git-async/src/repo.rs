@@ -1,4 +1,5 @@
 use crate::{
+    commit_graph::CommitGraph,
     error::{Error, GResult},
     file_system::{
         DirEntry, Directory, FileSystem, FileSystemError, read_file_if_exists, search_for_files,
@@ -54,6 +55,8 @@ pub struct Repo<F: FileSystem> {
     pub(crate) git_dir: F::Directory,
     pub(crate) pack_dir: F::Directory,
     pub(crate) index_cache: IndexCache,
+    /// The commit-graph cache, if the repository has a usable single-file one.
+    commit_graph: Option<CommitGraph<F>>,
 }
 
 impl<F: FileSystem> Repo<F> {
@@ -66,11 +69,20 @@ impl<F: FileSystem> Repo<F> {
         let pack_dir = objects_dir.open_subdir(b"pack").await?;
         let pack_ids = Self::discover_packs(&objects_dir, &pack_dir).await?;
         let index_cache = IndexCache::new(&pack_dir, pack_ids, config).await?;
+        // Best-effort: a missing or unsupported commit-graph just means falling
+        // back to object reads, so any error degrades to `None`.
+        let commit_graph = CommitGraph::open(&objects_dir).await.ok().flatten();
         Ok(Repo {
             git_dir,
             pack_dir,
             index_cache,
+            commit_graph,
         })
+    }
+
+    /// The repository's commit-graph cache, if it has a usable one.
+    pub fn commit_graph(&self) -> Option<&CommitGraph<F>> {
+        self.commit_graph.as_ref()
     }
 
     /// Find the repository's packfiles.

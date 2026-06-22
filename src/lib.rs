@@ -51,6 +51,14 @@ async fn try_load_repo(url: String, doc: Document) -> anyhow::Result<()> {
         .context("Failed to open repo")?;
     let repo = CachingRepo::open(repo, url.clone()).await;
 
+    match repo.commit_graph_info() {
+        Some((commits, bloom)) => console_log(&format!(
+            "webgit: commit-graph present ({commits} commits, changed-path filters: {})",
+            if bloom { "yes" } else { "no" }
+        )),
+        None => console_log("webgit: no commit-graph; walking commit objects directly"),
+    }
+
     // Surface a banner when caching is disabled so the slow performance is
     // explained rather than mysterious.
     if !repo.idb_available()

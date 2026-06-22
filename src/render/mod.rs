@@ -1,8 +1,9 @@
 use crate::cache::CachingRepo;
-use git_async::object::{Commit, ObjectId};
+use git_async::object::{Commit, ObjectId, TreeEntryType};
 use git_async::reference::{RefEntry, RefName, RefTarget};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
+use std::rc::Rc;
 use tera::{Context, Tera};
 
 pub(crate) mod about;
@@ -248,71 +249,357 @@ pub(crate) async fn decoration_map(repo: &CachingRepo) -> BTreeMap<ObjectId, Vec
     map
 }
 
+/// The id of the entry named `name` in `tree`, or `None` if absent.
+fn entry_id(tree: &git_async::object::Tree, name: &str) -> Option<ObjectId> {
+    tree.entries()
+        .find(|e| e.name() == name.as_bytes())
+        .map(|e| e.id())
+}
+
+/// Resolve a slash-separated path to the [`ObjectId`] it points at within the
+/// tree `tree_id` — a blob id for a file, a tree id for a directory. Returns
+/// `None` if the path does not exist in that tree. Only used for root commits,
+/// which have no parent to diff against.
+async fn path_object_id(
+    tree_id: ObjectId,
+    components: &[&str],
+    repo: &CachingRepo,
+) -> Option<ObjectId> {
+    let (last, dirs) = components.split_last()?;
+    let mut current = repo.lookup_object(tree_id).await.ok()?.tree().ok()?;
+    for component in dirs {
+        let entry = current
+            .entries()
+            .find(|e| e.name() == component.as_bytes())?;
+        if entry.entry_type() != TreeEntryType::Tree {
+            return None;
+        }
+        current = repo.lookup_object(entry.id()).await.ok()?.tree().ok()?;
+    }
+    entry_id(&current, last)
+}
+
+/// Whether the object at `components` differs between trees `a` and `b`.
+///
+/// Walks both trees in lockstep, comparing the entry id for each path component.
+/// As soon as the two ids match, the entire subtree below is byte-identical, so
+/// the path is unchanged and we stop — the deep trees are never fetched. We only
+/// descend as far as the path actually diverged between the two commits, which
+/// for most commits is zero levels (they touched a different part of the tree).
+async fn path_differs(a: ObjectId, b: ObjectId, components: &[&str], repo: &CachingRepo) -> bool {
+    let Some((last, dirs)) = components.split_last() else {
+        return false;
+    };
+    // Identical (sub)tree id ⇒ everything beneath is identical ⇒ no change.
+    let mut a = a;
+    let mut b = b;
+    for component in dirs {
+        if a == b {
+            return false;
+        }
+        // Fetch both sides' trees concurrently to halve this level's latency.
+        let (ta, tb) = match futures::join!(repo.lookup_object(a), repo.lookup_object(b)) {
+            (Ok(oa), Ok(ob)) => match (oa.tree(), ob.tree()) {
+                (Ok(ta), Ok(tb)) => (ta, tb),
+                _ => return true,
+            },
+            _ => return true,
+        };
+        let (ea, eb) = (entry_id(&ta, component), entry_id(&tb, component));
+        match (ea, eb) {
+            // Subtree present on both sides with the same id: pruned, unchanged.
+            (Some(x), Some(y)) if x == y => return false,
+            // Present on both but different: descend into the two subtrees.
+            (Some(x), Some(y)) => (a, b) = (x, y),
+            // Present on only one side (added/removed dir): the path changed.
+            _ => return true,
+        }
+    }
+    if a == b {
+        return false;
+    }
+    let (ta, tb) = match futures::join!(repo.lookup_object(a), repo.lookup_object(b)) {
+        (Ok(oa), Ok(ob)) => match (oa.tree(), ob.tree()) {
+            (Ok(ta), Ok(tb)) => (ta, tb),
+            _ => return true,
+        },
+        _ => return true,
+    };
+    entry_id(&ta, last) != entry_id(&tb, last)
+}
+
+/// Counters for one [`walk_commits`] call, logged to the console so it's
+/// visible whether the commit-graph (and its Bloom filters) is actually doing
+/// the work: graph hits should dominate fallbacks, and on a filtered log most
+/// commits should be Bloom-skipped rather than tree-diffed.
+#[derive(Default)]
+struct WalkStats {
+    /// Commits whose metadata came from the commit-graph (no object fetch).
+    graph_meta_hits: usize,
+    /// Commits whose metadata required fetching the commit object instead.
+    object_meta_fallbacks: usize,
+    /// Filtered commits skipped via the Bloom filter with no tree fetch.
+    bloom_skips: usize,
+    /// Filtered commits that needed a real tree diff.
+    tree_diffs: usize,
+}
+
+/// The traversal data a single commit contributes to a log walk: enough to
+/// order the frontier (`time`), continue it (`parents`), filter by path
+/// (`tree`, plus `pos` for the Bloom filter), all without re-parsing objects.
+struct WalkNode {
+    tree: ObjectId,
+    parents: Vec<ObjectId>,
+    time: i64,
+    /// The commit's changed-path Bloom filter, if the commit-graph has one.
+    bloom: Option<Vec<u8>>,
+}
+
+/// Look up a commit's [`WalkNode`], memoised in `cache`. Prefers the
+/// commit-graph (no object fetch); otherwise falls back to the commit object,
+/// using `known` when the caller already holds it (the walk's starting commit).
+/// `None` only if the commit can be found neither way.
+///
+/// `bulk` selects the graph accessor: filtered walks need the whole graph (and
+/// its Bloom filters) so they trigger the one-shot bulk load; unfiltered walks
+/// stop after a page, so they read records lazily and never pull the whole file.
+async fn ensure_node(
+    repo: &CachingRepo,
+    cache: &mut BTreeMap<ObjectId, Rc<WalkNode>>,
+    id: ObjectId,
+    known: Option<&Commit>,
+    stats: &mut WalkStats,
+    bulk: bool,
+) -> Option<Rc<WalkNode>> {
+    if let Some(node) = cache.get(&id) {
+        return Some(Rc::clone(node));
+    }
+    let record = if bulk {
+        repo.graph_record(id).await
+    } else {
+        repo.graph_record_lazy(id).await
+    };
+    let node = if let Some(rec) = record {
+        stats.graph_meta_hits += 1;
+        WalkNode {
+            tree: rec.tree,
+            parents: rec.parents.clone(),
+            time: rec.commit_time,
+            bloom: rec.bloom.clone(),
+        }
+    } else {
+        stats.object_meta_fallbacks += 1;
+        let commit = match known {
+            Some(c) => c.clone(),
+            None => repo.lookup_object(id).await.ok()?.commit().ok()?,
+        };
+        WalkNode {
+            tree: commit.tree(),
+            parents: commit.parents().to_vec(),
+            time: commit.commit_date().timestamp(),
+            bloom: None,
+        }
+    };
+    let node = Rc::new(node);
+    cache.insert(id, Rc::clone(&node));
+    Some(node)
+}
+
+/// A Bloom candidate awaiting confirmation by a real tree diff. It carries the
+/// commit's tree and its parents' trees (all resolved up front from the
+/// in-memory graph), so [`confirm_task`] touches no shared mutable state and a
+/// batch of them can run concurrently.
+struct ConfirmTask {
+    id: ObjectId,
+    tree: ObjectId,
+    parent_trees: Vec<ObjectId>,
+    root: bool,
+}
+
+/// Whether a candidate actually changed the path, mirroring git's default
+/// simplification: a root is shown when the path exists; otherwise a commit is
+/// shown unless it is TREESAME to (same object at the path as) some parent.
+/// Read-only, so many of these can be awaited together.
+async fn confirm_task(repo: &CachingRepo, task: &ConfirmTask, components: &[&str]) -> bool {
+    if task.root {
+        return path_object_id(task.tree, components, repo).await.is_some();
+    }
+    for parent_tree in &task.parent_trees {
+        if !path_differs(task.tree, *parent_tree, components, repo).await {
+            return false;
+        }
+    }
+    true
+}
+
+/// How many candidate tree-diffs to confirm concurrently. Traversal is in-memory
+/// so the only latency is these diffs; batching turns ~N serial round-trips into
+/// ~N/BATCH waves (relies on HTTP/2 multiplexing the per-diff object fetches).
+///
+/// Each diff fetches its two trees concurrently (see [`path_differs`]), so peak
+/// in-flight streams are ~`2 × CONFIRM_BATCH` — kept under typical HTTP/2 limits
+/// (servers cap concurrent streams around 100–128). The batch that crosses the
+/// page boundary is fully confirmed, so a larger value also fetches up to
+/// `BATCH` candidates of slack past the last shown commit; 64 keeps that cost
+/// negligible against a deep walk while roughly halving the wave count vs 32.
+const CONFIRM_BATCH: usize = 64;
+
 pub(crate) async fn walk_commits(
     head_commit: &Commit,
     repo: &CachingRepo,
+    path: Option<&str>,
     skip: usize,
     limit: usize,
     decorations: &BTreeMap<ObjectId, Vec<RefLabel>>,
 ) -> (Vec<CommitRow>, bool) {
-    let mut heap: BinaryHeap<(chrono::DateTime<chrono::FixedOffset>, Commit)> = BinaryHeap::new();
+    // Pre-split the pathspec once; `None` walks the full history unfiltered.
+    let path_components: Option<Vec<&str>> =
+        path.map(|p| p.split('/').filter(|s| !s.is_empty()).collect());
+
+    // The frontier is ordered by commit time (newest first), tie-broken by id;
+    // nodes carry only an id, with metadata memoised in `meta`.
+    let mut heap: BinaryHeap<(i64, ObjectId)> = BinaryHeap::new();
     let mut visited: BTreeSet<ObjectId> = BTreeSet::new();
-    heap.push((head_commit.commit_date(), head_commit.clone()));
-    visited.insert(head_commit.id());
+    let mut meta: BTreeMap<ObjectId, Rc<WalkNode>> = BTreeMap::new();
+    let mut stats = WalkStats::default();
 
-    let mut count = 0usize;
-    let mut commits: Vec<CommitRow> = Vec::new();
+    // Filtered walks scan all of history (and need Bloom filters), so they pull
+    // the whole graph; unfiltered walks stop after a page and read it lazily.
+    let bulk = path_components.is_some();
+
+    if let Some(node) =
+        ensure_node(repo, &mut meta, head_commit.id(), Some(head_commit), &mut stats, bulk).await
+    {
+        heap.push((node.time, head_commit.id()));
+        visited.insert(head_commit.id());
+    }
+
+    // Collect the ids of matching commits in order. We need `skip + limit` to
+    // fill the page, plus the detection of one more to know whether a next page
+    // exists.
+    let want = skip + limit;
+    let mut matched: Vec<ObjectId> = Vec::new();
     let mut has_more = false;
-    // Ids whose objects we've already issued a (concurrent) prefetch for, so we
-    // don't re-request them on later iterations.
-    let mut prefetched: BTreeSet<ObjectId> = BTreeSet::new();
+    let mut traversed = 0usize;
 
-    while !heap.is_empty() {
-        // Look-ahead: concurrently fetch the parent objects of every commit
-        // currently on the frontier, warming the cache so the `lookup_parents`
-        // calls below resolve without further round-trips. This only populates
-        // the cache — emission order is still driven solely by the heap, so the
-        // output is identical to a purely sequential walk. A linear history has
-        // a frontier of one and sees no benefit (it is inherently sequential);
-        // merges and parallel branches are fetched as wide as the frontier.
-        if commits.len() < limit {
-            let to_prefetch: Vec<ObjectId> = heap
-                .iter()
-                .flat_map(|(_, commit)| commit.parents().iter().copied())
-                .filter(|id| !visited.contains(id) && prefetched.insert(*id))
-                .collect();
-            if !to_prefetch.is_empty() {
-                futures::future::join_all(to_prefetch.iter().map(|id| repo.lookup_object(*id)))
-                    .await;
+    match &path_components {
+        // Unfiltered: every traversed commit matches; pure in-memory traversal.
+        None => {
+            while let Some((_, id)) = heap.pop() {
+                traversed += 1;
+                let node = meta.get(&id).map(Rc::clone).unwrap();
+                if matched.len() == want {
+                    has_more = true;
+                    break;
+                }
+                matched.push(id);
+                for parent in node.parents.iter().copied() {
+                    if visited.insert(parent)
+                        && let Some(parent_node) =
+                            ensure_node(repo, &mut meta, parent, None, &mut stats, bulk).await
+                    {
+                        heap.push((parent_node.time, parent));
+                    }
+                }
             }
         }
-
-        let (_, current) = heap.pop().unwrap();
-        if count >= skip && commits.len() < limit {
-            let hash = format!("{}", current.id());
-            commits.push(CommitRow {
-                short_hash: hash[..8].to_string(),
-                hash,
-                message: commit_first_line(current.message()),
-                author: String::from_utf8_lossy(current.author_name()).into_owned(),
-                age: Age::new(&current.author_date()),
-                refs: decorations.get(&current.id()).cloned().unwrap_or_default(),
-            });
-        } else if commits.len() == limit {
-            has_more = true;
-            break;
+        // Filtered: traverse in memory to gather Bloom candidates in order, then
+        // confirm them with tree diffs in concurrent batches.
+        Some(components) => {
+            let path_str = path.unwrap_or("");
+            let mut pending: Vec<ConfirmTask> = Vec::new();
+            'outer: loop {
+                // Refill the candidate buffer by traversing (in-memory) commits,
+                // enqueueing parents and Bloom-skipping non-matches as we go.
+                while pending.len() < CONFIRM_BATCH {
+                    let Some((_, id)) = heap.pop() else { break };
+                    traversed += 1;
+                    let node = meta.get(&id).map(Rc::clone).unwrap();
+                    let mut parent_trees = Vec::with_capacity(node.parents.len());
+                    for parent in node.parents.iter().copied() {
+                        if let Some(parent_node) =
+                            ensure_node(repo, &mut meta, parent, None, &mut stats, bulk).await
+                        {
+                            if visited.insert(parent) {
+                                heap.push((parent_node.time, parent));
+                            }
+                            parent_trees.push(parent_node.tree);
+                        }
+                    }
+                    if node.parents.is_empty() {
+                        pending.push(ConfirmTask {
+                            id,
+                            tree: node.tree,
+                            parent_trees,
+                            root: true,
+                        });
+                    } else if repo.graph_path_unchanged(node.bloom.as_deref(), path_str) {
+                        stats.bloom_skips += 1;
+                    } else {
+                        pending.push(ConfirmTask {
+                            id,
+                            tree: node.tree,
+                            parent_trees,
+                            root: false,
+                        });
+                    }
+                }
+                if pending.is_empty() {
+                    break;
+                }
+                let batch_len = pending.len().min(CONFIRM_BATCH);
+                let batch: Vec<ConfirmTask> = pending.drain(..batch_len).collect();
+                stats.tree_diffs += batch.len();
+                let results = futures::future::join_all(
+                    batch.iter().map(|task| confirm_task(repo, task, components)),
+                )
+                .await;
+                for (task, is_match) in batch.iter().zip(results) {
+                    if is_match {
+                        if matched.len() == want {
+                            has_more = true;
+                            break 'outer;
+                        }
+                        matched.push(task.id);
+                    }
+                }
+            }
         }
-        count += 1;
+    }
 
-        let parents = match repo.lookup_parents(&current).await {
-            Ok(p) => p,
-            Err(_) => continue,
+    crate::console_log(&format!(
+        "webgit: log walk{}: traversed {traversed} commits \
+         (graph-meta {}, object-meta {}), filter: {} Bloom-skips / {} tree-diffs, \
+         showing {} rows{}",
+        path.map(|p| format!(" [{p}]")).unwrap_or_default(),
+        stats.graph_meta_hits,
+        stats.object_meta_fallbacks,
+        stats.bloom_skips,
+        stats.tree_diffs,
+        matched.len().saturating_sub(skip).min(limit),
+        if has_more { " (more pages)" } else { "" },
+    ));
+
+    // Fetch objects only for the commits actually shown — at most `limit` — and
+    // concurrently, since their order is already fixed.
+    let window: Vec<ObjectId> = matched.into_iter().skip(skip).take(limit).collect();
+    let objects =
+        futures::future::join_all(window.iter().map(|id| repo.lookup_object(*id))).await;
+
+    let mut commits: Vec<CommitRow> = Vec::with_capacity(window.len());
+    for (id, object) in window.iter().zip(objects) {
+        let Some(commit) = object.ok().and_then(|o| o.commit().ok()) else {
+            continue;
         };
-        for parent in parents {
-            if visited.insert(parent.id()) {
-                heap.push((parent.commit_date(), parent));
-            }
-        }
+        let hash = format!("{id}");
+        commits.push(CommitRow {
+            short_hash: hash[..8].to_string(),
+            hash,
+            message: commit_first_line(commit.message()),
+            author: String::from_utf8_lossy(commit.author_name()).into_owned(),
+            age: Age::new(&commit.author_date()),
+            refs: decorations.get(id).cloned().unwrap_or_default(),
+        });
     }
 
     (commits, has_more)

@@ -12,16 +12,18 @@ const PAGE_SIZE: usize = 50;
 async fn build_log(
     head_commit: &Commit,
     repo: &CachingRepo,
+    path: &str,
     offset: usize,
     head: Option<&str>,
 ) -> LogTemplate {
     let decorations = decoration_map(repo).await;
+    let path_filter = (!path.is_empty()).then_some(path);
     let (commits, has_next) =
-        walk_commits(head_commit, repo, offset, PAGE_SIZE, &decorations).await;
+        walk_commits(head_commit, repo, path_filter, offset, PAGE_SIZE, &decorations).await;
     LogTemplate {
         commits,
-        prev_url: (offset > 0).then(|| log_url(offset.saturating_sub(PAGE_SIZE), head)),
-        next_url: has_next.then(|| log_url(offset + PAGE_SIZE, head)),
+        prev_url: (offset > 0).then(|| log_url(path, offset.saturating_sub(PAGE_SIZE), head)),
+        next_url: has_next.then(|| log_url(path, offset + PAGE_SIZE, head)),
     }
 }
 
@@ -36,11 +38,12 @@ pub(crate) async fn render_log(
     tera: &Tera,
     head_commit: &Commit,
     repo: &CachingRepo,
+    path: &str,
     offset: usize,
     head: Option<&str>,
     output: &web_sys::Element,
 ) -> anyhow::Result<()> {
-    let template = build_log(head_commit, repo, offset, head).await;
+    let template = build_log(head_commit, repo, path, offset, head).await;
     render_template(tera, "log.html", &template, output)
 }
 
@@ -68,8 +71,8 @@ mod tests {
                     fixtures::relative_age(86400 * 3),
                 ),
             ],
-            prev_url: Some(log_url(0, Some("main"))),
-            next_url: Some(log_url(100, Some("main"))),
+            prev_url: Some(log_url("", 0, Some("main"))),
+            next_url: Some(log_url("", 100, Some("main"))),
         };
         insta::assert_snapshot!(render_to_string(&init_tera(), "log.html", &template).unwrap());
     }

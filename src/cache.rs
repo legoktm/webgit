@@ -1,5 +1,6 @@
 use crate::fs::HttpFilesystem;
 use git_async::Repo;
+use git_async::commit_graph::bloom::{BloomSettings, path_maybe_changed};
 use git_async::diff::TreeDiff;
 use git_async::error::{Error as GitError, GResult};
 use git_async::object::{Commit, Object, ObjectId, ObjectType, RawObject, Tree};
@@ -13,9 +14,23 @@ use wasm_bindgen_futures::JsFuture;
 use web_sys::{IdbDatabase, IdbOpenDbRequest, IdbRequest, IdbTransactionMode};
 
 const DB_NAME: &str = "webgit";
-const DB_VERSION: u32 = 4;
+const DB_VERSION: u32 = 5;
 const STORE_OBJECTS: &str = "objects";
 const STORE_TAG_REFS: &str = "tag_refs";
+/// Per-commit commit-graph records, keyed by `"{repo_url}::{oid}"`. Content is a
+/// pure function of the commit, so these are immutable and survive the server
+/// regenerating its commit-graph (only genuinely new commits are ever missing).
+const STORE_GRAPH: &str = "graph";
+
+/// What the history walk needs about one commit, derived from the commit-graph
+/// and cached per OID. `bloom` is the changed-path filter (`None` ⇒ treat as
+/// "maybe", i.e. fall back to a real diff).
+pub(crate) struct GraphRecord {
+    pub(crate) tree: ObjectId,
+    pub(crate) parents: Vec<ObjectId>,
+    pub(crate) commit_time: i64,
+    pub(crate) bloom: Option<Vec<u8>>,
+}
 
 // ---------------------------------------------------------------------------
 // CachingRepo
@@ -33,6 +48,15 @@ pub(crate) struct CachingRepo {
     repo_url: String,
     /// Refs resolved once per session; navigation reuses the same snapshot.
     all_refs: RefCell<Option<Rc<BTreeMap<RefName, RefEntry>>>>,
+    /// Changed-path Bloom settings of the commit-graph, and a numeric tag
+    /// derived from them. Cached filter bytes are only trusted when their stored
+    /// tag matches, so a settings change can never produce a false negative.
+    graph_settings: Option<BloomSettings>,
+    graph_tag: f64,
+    /// In-memory per-commit graph records for this session, loaded once from
+    /// IndexedDB (or, on an empty cache, from a single bulk fetch of the file).
+    graph: RefCell<BTreeMap<ObjectId, Rc<GraphRecord>>>,
+    graph_loaded: RefCell<bool>,
 }
 
 impl CachingRepo {
@@ -46,11 +70,17 @@ impl CachingRepo {
                 );
             })
             .ok();
+        let graph_settings = inner.commit_graph().and_then(|g| g.bloom_settings());
+        let graph_tag = graph_settings.map_or(0.0, settings_tag);
         Self {
             inner,
             db,
             repo_url,
             all_refs: RefCell::new(None),
+            graph_settings,
+            graph_tag,
+            graph: RefCell::new(BTreeMap::new()),
+            graph_loaded: RefCell::new(false),
         }
     }
 
@@ -101,6 +131,135 @@ impl CachingRepo {
         }
     }
 
+    // --- Commit-graph accelerators ------------------------------------------
+    // These consult the commit-graph cache (if any) so a history walk can get a
+    // commit's tree/parents/time and a path's change verdict without fetching
+    // and parsing the commit object or its trees. A `None`/`false` result means
+    // "graph can't answer", and the caller falls back to reading objects.
+
+    /// `(commit count, has changed-path filters)` for the repository's
+    /// commit-graph, or `None` if it has none. For startup logging/diagnostics.
+    pub(crate) fn commit_graph_info(&self) -> Option<(u32, bool)> {
+        self.inner
+            .commit_graph()
+            .map(|g| (g.num_commits(), g.has_bloom()))
+    }
+
+    /// A commit's graph record, or `None` if the repository has no commit-graph
+    /// or the commit isn't in it (the walk then falls back to the object).
+    ///
+    /// Served from the in-memory session map (populated once from IndexedDB, or
+    /// by a single bulk fetch when the cache is empty). A genuinely new commit —
+    /// one pushed since the cache was seeded — is resolved with a small range
+    /// read of the live file and then cached in memory and IndexedDB.
+    pub(crate) async fn graph_record(&self, id: ObjectId) -> Option<Rc<GraphRecord>> {
+        self.ensure_graph_loaded().await;
+        if let Some(rec) = self.graph.borrow().get(&id) {
+            return Some(Rc::clone(rec));
+        }
+        let (entry, bloom) = self.inner.commit_graph()?.record(id).await.ok().flatten()?;
+        let rec = Rc::new(GraphRecord {
+            tree: entry.tree,
+            parents: entry.parents,
+            commit_time: entry.commit_time,
+            bloom,
+        });
+        self.graph.borrow_mut().insert(id, Rc::clone(&rec));
+        self.idb_set_graph(id, &rec);
+        Some(rec)
+    }
+
+    /// Like [`graph_record`](Self::graph_record) but never triggers the
+    /// whole-file bulk load. It serves from the in-memory session map (which a
+    /// prior per-file walk may already have populated in full) and otherwise
+    /// does a single targeted read of just this commit's record.
+    ///
+    /// Used by the unfiltered log walk (plain log / summary), which stops after
+    /// one page of commits and so must not pull the entire graph just to show
+    /// the latest few. It deliberately does **not** persist to IndexedDB: the
+    /// bulk loader treats a non-empty store as "fully seeded", so writing
+    /// isolated records here would make a later per-file walk skip the bulk load
+    /// and miss most of history.
+    pub(crate) async fn graph_record_lazy(&self, id: ObjectId) -> Option<Rc<GraphRecord>> {
+        if let Some(rec) = self.graph.borrow().get(&id) {
+            return Some(Rc::clone(rec));
+        }
+        let (entry, bloom) = self.inner.commit_graph()?.record(id).await.ok().flatten()?;
+        let rec = Rc::new(GraphRecord {
+            tree: entry.tree,
+            parents: entry.parents,
+            commit_time: entry.commit_time,
+            bloom,
+        });
+        self.graph.borrow_mut().insert(id, Rc::clone(&rec));
+        Some(rec)
+    }
+
+    /// Whether `bloom` (a commit's changed-path filter) definitively says the
+    /// path did not change. `false` means "unknown" — no filter or a possible
+    /// match — so the caller must diff.
+    pub(crate) fn graph_path_unchanged(&self, bloom: Option<&[u8]>, path: &str) -> bool {
+        let (Some(bytes), Some(settings)) = (bloom, self.graph_settings) else {
+            return false;
+        };
+        !path_maybe_changed(bytes, &settings, path.as_bytes())
+    }
+
+    /// Populate the in-memory graph map once per session. Prefers the persisted
+    /// per-commit records; if there are none (cold cache), bulk-loads the whole
+    /// commit-graph in one request and persists every commit for next time.
+    async fn ensure_graph_loaded(&self) {
+        if *self.graph_loaded.borrow() {
+            return;
+        }
+        // Set before awaiting so a re-entrant call doesn't double-load; the walk
+        // is sequential, so this just guards against pathological interleavings.
+        *self.graph_loaded.borrow_mut() = true;
+
+        let Some(cg) = self.inner.commit_graph() else {
+            return;
+        };
+
+        let cached = self.idb_get_all_graph().await;
+        if !cached.is_empty() {
+            crate::console_log(&format!(
+                "webgit: commit-graph: loaded {} cached commit records from IndexedDB",
+                cached.len()
+            ));
+            let mut map = self.graph.borrow_mut();
+            for (id, rec) in cached {
+                map.insert(id, Rc::new(rec));
+            }
+            return;
+        }
+
+        if cg.num_commits() == 0 {
+            return;
+        }
+        crate::console_log(&format!(
+            "webgit: commit-graph: cache empty, bulk-loading whole file ({} commits)",
+            cg.num_commits()
+        ));
+        let Ok(records) = cg.all_records().await else {
+            return;
+        };
+        {
+            let mut map = self.graph.borrow_mut();
+            for (id, entry, bloom) in &records {
+                map.insert(
+                    *id,
+                    Rc::new(GraphRecord {
+                        tree: entry.tree,
+                        parents: entry.parents.clone(),
+                        commit_time: entry.commit_time,
+                        bloom: bloom.clone(),
+                    }),
+                );
+            }
+        }
+        self.idb_bulk_put_graph(&records);
+    }
+
     pub(crate) async fn lookup_parents(&self, commit: &Commit) -> GResult<Vec<Commit>> {
         // Fetch a (merge) commit's parents concurrently rather than serially.
         let results =
@@ -138,9 +297,19 @@ impl CachingRepo {
 
     pub(crate) async fn clear_cache(&self, target: ClearTarget) {
         match target {
-            ClearTarget::RepoObjects => self.clear_store_by_prefix(STORE_OBJECTS).await,
-            ClearTarget::AllObjects => self.clear_store(STORE_OBJECTS).await,
+            ClearTarget::RepoObjects => {
+                self.clear_store_by_prefix(STORE_OBJECTS).await;
+                self.clear_store_by_prefix(STORE_GRAPH).await;
+            }
+            ClearTarget::AllObjects => {
+                self.clear_store(STORE_OBJECTS).await;
+                self.clear_store(STORE_GRAPH).await;
+            }
         }
+        // Drop the in-memory graph so the next walk re-seeds from the (now empty)
+        // store, bulk-loading the file again.
+        self.graph.borrow_mut().clear();
+        *self.graph_loaded.borrow_mut() = false;
     }
 
     async fn clear_store(&self, store_name: &str) {
@@ -303,6 +472,166 @@ impl CachingRepo {
 
         store.put(&record).ok();
     }
+
+    // --- Commit-graph store helpers ------------------------------------------
+
+    /// Load every persisted graph record for this repo (one `getAll`). Records
+    /// whose Bloom-settings tag no longer matches keep their (immutable)
+    /// metadata but drop the filter, so a settings change can't mislead.
+    async fn idb_get_all_graph(&self) -> Vec<(ObjectId, GraphRecord)> {
+        let mut out = Vec::new();
+        let Some(db) = self.db.as_ref() else {
+            return out;
+        };
+        let Ok(tx) = db.transaction_with_str(STORE_GRAPH) else {
+            return out;
+        };
+        let Ok(store) = tx.object_store(STORE_GRAPH) else {
+            return out;
+        };
+        let Ok(req) = store.get_all() else {
+            return out;
+        };
+        let Ok(result) = await_request(&req).await else {
+            return out;
+        };
+        let arr = js_sys::Array::from(&result);
+        let prefix = format!("{}::", self.repo_url);
+        for i in 0..arr.length() {
+            let record = arr.get(i);
+            let Some(key) = js_sys::Reflect::get(&record, &"id".into())
+                .ok()
+                .and_then(|v| v.as_string())
+            else {
+                continue;
+            };
+            let Some(hex) = key.strip_prefix(&prefix) else {
+                continue;
+            };
+            let Some(id) = ObjectId::from_hex(hex.as_bytes()) else {
+                continue;
+            };
+            let Some(rec) = self.parse_graph_record(&record) else {
+                continue;
+            };
+            out.push((id, rec));
+        }
+        out
+    }
+
+    fn parse_graph_record(&self, record: &JsValue) -> Option<GraphRecord> {
+        let tree = oid_from_bytes(&get_bytes(record, "tree")?)?;
+        let parents = get_bytes(record, "parents")
+            .unwrap_or_default()
+            .chunks_exact(20)
+            .filter_map(oid_from_bytes)
+            .collect();
+        let commit_time = get_number(record, "time")? as i64;
+        let tag = get_number(record, "tag").unwrap_or(f64::NAN);
+        // Only trust the filter if it was written under the current settings.
+        let bloom = (tag == self.graph_tag)
+            .then(|| get_bytes(record, "bloom"))
+            .flatten();
+        Some(GraphRecord {
+            tree,
+            parents,
+            commit_time,
+            bloom,
+        })
+    }
+
+    /// Queue a single graph record write (fire-and-forget, like [`Self::idb_set`]).
+    fn idb_set_graph(&self, id: ObjectId, rec: &GraphRecord) {
+        let Some(db) = self.db.as_ref() else { return };
+        let Ok(tx) = db.transaction_with_str_and_mode(STORE_GRAPH, IdbTransactionMode::Readwrite)
+        else {
+            return;
+        };
+        let Ok(store) = tx.object_store(STORE_GRAPH) else {
+            return;
+        };
+        let js = self.build_graph_js(id, rec.tree, &rec.parents, rec.commit_time, rec.bloom.as_deref());
+        store.put(&js).ok();
+    }
+
+    /// Persist every commit's record in one transaction, without awaiting it.
+    /// The in-memory map is already populated for this session, so the walk need
+    /// not wait; IndexedDB keeps the transaction alive until the queued writes
+    /// commit on their own (for the next session).
+    fn idb_bulk_put_graph(
+        &self,
+        records: &[(ObjectId, git_async::commit_graph::CommitGraphEntry, Option<Vec<u8>>)],
+    ) {
+        let Some(db) = self.db.as_ref() else { return };
+        let Ok(tx) = db.transaction_with_str_and_mode(STORE_GRAPH, IdbTransactionMode::Readwrite)
+        else {
+            return;
+        };
+        let Ok(store) = tx.object_store(STORE_GRAPH) else {
+            return;
+        };
+        for (id, entry, bloom) in records {
+            let js =
+                self.build_graph_js(*id, entry.tree, &entry.parents, entry.commit_time, bloom.as_deref());
+            store.put(&js).ok();
+        }
+    }
+
+    fn build_graph_js(
+        &self,
+        id: ObjectId,
+        tree: ObjectId,
+        parents: &[ObjectId],
+        commit_time: i64,
+        bloom: Option<&[u8]>,
+    ) -> js_sys::Object {
+        let record = js_sys::Object::new();
+        let key = format!("{}::{}", self.repo_url, id);
+        set_field(&record, "id", &JsValue::from_str(&key));
+        set_field(&record, "tree", &bytes_to_buf(tree.bytes()));
+        let mut parent_bytes = Vec::with_capacity(parents.len() * 20);
+        for p in parents {
+            parent_bytes.extend_from_slice(p.bytes());
+        }
+        set_field(&record, "parents", &bytes_to_buf(&parent_bytes));
+        set_field(&record, "time", &JsValue::from_f64(commit_time as f64));
+        match bloom {
+            Some(bytes) => set_field(&record, "bloom", &bytes_to_buf(bytes)),
+            None => set_field(&record, "bloom", &JsValue::NULL),
+        }
+        set_field(&record, "tag", &JsValue::from_f64(self.graph_tag));
+        record
+    }
+}
+
+/// A numeric fingerprint of the Bloom settings, stored beside each filter so a
+/// settings change invalidates only the filters (not the metadata).
+fn settings_tag(s: BloomSettings) -> f64 {
+    f64::from((s.hash_version & 0xff) | ((s.num_hashes & 0xff) << 8) | ((s.bits_per_entry & 0xffff) << 16))
+}
+
+fn set_field(obj: &js_sys::Object, key: &str, value: &JsValue) {
+    js_sys::Reflect::set(obj, &JsValue::from_str(key), value).ok();
+}
+
+fn bytes_to_buf(bytes: &[u8]) -> JsValue {
+    js_sys::Uint8Array::from(bytes).buffer().into()
+}
+
+fn get_bytes(record: &JsValue, key: &str) -> Option<Vec<u8>> {
+    let value = js_sys::Reflect::get(record, &JsValue::from_str(key)).ok()?;
+    if value.is_undefined() || value.is_null() {
+        return None;
+    }
+    Some(js_sys::Uint8Array::new(&value).to_vec())
+}
+
+fn get_number(record: &JsValue, key: &str) -> Option<f64> {
+    js_sys::Reflect::get(record, &JsValue::from_str(key)).ok()?.as_f64()
+}
+
+fn oid_from_bytes(bytes: &[u8]) -> Option<ObjectId> {
+    Some(ObjectId::from_bytes(<[u8; 20]>::try_from(bytes).ok()?))
 }
 
 // ---------------------------------------------------------------------------
@@ -363,6 +692,14 @@ async fn open_db() -> Result<IdbDatabase, JsValue> {
                 if (2..4).contains(&old) {
                     db.delete_object_store(STORE_TAG_REFS).ok();
                 }
+            }
+            if old < 5 {
+                // Per-commit commit-graph records (metadata + changed-path Bloom
+                // filter), keyed like objects by "{repo_url}::{oid}".
+                let params = web_sys::IdbObjectStoreParameters::new();
+                params.set_key_path(&JsValue::from_str("id"));
+                db.create_object_store_with_optional_parameters(STORE_GRAPH, &params)
+                    .ok();
             }
         },
     );

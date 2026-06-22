@@ -78,6 +78,7 @@ extern crate std;
 
 extern crate alloc;
 
+pub mod commit_graph;
 #[cfg(feature = "diff")]
 pub mod diff;
 pub mod error;

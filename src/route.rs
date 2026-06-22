@@ -46,7 +46,7 @@ fn hide_path_bar(doc: &Document) {
         .unwrap();
 }
 
-fn update_nav_for_head(doc: &Document, head: Option<&str>) {
+fn update_nav_for_head(doc: &Document, head: Option<&str>, path: &str) {
     let tabs = doc.query_selector_all("#nav a").unwrap();
     for i in 0..tabs.length() {
         let Some(node) = tabs.get(i) else { continue };
@@ -54,13 +54,20 @@ fn update_nav_for_head(doc: &Document, head: Option<&str>) {
             continue;
         };
         let href = el.get_attribute("href").unwrap_or_default();
+        // The href may already carry a path/query from a previous render
+        // (e.g. "#!/log/src?h=main"); reduce it to its tab root first.
         let base = href.split('?').next().unwrap_or(&href);
-        let new_href = match (base, head) {
-            ("#!/log", Some(h)) => format!("#!/log?h={h}"),
-            ("#!/log", None) => "#!/log".to_string(),
-            ("#!/tree", Some(h)) => format!("#!/tree?h={h}"),
-            ("#!/tree", None) => "#!/tree".to_string(),
-            _ => continue,
+        let new_href = if base == "#!/log" || base.starts_with("#!/log/") {
+            // Scope the log tab to whatever path is currently being viewed, so
+            // clicking "log" from a subtree shows that subtree's history.
+            log_url(path, 0, head)
+        } else if base == "#!/tree" || base.starts_with("#!/tree/") {
+            match head {
+                Some(h) => format!("#!/tree?h={h}"),
+                None => "#!/tree".to_string(),
+            }
+        } else {
+            continue;
         };
         el.set_attribute("href", &new_href).ok();
     }
@@ -159,7 +166,11 @@ pub(crate) enum RefsRoute {
 pub(crate) enum Route {
     About,
     Summary,
-    Log { offset: usize, head: Option<String> },
+    Log {
+        offset: usize,
+        head: Option<String>,
+        path: String,
+    },
     CommitHead,
     Commit(String),
     Refs(RefsRoute),
@@ -176,19 +187,17 @@ pub(crate) fn parse_hash(hash: &str) -> Route {
     }
 
     if let Some(rest) = hash.strip_prefix("#!/log") {
-        if rest.is_empty() {
-            return Route::Log {
-                offset: 0,
-                head: None,
-            };
-        }
-        if let Some(query_string) = rest.strip_prefix('?') {
-            let (offset, head) = parse_log_query(query_string);
-            return Route::Log { offset, head };
-        }
+        // rest is one of: "", "?query", "/path", or "/path?query".
+        let (path_part, query_string) = match rest.find('?') {
+            Some(i) => (&rest[..i], &rest[i + 1..]),
+            None => (rest, ""),
+        };
+        let path = path_part.trim_start_matches('/').to_string();
+        let (offset, head) = parse_log_query(query_string);
         return Route::Log {
-            offset: 0,
-            head: None,
+            offset,
+            head,
+            path,
         };
     }
 
@@ -309,7 +318,11 @@ async fn try_handle_route(
         Route::Log { head, .. } | Route::Tree { head, .. } => head.as_deref(),
         _ => None,
     };
-    update_nav_for_head(doc, head);
+    let nav_path = match &route {
+        Route::Log { path, .. } | Route::Tree { path, .. } => path.as_str(),
+        _ => "",
+    };
+    update_nav_for_head(doc, head, nav_path);
     match route {
         Route::About => {
             hide_path_bar(doc);
@@ -322,7 +335,11 @@ async fn try_handle_route(
             set_active_tab(doc, "#!/summary");
             render_summary(tera, head_commit, repo, clone_url, output).await?;
         }
-        Route::Log { offset, head } => {
+        Route::Log {
+            offset,
+            head,
+            path,
+        } => {
             set_active_tab(doc, "#!/log");
             let (resolved, display_head): (
                 Option<git_async::object::Commit>,
@@ -335,19 +352,27 @@ async fn try_handle_route(
                 (None, implicit.map(|n| (n, RefKind::Branch)))
             };
             let log_commit = resolved.as_ref().unwrap_or(head_commit);
-            if let Some((ref name, ref kind)) = display_head {
-                let label = match kind {
-                    RefKind::Tag => "tag",
-                    RefKind::Branch => "branch",
-                };
-                doc.get_element_by_id("path-bar")
-                    .unwrap()
-                    .set_inner_html(&format!("{label}: {name}"));
-                show(doc, "path-bar");
+            let display = display_head.as_ref().map(|(n, k)| (n.as_str(), k));
+            if path.is_empty() {
+                // Whole-history log: just label the ref, if any.
+                if let Some((name, kind)) = display {
+                    let label = match kind {
+                        RefKind::Tag => "tag",
+                        RefKind::Branch => "branch",
+                    };
+                    doc.get_element_by_id("path-bar")
+                        .unwrap()
+                        .set_inner_html(&format!("{label}: {name}"));
+                    show(doc, "path-bar");
+                } else {
+                    hide_path_bar(doc);
+                }
             } else {
-                hide_path_bar(doc);
+                // Path-scoped log: show the same breadcrumb the tree view uses.
+                update_path_bar(doc, &path, head.as_deref(), display);
+                show(doc, "path-bar");
             }
-            render_log(tera, log_commit, repo, offset, head.as_deref(), output).await?;
+            render_log(tera, log_commit, repo, &path, offset, head.as_deref(), output).await?;
         }
         Route::CommitHead => {
             hide_path_bar(doc);
@@ -469,12 +494,17 @@ fn attach_about_handlers(
     }
 }
 
-pub(crate) fn log_url(offset: usize, head: Option<&str>) -> String {
+pub(crate) fn log_url(path: &str, offset: usize, head: Option<&str>) -> String {
+    let base = if path.is_empty() {
+        "#!/log".to_string()
+    } else {
+        format!("#!/log/{path}")
+    };
     match (offset, head) {
-        (0, None) => "#!/log".to_string(),
-        (n, None) => format!("#!/log?offset={n}"),
-        (0, Some(head)) => format!("#!/log?h={head}"),
-        (n, Some(head)) => format!("#!/log?h={head}&offset={n}"),
+        (0, None) => base,
+        (n, None) => format!("{base}?offset={n}"),
+        (0, Some(head)) => format!("{base}?h={head}"),
+        (n, Some(head)) => format!("{base}?h={head}&offset={n}"),
     }
 }
 
@@ -500,8 +530,9 @@ mod tests {
             parse_hash("#!/log"),
             Route::Log {
                 offset: 0,
-                head: None
-            }
+                head: None,
+                path,
+            } if path.is_empty()
         ));
     }
 
@@ -512,14 +543,18 @@ mod tests {
             route,
             Route::Log {
                 offset: 0,
-                head: Some(_)
+                head: Some(_),
+                ..
             }
         ));
         if let Route::Log {
-            head: Some(head), ..
+            head: Some(head),
+            path,
+            ..
         } = route
         {
             assert_eq!(head, "main");
+            assert!(path.is_empty());
         }
     }
 
@@ -529,6 +564,7 @@ mod tests {
         if let Route::Log {
             offset,
             head: Some(head),
+            ..
         } = route
         {
             assert_eq!(head, "stable");
@@ -545,7 +581,8 @@ mod tests {
             route,
             Route::Log {
                 offset: 50,
-                head: None
+                head: None,
+                ..
             }
         ));
     }
@@ -557,9 +594,40 @@ mod tests {
             route,
             Route::Log {
                 offset: 0,
-                head: None
+                head: None,
+                ..
             }
         ));
+    }
+
+    #[test]
+    fn test_parse_hash_log_path() {
+        let route = parse_hash("#!/log/src/route.rs");
+        assert!(matches!(
+            route,
+            Route::Log {
+                offset: 0,
+                head: None,
+                path,
+            } if path == "src/route.rs"
+        ));
+    }
+
+    #[test]
+    fn test_parse_hash_log_path_with_head_and_offset() {
+        let route = parse_hash("#!/log/src?h=main&offset=50");
+        if let Route::Log {
+            offset,
+            head: Some(head),
+            path,
+        } = route
+        {
+            assert_eq!(offset, 50);
+            assert_eq!(head, "main");
+            assert_eq!(path, "src");
+        } else {
+            panic!("expected Log with path, head and offset");
+        }
     }
 
     #[test]
@@ -611,9 +679,14 @@ mod tests {
 
     #[test]
     fn test_log_url() {
-        assert_eq!(log_url(0, None), "#!/log");
-        assert_eq!(log_url(50, None), "#!/log?offset=50");
-        assert_eq!(log_url(0, Some("main")), "#!/log?h=main");
-        assert_eq!(log_url(100, Some("stable")), "#!/log?h=stable&offset=100");
+        assert_eq!(log_url("", 0, None), "#!/log");
+        assert_eq!(log_url("", 50, None), "#!/log?offset=50");
+        assert_eq!(log_url("", 0, Some("main")), "#!/log?h=main");
+        assert_eq!(log_url("", 100, Some("stable")), "#!/log?h=stable&offset=100");
+        assert_eq!(log_url("src/route.rs", 0, None), "#!/log/src/route.rs");
+        assert_eq!(
+            log_url("src", 50, Some("main")),
+            "#!/log/src?h=main&offset=50"
+        );
     }
 }

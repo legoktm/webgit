@@ -46,7 +46,7 @@ async fn build_summary(
     let (branches, tags, (commits, _)) = futures::join!(
         fetch_ref_rows(&branches, repo),
         fetch_ref_rows(&tags, repo),
-        walk_commits(head_commit, repo, 0, 10, &decorations),
+        walk_commits(head_commit, repo, None, 0, 10, &decorations),
     );
 
     SummaryTemplate {

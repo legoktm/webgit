@@ -45,6 +45,11 @@ run `git update-server-info` in each.
 
 I merely rsync the repositories from Forgejo's storage to my webserver and it seems to work fine.
 
+#### Commit Graph
+
+To optimize looking up the `git log` for specific paths, you should generate a "commit-graph" file
+by running `git commit-graph write --reachable --changed-paths`.
+
 ### Index listing
 
 You'll need to create a `/listing.json` file that contains a JSON array of paths to repositories.
