@@ -269,16 +269,12 @@ dependencies = [
  "futures",
  "hex",
  "hex-literal",
- "js-sys",
  "miniz_oxide",
  "nom",
  "rand_core",
  "rand_pcg",
  "similar 3.1.1",
  "tempfile",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
 ]
 
 [[package]]

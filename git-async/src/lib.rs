@@ -74,8 +74,6 @@ pub mod error;
 pub mod file_system;
 pub mod object;
 pub mod reference;
-#[cfg(feature = "web")]
-pub mod web;
 
 mod object_store;
 mod parsing;
