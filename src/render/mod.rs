@@ -467,8 +467,15 @@ pub(crate) async fn walk_commits(
     // the whole graph; unfiltered walks stop after a page and read it lazily.
     let bulk = path_components.is_some();
 
-    if let Some(node) =
-        ensure_node(repo, &mut meta, head_commit.id(), Some(head_commit), &mut stats, bulk).await
+    if let Some(node) = ensure_node(
+        repo,
+        &mut meta,
+        head_commit.id(),
+        Some(head_commit),
+        &mut stats,
+        bulk,
+    )
+    .await
     {
         heap.push((node.time, head_commit.id()));
         visited.insert(head_commit.id());
@@ -551,7 +558,9 @@ pub(crate) async fn walk_commits(
                 let batch: Vec<ConfirmTask> = pending.drain(..batch_len).collect();
                 stats.tree_diffs += batch.len();
                 let results = futures::future::join_all(
-                    batch.iter().map(|task| confirm_task(repo, task, components)),
+                    batch
+                        .iter()
+                        .map(|task| confirm_task(repo, task, components)),
                 )
                 .await;
                 for (task, is_match) in batch.iter().zip(results) {
@@ -583,8 +592,7 @@ pub(crate) async fn walk_commits(
     // Fetch objects only for the commits actually shown — at most `limit` — and
     // concurrently, since their order is already fixed.
     let window: Vec<ObjectId> = matched.into_iter().skip(skip).take(limit).collect();
-    let objects =
-        futures::future::join_all(window.iter().map(|id| repo.lookup_object(*id))).await;
+    let objects = futures::future::join_all(window.iter().map(|id| repo.lookup_object(*id))).await;
 
     let mut commits: Vec<CommitRow> = Vec::with_capacity(window.len());
     for (id, object) in window.iter().zip(objects) {

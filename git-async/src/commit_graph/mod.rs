@@ -237,9 +237,7 @@ impl<F: FileSystem> CommitGraph<F> {
     /// file is warmed with a single read up front, so this issues ~one request
     /// regardless of commit count — the basis for seeding a persistent per-commit
     /// cache.
-    pub async fn all_records(
-        &self,
-    ) -> GResult<Vec<(ObjectId, CommitGraphEntry, Option<Vec<u8>>)>> {
+    pub async fn all_records(&self) -> GResult<Vec<(ObjectId, CommitGraphEntry, Option<Vec<u8>>)>> {
         let mut reader = self.reader().await?;
         // Warm the entire file in one read so the per-commit reads below are all
         // served from the page cache.
@@ -306,11 +304,7 @@ impl<F: FileSystem> CommitGraph<F> {
         Ok(None)
     }
 
-    async fn oid_at(
-        &self,
-        reader: &mut CachingPageReader<F::File>,
-        pos: u32,
-    ) -> GResult<ObjectId> {
+    async fn oid_at(&self, reader: &mut CachingPageReader<F::File>, pos: u32) -> GResult<ObjectId> {
         let buf: [u8; 20] = read_array(reader, self.oidl_offset + u64::from(pos) * OID_LEN).await?;
         Ok(ObjectId::from_bytes(buf))
     }
@@ -361,9 +355,8 @@ impl<F: FileSystem> CommitGraph<F> {
         let edge_offset = self.edge_offset.ok_or(Error::CorruptCommitGraph)?;
         let mut index = start;
         loop {
-            let raw = u32::from_be_bytes(
-                read_array(reader, edge_offset + u64::from(index) * 4).await?,
-            );
+            let raw =
+                u32::from_be_bytes(read_array(reader, edge_offset + u64::from(index) * 4).await?);
             parents.push(self.oid_at(reader, raw & GRAPH_POSITION_MASK).await?);
             if raw & GRAPH_EXTRA_EDGES != 0 {
                 return Ok(());
@@ -485,7 +478,18 @@ mod tests {
 
         repo.run_git(["commit-graph", "write", "--reachable", "--changed-paths"])
             .unwrap();
-        (repo, Oids { c2, c3, c4, c5, b1, b2, merge })
+        (
+            repo,
+            Oids {
+                c2,
+                c3,
+                c4,
+                c5,
+                b1,
+                b2,
+                merge,
+            },
+        )
     }
 
     fn graph(repo: &TestRepo) -> TestGraph {
@@ -505,7 +509,9 @@ mod tests {
         let backing = repo.repo();
         assert!(cg.has_bloom());
 
-        for id in [oids.c2, oids.c3, oids.c4, oids.c5, oids.b1, oids.b2, oids.merge] {
+        for id in [
+            oids.c2, oids.c3, oids.c4, oids.c5, oids.b1, oids.b2, oids.merge,
+        ] {
             let (_pos, entry) = block_on(cg.lookup(id)).unwrap().expect("in graph");
             let commit = block_on(backing.lookup_object(id))
                 .unwrap()
@@ -539,8 +545,11 @@ mod tests {
 
         // Each bulk record must agree with the single-commit lookup path.
         for id in [oids.c2, oids.c4, oids.merge] {
-            let (bulk_entry, bulk_bloom) =
-                records.iter().find(|(o, ..)| *o == id).map(|(_, e, b)| (e, b)).unwrap();
+            let (bulk_entry, bulk_bloom) = records
+                .iter()
+                .find(|(o, ..)| *o == id)
+                .map(|(_, e, b)| (e, b))
+                .unwrap();
             let (entry, bloom) = block_on(cg.record(id)).unwrap().unwrap();
             assert_eq!(bulk_entry.tree, entry.tree);
             assert_eq!(bulk_entry.parents, entry.parents);

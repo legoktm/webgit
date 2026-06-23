@@ -18,8 +18,15 @@ async fn build_log(
 ) -> LogTemplate {
     let decorations = decoration_map(repo).await;
     let path_filter = (!path.is_empty()).then_some(path);
-    let (commits, has_next) =
-        walk_commits(head_commit, repo, path_filter, offset, PAGE_SIZE, &decorations).await;
+    let (commits, has_next) = walk_commits(
+        head_commit,
+        repo,
+        path_filter,
+        offset,
+        PAGE_SIZE,
+        &decorations,
+    )
+    .await;
     LogTemplate {
         commits,
         prev_url: (offset > 0).then(|| log_url(path, offset.saturating_sub(PAGE_SIZE), head)),

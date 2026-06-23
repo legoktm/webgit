@@ -550,7 +550,13 @@ impl CachingRepo {
         let Ok(store) = tx.object_store(STORE_GRAPH) else {
             return;
         };
-        let js = self.build_graph_js(id, rec.tree, &rec.parents, rec.commit_time, rec.bloom.as_deref());
+        let js = self.build_graph_js(
+            id,
+            rec.tree,
+            &rec.parents,
+            rec.commit_time,
+            rec.bloom.as_deref(),
+        );
         store.put(&js).ok();
     }
 
@@ -560,7 +566,11 @@ impl CachingRepo {
     /// commit on their own (for the next session).
     fn idb_bulk_put_graph(
         &self,
-        records: &[(ObjectId, git_async::commit_graph::CommitGraphEntry, Option<Vec<u8>>)],
+        records: &[(
+            ObjectId,
+            git_async::commit_graph::CommitGraphEntry,
+            Option<Vec<u8>>,
+        )],
     ) {
         let Some(db) = self.db.as_ref() else { return };
         let Ok(tx) = db.transaction_with_str_and_mode(STORE_GRAPH, IdbTransactionMode::Readwrite)
@@ -571,8 +581,13 @@ impl CachingRepo {
             return;
         };
         for (id, entry, bloom) in records {
-            let js =
-                self.build_graph_js(*id, entry.tree, &entry.parents, entry.commit_time, bloom.as_deref());
+            let js = self.build_graph_js(
+                *id,
+                entry.tree,
+                &entry.parents,
+                entry.commit_time,
+                bloom.as_deref(),
+            );
             store.put(&js).ok();
         }
     }
@@ -607,7 +622,11 @@ impl CachingRepo {
 /// A numeric fingerprint of the Bloom settings, stored beside each filter so a
 /// settings change invalidates only the filters (not the metadata).
 fn settings_tag(s: BloomSettings) -> f64 {
-    f64::from((s.hash_version & 0xff) | ((s.num_hashes & 0xff) << 8) | ((s.bits_per_entry & 0xffff) << 16))
+    f64::from(
+        (s.hash_version & 0xff)
+            | ((s.num_hashes & 0xff) << 8)
+            | ((s.bits_per_entry & 0xffff) << 16),
+    )
 }
 
 fn set_field(obj: &js_sys::Object, key: &str, value: &JsValue) {
@@ -627,7 +646,9 @@ fn get_bytes(record: &JsValue, key: &str) -> Option<Vec<u8>> {
 }
 
 fn get_number(record: &JsValue, key: &str) -> Option<f64> {
-    js_sys::Reflect::get(record, &JsValue::from_str(key)).ok()?.as_f64()
+    js_sys::Reflect::get(record, &JsValue::from_str(key))
+        .ok()?
+        .as_f64()
 }
 
 fn oid_from_bytes(bytes: &[u8]) -> Option<ObjectId> {

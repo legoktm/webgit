@@ -174,7 +174,10 @@ pub(crate) enum Route {
     CommitHead,
     Commit(String),
     Refs(RefsRoute),
-    Tree { path: String, head: Option<String> },
+    Tree {
+        path: String,
+        head: Option<String>,
+    },
 }
 
 pub(crate) fn parse_hash(hash: &str) -> Route {
@@ -194,11 +197,7 @@ pub(crate) fn parse_hash(hash: &str) -> Route {
         };
         let path = path_part.trim_start_matches('/').to_string();
         let (offset, head) = parse_log_query(query_string);
-        return Route::Log {
-            offset,
-            head,
-            path,
-        };
+        return Route::Log { offset, head, path };
     }
 
     if hash == "#!/commit" {
@@ -335,11 +334,7 @@ async fn try_handle_route(
             set_active_tab(doc, "#!/summary");
             render_summary(tera, head_commit, repo, clone_url, output).await?;
         }
-        Route::Log {
-            offset,
-            head,
-            path,
-        } => {
+        Route::Log { offset, head, path } => {
             set_active_tab(doc, "#!/log");
             let (resolved, display_head): (
                 Option<git_async::object::Commit>,
@@ -372,7 +367,16 @@ async fn try_handle_route(
                 update_path_bar(doc, &path, head.as_deref(), display);
                 show(doc, "path-bar");
             }
-            render_log(tera, log_commit, repo, &path, offset, head.as_deref(), output).await?;
+            render_log(
+                tera,
+                log_commit,
+                repo,
+                &path,
+                offset,
+                head.as_deref(),
+                output,
+            )
+            .await?;
         }
         Route::CommitHead => {
             hide_path_bar(doc);
@@ -682,7 +686,10 @@ mod tests {
         assert_eq!(log_url("", 0, None), "#!/log");
         assert_eq!(log_url("", 50, None), "#!/log?offset=50");
         assert_eq!(log_url("", 0, Some("main")), "#!/log?h=main");
-        assert_eq!(log_url("", 100, Some("stable")), "#!/log?h=stable&offset=100");
+        assert_eq!(
+            log_url("", 100, Some("stable")),
+            "#!/log?h=stable&offset=100"
+        );
         assert_eq!(log_url("src/route.rs", 0, None), "#!/log/src/route.rs");
         assert_eq!(
             log_url("src", 50, Some("main")),
