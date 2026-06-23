@@ -63,18 +63,7 @@
 //!   `git diff` manages to be so fast, but I imagine it uses the packfile delta
 //!   encoding somehow to optimize diffing.
 
-#![cfg_attr(docsrs, feature(doc_cfg))]
-#![cfg_attr(doc, warn(missing_docs))]
-#![cfg_attr(not(test), no_std)]
-#![warn(clippy::pedantic)]
-#![allow(clippy::missing_errors_doc)]
-#![allow(clippy::enum_glob_use)]
-#![allow(clippy::must_use_candidate)]
-#![allow(clippy::missing_panics_doc)]
-#![cfg_attr(test, allow(clippy::cast_possible_truncation))]
-
-#[cfg(doc)]
-extern crate std;
+#![deny(clippy::all)]
 
 extern crate alloc;
 

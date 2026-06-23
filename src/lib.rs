@@ -1,3 +1,5 @@
+#![deny(clippy::all)]
+
 mod cache;
 mod error;
 mod fetch;
