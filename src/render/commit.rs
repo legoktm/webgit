@@ -377,17 +377,17 @@ mod tests {
         assert_eq!(lines[0].kind, "hunk");
         assert_eq!(lines[0].content, "diff --git a/foo.txt b/foo.txt");
         // A hunk marker and the changed lines are present and classified.
-        assert!(lines.iter().any(|l| l.kind == "hunk" && l.content.starts_with("@@")));
         assert!(
             lines
                 .iter()
-                .any(|l| l.kind == "add" && l.content.starts_with('+') && !l.content.starts_with("+++"))
+                .any(|l| l.kind == "hunk" && l.content.starts_with("@@"))
         );
-        assert!(
-            lines
-                .iter()
-                .any(|l| l.kind == "del" && l.content.starts_with('-') && !l.content.starts_with("---"))
-        );
+        assert!(lines.iter().any(|l| l.kind == "add"
+            && l.content.starts_with('+')
+            && !l.content.starts_with("+++")));
+        assert!(lines.iter().any(|l| l.kind == "del"
+            && l.content.starts_with('-')
+            && !l.content.starts_with("---")));
     }
 
     #[test]

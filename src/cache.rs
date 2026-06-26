@@ -685,10 +685,7 @@ fn migrate_objects_drop_prefix(store: web_sys::IdbObjectStore) {
     let slot: CursorCallbackSlot = Rc::new(RefCell::new(None));
     let slot_inner = Rc::clone(&slot);
     let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |event: web_sys::Event| {
-        let Some(req) = event
-            .target()
-            .and_then(|t| t.dyn_into::<IdbRequest>().ok())
-        else {
+        let Some(req) = event.target().and_then(|t| t.dyn_into::<IdbRequest>().ok()) else {
             return;
         };
         let result = req.result().unwrap_or(JsValue::UNDEFINED);
