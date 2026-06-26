@@ -1,14 +1,5 @@
 use git_async::object::{Tree, TreeEntryType};
-use serde::Serialize;
-use tera::{Context, Tera};
-
-#[derive(Serialize)]
-struct TreeEntryRow {
-    mode: String,
-    name: String,
-    path: String,
-    is_dir: bool,
-}
+use yew::prelude::*;
 
 fn mode_string(entry_type: TreeEntryType) -> &'static str {
     match entry_type {
@@ -18,6 +9,16 @@ fn mode_string(entry_type: TreeEntryType) -> &'static str {
         TreeEntryType::Symlink => "l---------",
         TreeEntryType::Commit => "m---------",
     }
+}
+
+/// A single row in the tree listing. Doubles as the per-entry data the
+/// component renders and as the unit-test fixture.
+#[derive(PartialEq, Clone)]
+pub(crate) struct TreeEntryRow {
+    mode: String,
+    name: String,
+    path: String,
+    is_dir: bool,
 }
 
 fn tree_rows(tree: &Tree, prefix: &str) -> Vec<TreeEntryRow> {
@@ -39,31 +40,96 @@ fn tree_rows(tree: &Tree, prefix: &str) -> Vec<TreeEntryRow> {
         .collect()
 }
 
-fn tree_context(rows: &[TreeEntryRow], head: Option<&str>) -> Context {
-    let head_suffix = head.map_or(String::new(), |h| format!("?h={h}"));
-    let mut ctx = Context::new();
-    ctx.insert("entries", &rows);
-    ctx.insert("head_suffix", &head_suffix);
-    ctx
+/// The view inputs for a tree listing: the rows and the `?h=…` suffix appended
+/// to every link so navigation stays pinned to the current ref.
+#[derive(Properties, PartialEq, Clone)]
+pub(crate) struct TreeProps {
+    pub entries: Vec<TreeEntryRow>,
+    pub head_suffix: String,
+}
+
+fn build_tree_props(tree: &Tree, prefix: &str, head: Option<&str>) -> TreeProps {
+    TreeProps {
+        entries: tree_rows(tree, prefix),
+        head_suffix: head.map_or(String::new(), |h| format!("?h={h}")),
+    }
+}
+
+/// The Yew component used to mount the tree view into the DOM. The markup lives
+/// in the plain `tree_view` function below so it can be unit-tested without a
+/// renderer.
+#[function_component(TreeView)]
+pub(crate) fn tree_view_component(props: &TreeProps) -> Html {
+    tree_view(props)
+}
+
+pub(crate) fn tree_view(props: &TreeProps) -> Html {
+    let TreeProps {
+        entries,
+        head_suffix,
+    } = props;
+
+    html! {
+        <table class="tree-table">
+            <thead>
+                <tr>
+                    <th>{ "Mode" }</th>
+                    <th>{ "Name" }</th>
+                </tr>
+            </thead>
+            <tbody>
+                { for entries.iter().map(|e| tree_row(e, head_suffix)) }
+            </tbody>
+        </table>
+    }
+}
+
+fn tree_row(entry: &TreeEntryRow, head_suffix: &str) -> Html {
+    let href = format!("#!/tree/{}{}", entry.path, head_suffix);
+    html! {
+        <tr>
+            <td class="mode">{ &entry.mode }</td>
+            <td class="name">
+                if entry.is_dir {
+                    <a href={href}>{ &entry.name }</a>
+                } else {
+                    <a class="file" href={href}>{ &entry.name }</a>
+                }
+            </td>
+        </tr>
+    }
 }
 
 pub(crate) fn render_tree(
-    tera: &Tera,
     tree: &Tree,
     prefix: &str,
     head: Option<&str>,
     output: &web_sys::Element,
 ) -> anyhow::Result<()> {
-    let rows = tree_rows(tree, prefix);
-    let html = tera.render("tree.html", &tree_context(&rows, head))?;
-    output.set_inner_html(&html);
+    let props = build_tree_props(tree, prefix, head);
+    // Incremental migration: mount a self-contained Yew app at #output. The
+    // handle is leaked because the next navigation clears #output directly.
+    let handle = yew::Renderer::<TreeView>::with_root_and_props(output.clone(), props).render();
+    std::mem::forget(handle);
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::render::init_tera;
+
+    /// Render `TreeView` to a static HTML string via SSR, breaking adjacent
+    /// tags onto their own lines so the snapshot reads as a tree. See the
+    /// equivalent helper in `render::tag` for why we go through SSR and why
+    /// indentation is omitted.
+    fn render(props: TreeProps) -> String {
+        let html = futures::executor::block_on(
+            yew::ServerRenderer::<TreeView>::with_props(move || props)
+                .hydratable(false)
+                .render(),
+        );
+        html.replace("><", ">\n<")
+    }
 
     #[test]
     fn test_mode_string() {
@@ -99,17 +165,17 @@ mod tests {
 
     #[test]
     fn test_tree_html() {
-        let html = init_tera()
-            .render("tree.html", &tree_context(&fixture_rows(), None))
-            .unwrap();
-        insta::assert_snapshot!(html);
+        insta::assert_snapshot!(render(TreeProps {
+            entries: fixture_rows(),
+            head_suffix: String::new(),
+        }));
     }
 
     #[test]
     fn test_tree_html_with_head() {
-        let html = init_tera()
-            .render("tree.html", &tree_context(&fixture_rows(), Some("stable")))
-            .unwrap();
-        insta::assert_snapshot!(html);
+        insta::assert_snapshot!(render(TreeProps {
+            entries: fixture_rows(),
+            head_suffix: "?h=stable".to_string(),
+        }));
     }
 }

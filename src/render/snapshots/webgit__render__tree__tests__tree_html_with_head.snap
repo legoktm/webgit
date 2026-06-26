@@ -1,46 +1,32 @@
 ---
 source: src/render/tree.rs
-expression: html
+expression: "render(TreeProps\n{ entries: fixture_rows(), head_suffix: \"?h=stable\".to_string(), })"
 ---
 <table class="tree-table">
-    <thead>
-        <tr>
-            <th>Mode</th>
-            <th>Name</th>
-        </tr>
-    </thead>
-    <tbody>
-        
-        <tr>
-            <td class="mode">d---------</td>
-            <td class="name">
-                
-                <a href="#!/tree/src?h=stable">src</a>
-                
-            </td>
-        </tr>
-        
-        <tr>
-            <td class="mode">-rw-r--r--</td>
-            <td class="name">
-                
-                <a class="file" href="#!/tree/README.md?h=stable"
-                    >README.md</a
-                >
-                
-            </td>
-        </tr>
-        
-        <tr>
-            <td class="mode">-rwxr-xr-x</td>
-            <td class="name">
-                
-                <a class="file" href="#!/tree/scripts/build.sh?h=stable"
-                    >build.sh</a
-                >
-                
-            </td>
-        </tr>
-        
-    </tbody>
+<thead>
+<tr>
+<th>Mode</th>
+<th>Name</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="mode">d---------</td>
+<td class="name">
+<a href="#!/tree/src?h=stable">src</a>
+</td>
+</tr>
+<tr>
+<td class="mode">-rw-r--r--</td>
+<td class="name">
+<a href="#!/tree/README.md?h=stable" class="file">README.md</a>
+</td>
+</tr>
+<tr>
+<td class="mode">-rwxr-xr-x</td>
+<td class="name">
+<a href="#!/tree/scripts/build.sh?h=stable" class="file">build.sh</a>
+</td>
+</tr>
+</tbody>
 </table>

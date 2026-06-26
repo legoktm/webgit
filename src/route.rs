@@ -433,7 +433,7 @@ async fn try_handle_route(
             set_active_tab(doc, "#!/tree");
 
             if let Some(subtree) = walk_to_tree(tree, &path, repo).await {
-                return render_tree(tera, &subtree, &path, head.as_deref(), output);
+                return render_tree(&subtree, &path, head.as_deref(), output);
             }
 
             output.set_inner_html("<p class=\"msg\">Loading\u{2026}</p>");
