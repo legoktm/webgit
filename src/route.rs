@@ -17,7 +17,6 @@ use git_async::reference::RefName;
 use std::rc::Rc;
 use tera::Tera;
 use wasm_bindgen::JsCast;
-use wasm_bindgen::closure::Closure;
 use web_sys::Document;
 
 // ---------------------------------------------------------------------------
@@ -326,8 +325,7 @@ async fn try_handle_route(
         Route::About => {
             hide_path_bar(doc);
             set_active_tab(doc, "#!/about");
-            render_about(tera, repo, clone_url, output).await?;
-            attach_about_handlers(doc, output, repo, tera, clone_url);
+            render_about(repo, clone_url, output).await?;
         }
         Route::Summary => {
             hide_path_bar(doc);
@@ -447,53 +445,6 @@ async fn try_handle_route(
         }
     }
     Ok(())
-}
-
-fn attach_about_handlers(
-    doc: &Document,
-    output: &web_sys::Element,
-    repo: &Rc<CachingRepo>,
-    tera: &Rc<Tera>,
-    clone_url: &Rc<String>,
-) {
-    let Ok(nodes) = output.query_selector_all("[data-target]") else {
-        return;
-    };
-    for i in 0..nodes.length() {
-        let Some(node) = nodes.get(i) else { continue };
-        let Ok(btn) = node.dyn_into::<web_sys::Element>() else {
-            continue;
-        };
-        let Some(target_str) = btn.get_attribute("data-target") else {
-            continue;
-        };
-        if target_str != "objects" {
-            continue;
-        }
-        let repo = Rc::clone(repo);
-        let tera = Rc::clone(tera);
-        let clone_url = Rc::clone(clone_url);
-        let doc = doc.clone();
-        let output = output.clone();
-        let cb = Closure::<dyn Fn()>::new(move || {
-            let repo = Rc::clone(&repo);
-            let tera = Rc::clone(&tera);
-            let clone_url = Rc::clone(&clone_url);
-            let doc = doc.clone();
-            let output = output.clone();
-            wasm_bindgen_futures::spawn_local(async move {
-                repo.clear_cache().await;
-                if let Err(e) = render_about(&tera, &repo, &clone_url, &output).await {
-                    output.set_inner_html(&error_html(&format!("{e:#}")));
-                    return;
-                }
-                attach_about_handlers(&doc, &output, &repo, &tera, &clone_url);
-            });
-        });
-        btn.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())
-            .ok();
-        cb.forget();
-    }
 }
 
 pub(crate) fn log_url(path: &str, offset: usize, head: Option<&str>) -> String {
