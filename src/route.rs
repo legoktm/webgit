@@ -1,4 +1,4 @@
-use crate::cache::{CachingRepo, ClearTarget};
+use crate::cache::CachingRepo;
 use crate::console_log;
 use crate::error::{GitContext, error_html};
 use crate::render::about::render_about;
@@ -467,11 +467,9 @@ fn attach_about_handlers(
         let Some(target_str) = btn.get_attribute("data-target") else {
             continue;
         };
-        let target = match target_str.as_str() {
-            "repo-objects" => ClearTarget::RepoObjects,
-            "all-objects" => ClearTarget::AllObjects,
-            _ => continue,
-        };
+        if target_str != "objects" {
+            continue;
+        }
         let repo = Rc::clone(repo);
         let tera = Rc::clone(tera);
         let clone_url = Rc::clone(clone_url);
@@ -484,7 +482,7 @@ fn attach_about_handlers(
             let doc = doc.clone();
             let output = output.clone();
             wasm_bindgen_futures::spawn_local(async move {
-                repo.clear_cache(target).await;
+                repo.clear_cache().await;
                 if let Err(e) = render_about(&tera, &repo, &clone_url, &output).await {
                     output.set_inner_html(&error_html(&format!("{e:#}")));
                     return;

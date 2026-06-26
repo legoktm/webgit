@@ -14,10 +14,8 @@ struct AboutTemplate {
     branch_count: usize,
     tag_count: usize,
     idb_available: bool,
-    repo_objects: usize,
-    repo_size_mb: String,
-    global_objects: usize,
-    global_size_mb: String,
+    objects: usize,
+    size_mb: String,
 }
 
 pub(crate) async fn render_about(
@@ -42,17 +40,15 @@ pub(crate) async fn render_about(
     let (branch_count, tag_count) = (branches.len(), tags.len());
 
     let template = match repo.about_stats().await {
-        Some((repo_obj, repo_mb, global_obj, global_mb)) => AboutTemplate {
+        Some((objects, size_mb)) => AboutTemplate {
             version: env!("CARGO_PKG_VERSION"),
             clone_url: clone_url.to_string(),
             head_branch,
             branch_count,
             tag_count,
             idb_available: true,
-            repo_objects: repo_obj,
-            repo_size_mb: format!("{repo_mb:.2}"),
-            global_objects: global_obj,
-            global_size_mb: format!("{global_mb:.2}"),
+            objects,
+            size_mb: format!("{size_mb:.2}"),
         },
         None => AboutTemplate {
             version: env!("CARGO_PKG_VERSION"),
@@ -61,10 +57,8 @@ pub(crate) async fn render_about(
             branch_count,
             tag_count,
             idb_available: false,
-            repo_objects: 0,
-            repo_size_mb: String::new(),
-            global_objects: 0,
-            global_size_mb: String::new(),
+            objects: 0,
+            size_mb: String::new(),
         },
     };
 
@@ -84,10 +78,8 @@ mod tests {
             branch_count: 3,
             tag_count: 7,
             idb_available,
-            repo_objects: 1234,
-            repo_size_mb: "12.34".to_string(),
-            global_objects: 5678,
-            global_size_mb: "56.78".to_string(),
+            objects: 5678,
+            size_mb: "56.78".to_string(),
         }
     }
 

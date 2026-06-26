@@ -14,7 +14,7 @@ use wasm_bindgen_futures::JsFuture;
 use web_sys::{IdbDatabase, IdbOpenDbRequest, IdbRequest, IdbTransactionMode};
 
 const DB_NAME: &str = "webgit";
-const DB_VERSION: u32 = 5;
+const DB_VERSION: u32 = 6;
 const STORE_OBJECTS: &str = "objects";
 const STORE_TAG_REFS: &str = "tag_refs";
 /// Per-commit commit-graph records, keyed by `"{repo_url}::{oid}"`. Content is a
@@ -35,12 +35,6 @@ pub(crate) struct GraphRecord {
 // ---------------------------------------------------------------------------
 // CachingRepo
 // ---------------------------------------------------------------------------
-
-#[derive(Copy, Clone)]
-pub(crate) enum ClearTarget {
-    RepoObjects,
-    AllObjects,
-}
 
 pub(crate) struct CachingRepo {
     inner: Repo<HttpFilesystem>,
@@ -295,17 +289,12 @@ impl CachingRepo {
 
     // --- Cache clearing ------------------------------------------------------
 
-    pub(crate) async fn clear_cache(&self, target: ClearTarget) {
-        match target {
-            ClearTarget::RepoObjects => {
-                self.clear_store_by_prefix(STORE_OBJECTS).await;
-                self.clear_store_by_prefix(STORE_GRAPH).await;
-            }
-            ClearTarget::AllObjects => {
-                self.clear_store(STORE_OBJECTS).await;
-                self.clear_store(STORE_GRAPH).await;
-            }
-        }
+    /// Wipe the shared object cache and every repo's commit-graph records.
+    /// Objects are keyed by bare OID (shared across repos), so there is no
+    /// per-repo object cache to clear selectively.
+    pub(crate) async fn clear_cache(&self) {
+        self.clear_store(STORE_OBJECTS).await;
+        self.clear_store(STORE_GRAPH).await;
         // Drop the in-memory graph so the next walk re-seeds from the (now empty)
         // store, bulk-loading the file again.
         self.graph.borrow_mut().clear();
@@ -326,96 +315,30 @@ impl CachingRepo {
         }
     }
 
-    async fn clear_store_by_prefix(&self, store_name: &str) {
-        let Some(db) = self.db.as_ref() else { return };
-        let prefix = format!("{}::", self.repo_url);
-
-        let keys: Vec<String> = {
-            let Ok(tx) = db.transaction_with_str(store_name) else {
-                return;
-            };
-            let Ok(store) = tx.object_store(store_name) else {
-                return;
-            };
-            let Ok(req) = store.get_all_keys() else {
-                return;
-            };
-            let Ok(result) = await_request(&req).await else {
-                return;
-            };
-            let arr = js_sys::Array::from(&result);
-            (0..arr.length())
-                .filter_map(|i| arr.get(i).as_string())
-                .filter(|k| k.starts_with(&prefix))
-                .collect()
-        };
-
-        if keys.is_empty() {
-            return;
-        }
-
-        // Queue all deletes synchronously so the transaction stays open,
-        // then await only the last request.
-        let Ok(tx) = db.transaction_with_str_and_mode(store_name, IdbTransactionMode::Readwrite)
-        else {
-            return;
-        };
-        let Ok(store) = tx.object_store(store_name) else {
-            return;
-        };
-        let mut last_req = None;
-        for key in &keys {
-            if let Ok(req) = store.delete(&JsValue::from_str(key)) {
-                last_req = Some(req);
-            }
-        }
-        if let Some(req) = last_req {
-            await_request(&req).await.ok();
-        }
-    }
-
     // --- Stats ---------------------------------------------------------------
 
-    /// Returns `(repo_objects, repo_mb, global_objects, global_mb)`,
-    /// or `None` if IndexedDB is unavailable.
-    pub(crate) async fn about_stats(&self) -> Option<(usize, f64, usize, f64)> {
-        self.object_store_stats().await
-    }
-
-    async fn object_store_stats(&self) -> Option<(usize, f64, usize, f64)> {
+    /// Returns `(objects, size_mb)` for the shared object cache, or `None` if
+    /// IndexedDB is unavailable. Objects are keyed by bare OID and shared across
+    /// repos, so this is a single host-wide figure.
+    pub(crate) async fn about_stats(&self) -> Option<(usize, f64)> {
         let db = self.db.as_ref()?;
         let tx = db.transaction_with_str(STORE_OBJECTS).ok()?;
         let store = tx.object_store(STORE_OBJECTS).ok()?;
         let req = store.get_all().ok()?;
         let result = await_request(&req).await.ok()?;
         let arr = js_sys::Array::from(&result);
-        let prefix = format!("{}::", self.repo_url);
-        let mut repo_count = 0usize;
-        let mut repo_bytes = 0u64;
-        let mut global_bytes = 0u64;
+        let mut total_bytes = 0u64;
         for i in 0..arr.length() {
             let record = arr.get(i);
-            let is_repo = js_sys::Reflect::get(&record, &"id".into())
-                .ok()
-                .and_then(|v| v.as_string())
-                .is_some_and(|k| k.starts_with(&prefix));
             if let Ok(data) = js_sys::Reflect::get(&record, &"data".into())
                 && let Ok(ab) = data.dyn_into::<js_sys::ArrayBuffer>()
             {
-                let bytes = ab.byte_length() as u64;
-                global_bytes += bytes;
-                if is_repo {
-                    repo_count += 1;
-                    repo_bytes += bytes;
-                }
+                total_bytes += ab.byte_length() as u64;
             }
         }
-        let global_count = arr.length() as usize;
         Some((
-            repo_count,
-            repo_bytes as f64 / (1024.0 * 1024.0),
-            global_count,
-            global_bytes as f64 / (1024.0 * 1024.0),
+            arr.length() as usize,
+            total_bytes as f64 / (1024.0 * 1024.0),
         ))
     }
 
@@ -423,7 +346,7 @@ impl CachingRepo {
 
     async fn idb_get(&self, id: ObjectId) -> Option<RawObject> {
         let db = self.db.as_ref()?;
-        let key = format!("{}::{}", self.repo_url, id);
+        let key = id.to_string();
         let tx = db.transaction_with_str(STORE_OBJECTS).ok()?;
         let store = tx.object_store(STORE_OBJECTS).ok()?;
         let req = store.get(&JsValue::from_str(&key)).ok()?;
@@ -459,7 +382,7 @@ impl CachingRepo {
         };
 
         let record = js_sys::Object::new();
-        let key = format!("{}::{}", self.repo_url, id);
+        let key = id.to_string();
         js_sys::Reflect::set(&record, &"id".into(), &JsValue::from_str(&key)).ok();
         js_sys::Reflect::set(
             &record,
@@ -716,11 +639,25 @@ async fn open_db() -> Result<IdbDatabase, JsValue> {
             }
             if old < 5 {
                 // Per-commit commit-graph records (metadata + changed-path Bloom
-                // filter), keyed like objects by "{repo_url}::{oid}".
+                // filter), keyed per-repo by "{repo_url}::{oid}".
                 let params = web_sys::IdbObjectStoreParameters::new();
                 params.set_key_path(&JsValue::from_str("id"));
                 db.create_object_store_with_optional_parameters(STORE_GRAPH, &params)
                     .ok();
+            }
+            if old < 6 {
+                // Objects are content-addressed, so the same OID is byte-for-byte
+                // identical in every repo. Switch the key from "{repo_url}::{oid}"
+                // to the bare OID so forks/mirrors share one cached copy. Versions
+                // below 3 already used bare keys (and were wiped above), so only
+                // 3..6 carry prefixed entries; rewrite those in place to keep the
+                // cache warm across the upgrade.
+                if old >= 3
+                    && let Some(tx) = req.transaction()
+                    && let Ok(store) = tx.object_store(STORE_OBJECTS)
+                {
+                    migrate_objects_drop_prefix(store);
+                }
             }
         },
     );
@@ -729,6 +666,54 @@ async fn open_db() -> Result<IdbDatabase, JsValue> {
 
     let result = await_request(open_req.as_ref()).await?;
     result.dyn_into::<IdbDatabase>()
+}
+
+/// Self-referential slot holding a cursor's `onsuccess` closure so it can re-arm
+/// itself across `continue_()` calls; cleared to free the closure when done.
+type CursorCallbackSlot = Rc<RefCell<Option<Closure<dyn FnMut(web_sys::Event)>>>>;
+
+/// Rewrite every object key from `"{repo_url}::{oid}"` to the bare OID, in place,
+/// inside the open versionchange transaction. Objects cached by several repos
+/// collapse onto a single bare-OID entry (the `put` overwrites with identical
+/// content), and already-bare keys are skipped, so the pass is idempotent.
+fn migrate_objects_drop_prefix(store: web_sys::IdbObjectStore) {
+    let Ok(req) = store.open_cursor() else { return };
+    // The cursor walk is event-driven, so its success handler must re-arm itself
+    // via `continue_()`. Park the closure in a cell that the closure also holds
+    // (through a clone), forming a cycle that keeps it alive; clearing the cell
+    // when iteration ends breaks the cycle so the closure is freed.
+    let slot: CursorCallbackSlot = Rc::new(RefCell::new(None));
+    let slot_inner = Rc::clone(&slot);
+    let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |event: web_sys::Event| {
+        let Some(req) = event
+            .target()
+            .and_then(|t| t.dyn_into::<IdbRequest>().ok())
+        else {
+            return;
+        };
+        let result = req.result().unwrap_or(JsValue::UNDEFINED);
+        let Ok(cursor) = result.dyn_into::<web_sys::IdbCursorWithValue>() else {
+            // Null/undefined cursor ⇒ iteration finished; drop the self-reference.
+            slot_inner.borrow_mut().take();
+            return;
+        };
+        if let Ok(value) = cursor.value()
+            && let Some(key) = js_sys::Reflect::get(&value, &"id".into())
+                .ok()
+                .and_then(|v| v.as_string())
+            && let Some(oid) = key.rsplit("::").next()
+            && oid != key
+        {
+            // Re-key by writing the record under its bare OID and deleting the old
+            // prefixed one (a cursor can't change its own inline key).
+            js_sys::Reflect::set(&value, &"id".into(), &JsValue::from_str(oid)).ok();
+            store.put(&value).ok();
+            cursor.delete().ok();
+        }
+        cursor.continue_().ok();
+    });
+    req.set_onsuccess(Some(cb.as_ref().unchecked_ref()));
+    *slot.borrow_mut() = Some(cb);
 }
 
 // ---------------------------------------------------------------------------

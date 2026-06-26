@@ -41,19 +41,10 @@ expression: "render_to_string(&init_tera(), \"about.html\", &fixture(true)).unwr
             </tr>-->
         
         <tr>
-            <td class="label">cached objects (repository)</td>
-            <td>
-                1234 (12.34 MB)
-                <button class="clear-btn" data-target="repo-objects">
-                    (clear)
-                </button>
-            </td>
-        </tr>
-        <tr>
-            <td class="label">cached objects (host)</td>
+            <td class="label">cached objects</td>
             <td>
                 5678 (56.78 MB)
-                <button class="clear-btn" data-target="all-objects">
+                <button class="clear-btn" data-target="objects">
                     (clear)
                 </button>
             </td>

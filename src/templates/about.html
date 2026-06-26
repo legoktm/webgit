@@ -37,19 +37,10 @@
             </tr>-->
         {% if idb_available %}
         <tr>
-            <td class="label">cached objects (repository)</td>
+            <td class="label">cached objects</td>
             <td>
-                {{ repo_objects }} ({{ repo_size_mb }} MB)
-                <button class="clear-btn" data-target="repo-objects">
-                    (clear)
-                </button>
-            </td>
-        </tr>
-        <tr>
-            <td class="label">cached objects (host)</td>
-            <td>
-                {{ global_objects }} ({{ global_size_mb }} MB)
-                <button class="clear-btn" data-target="all-objects">
+                {{ objects }} ({{ size_mb }} MB)
+                <button class="clear-btn" data-target="objects">
                     (clear)
                 </button>
             </td>
