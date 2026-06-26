@@ -20,7 +20,11 @@ expression: "render_to_string(&init_tera(), \"tag.html\", &template).unwrap()"
         
         <tr>
             <td class="label">tagged object</td>
-            <td class="mono">0123abcd0123abcd0123abcd0123abcd0123abcd</td>
+            <td class="mono"><a href="#!/commit/0123abcd0123abcd0123abcd0123abcd0123abcd">0123abcd0123abcd0123abcd0123abcd0123abcd</a></td>
+        </tr>
+        <tr>
+            <td class="label">browse</td>
+            <td><a href="#!/tree?h=v1.0.0">tree</a> | <a href="#!/log?h=v1.0.0">log</a></td>
         </tr>
     </tbody>
 </table>

@@ -16,7 +16,11 @@
         {% endif %}
         <tr>
             <td class="label">tagged object</td>
-            <td class="mono">{{ commit }}</td>
+            <td class="mono"><a href="#!/commit/{{ commit }}">{{ commit }}</a></td>
+        </tr>
+        <tr>
+            <td class="label">browse</td>
+            <td><a href="#!/tree?h={{ name }}">tree</a> | <a href="#!/log?h={{ name }}">log</a></td>
         </tr>
     </tbody>
 </table>
