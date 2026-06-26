@@ -1,11 +1,9 @@
 use crate::cache::CachingRepo;
 use crate::error::GitContext;
-use crate::render::render_template;
 use git_async::reference::RefName;
-use serde::Serialize;
-use tera::Tera;
+use yew::prelude::*;
 
-async fn build_tag(repo: &CachingRepo, tag: String) -> anyhow::Result<TagTemplate> {
+async fn build_tag(repo: &CachingRepo, tag: String) -> anyhow::Result<TagProps> {
     let ref_name = RefName::Ref(format!("tags/{tag}").into_bytes());
     let refs = repo.all_refs().await.context("list refs")?;
     let entry = refs
@@ -25,7 +23,7 @@ async fn build_tag(repo: &CachingRepo, tag: String) -> anyhow::Result<TagTemplat
     // tagger and message. Lightweight tags point straight at the commit and
     // have no metadata of their own, so fall back to the commit's details.
     match object.tag() {
-        Ok(tag_obj) => Ok(TagTemplate {
+        Ok(tag_obj) => Ok(TagProps {
             name: tag.clone(),
             date: tag_obj
                 .date()
@@ -42,7 +40,7 @@ async fn build_tag(repo: &CachingRepo, tag: String) -> anyhow::Result<TagTemplat
             commit: commit.id().to_string(),
             contents: Some(String::from_utf8(tag_obj.message().to_vec())?),
         }),
-        Err(_) => Ok(TagTemplate {
+        Err(_) => Ok(TagProps {
             name: tag,
             date: commit.author_date().to_string(),
             tagger_name: None,
@@ -52,51 +50,137 @@ async fn build_tag(repo: &CachingRepo, tag: String) -> anyhow::Result<TagTemplat
     }
 }
 
-#[derive(Serialize)]
-struct TagTemplate {
-    name: String,
-    date: String,
-    tagger_name: Option<String>,
-    commit: String,
-    contents: Option<String>,
+/// The view inputs for a single tag. These double as the component's props and
+/// as the unit-test fixture, so the data-building (`build_tag`) and the markup
+/// (`TagView`) can be exercised independently.
+#[derive(Properties, PartialEq, Clone)]
+pub(crate) struct TagProps {
+    pub name: String,
+    pub date: String,
+    pub tagger_name: Option<String>,
+    pub commit: String,
+    pub contents: Option<String>,
+}
+
+/// The Yew component used to mount the tag view into the DOM. The markup lives
+/// in the plain `tag_view` function below so it can be unit-tested without a
+/// renderer (see the `VNode`-equality tests).
+#[function_component(TagView)]
+pub(crate) fn tag_view_component(props: &TagProps) -> Html {
+    tag_view(props)
+}
+
+pub(crate) fn tag_view(props: &TagProps) -> Html {
+    let TagProps {
+        name,
+        date,
+        tagger_name,
+        commit,
+        contents,
+    } = props.clone();
+
+    let commit_href = format!("#!/commit/{commit}");
+    let tree_href = format!("#!/tree?h={name}");
+    let log_href = format!("#!/log?h={name}");
+
+    html! {
+        <>
+            <table class="tag-table">
+                <tbody>
+                    <tr>
+                        <td class="label">{ "tag name" }</td>
+                        <td>{ name }</td>
+                    </tr>
+                    <tr>
+                        <td class="label">{ "tag date" }</td>
+                        <td>{ date }</td>
+                    </tr>
+                    if let Some(tagger) = tagger_name {
+                        <tr>
+                            <td class="label">{ "tagged by" }</td>
+                            <td>{ tagger }</td>
+                        </tr>
+                    }
+                    <tr>
+                        <td class="label">{ "tagged object" }</td>
+                        <td class="mono"><a href={commit_href}>{ commit }</a></td>
+                    </tr>
+                    <tr>
+                        <td class="label">{ "browse" }</td>
+                        <td>
+                            <a href={tree_href}>{ "tree" }</a>
+                            { " | " }
+                            <a href={log_href}>{ "log" }</a>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+            if let Some(body) = contents {
+                <pre class="tag-message">{ body }</pre>
+            }
+        </>
+    }
 }
 
 pub(crate) async fn render_tag(
-    tera: &Tera,
     repo: &CachingRepo,
     tag: String,
     output: &web_sys::Element,
 ) -> anyhow::Result<()> {
-    let template = build_tag(repo, tag).await?;
-    render_template(tera, "tag.html", &template, output)
+    let props = build_tag(repo, tag).await?;
+    // Incremental migration: mount a self-contained Yew app at #output. The
+    // handle is intentionally leaked because the next navigation clears
+    // #output's contents directly; once routing moves under a single Yew root
+    // (and yew-router), per-route mounting goes away.
+    let handle = yew::Renderer::<TagView>::with_root_and_props(output.clone(), props).render();
+    std::mem::forget(handle);
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::render::{init_tera, render_to_string};
+
+    /// Render `TagView` to a static HTML string via SSR. Asserting on the
+    /// rendered string (rather than comparing `VNode`s) sidesteps the vdom's
+    /// representational quirks — data-derived attributes are stored as
+    /// `Dynamic` while string literals are `Static`, so two trees that produce
+    /// identical HTML are not `PartialEq`-equal.
+    ///
+    /// SSR emits everything on one line; we break adjacent tags onto their own
+    /// lines purely so the snapshots read as a tree. It's line-breaks only (no
+    /// depth indentation) so that `<pre>` bodies stay byte-exact — their text
+    /// contains no `><`, so it is left untouched.
+    fn render(props: TagProps) -> String {
+        let html = futures::executor::block_on(
+            yew::ServerRenderer::<TagView>::with_props(move || props)
+                .hydratable(false)
+                .render(),
+        );
+        html.replace("><", ">\n<")
+    }
 
     #[test]
-    fn test_tag_html_annotated() {
-        let template = TagTemplate {
+    fn tag_html_annotated() {
+        // Annotated tags show the tagger row and the message body.
+        insta::assert_snapshot!(render(TagProps {
             name: "v1.0.0".to_string(),
             date: "2026-01-15 12:34:56 +00:00".to_string(),
             tagger_name: Some("Kunal Mehta".to_string()),
             commit: "0123abcd0123abcd0123abcd0123abcd0123abcd".to_string(),
             contents: Some("Release 1.0.0\n\nSigned-off-by: Kunal Mehta".to_string()),
-        };
-        insta::assert_snapshot!(render_to_string(&init_tera(), "tag.html", &template).unwrap());
+        }));
     }
 
     #[test]
-    fn test_tag_html_lightweight() {
-        let template = TagTemplate {
+    fn tag_html_lightweight() {
+        // Lightweight tags carry no tagger and no message, so those are omitted.
+        insta::assert_snapshot!(render(TagProps {
             name: "v0.9.0".to_string(),
             date: "2025-11-02 08:00:00 +00:00".to_string(),
             tagger_name: None,
             commit: "89abcdef89abcdef89abcdef89abcdef89abcdef".to_string(),
             contents: None,
-        };
-        insta::assert_snapshot!(render_to_string(&init_tera(), "tag.html", &template).unwrap());
+        }));
     }
 }

@@ -11,47 +11,7 @@
         <link data-trunk rel="css" href="styles.css" />
     </head>
     <body>
-        <!-- ── IndexedDB unavailable warning ───────────────────────────── -->
-        <div id="idb-warning" class="hide">
-            IndexedDB is unavailable, so object caching is disabled.
-            Pages will load more slowly and re-fetch data on every
-            navigation.
-        </div>
-
-        <!-- ── Page header ─────────────────────────────────────────────── -->
-        <div id="header">
-            <div id="header-sub">
-                <h1 id="repo-path">
-                    <span id="repo-path-name">&mdash;</span>
-                </h1>
-                <div id="repo-desc">&nbsp;</div>
-            </div>
-        </div>
-
-        <!-- ── Navigation tabs ─────────────────────────────────────────── -->
-        <nav id="nav">
-            <a href="#!/summary" class="nav-tab">summary</a>
-            <a href="#!/refs" class="nav-tab">refs</a>
-            <a href="#!/log" class="nav-tab">log</a>
-            <a href="#!/tree" class="nav-tab">tree</a>
-            <a href="#!/commit" class="nav-tab">commit</a>
-            <a href="#!/about" class="nav-tab">about</a>
-            <!--<a href="#!/diff" class="nav-tab">diff</a>-->
-            <!--<a href="#!/stats" class="nav-tab">stats</a>-->
-        </nav>
-
-        <!-- ── Fetch stats bar ────────────────────────────────────────────── -->
-        <div id="fetch-stats"></div>
-
-        <!-- ── Path breadcrumb ─────────────────────────────────────────────── -->
-        <div id="path-bar" class="hide"></div>
-
-        <!-- ── Main content ────────────────────────────────────────────── -->
-        <div id="content">
-            <!-- file tree table -->
-            <div id="output">
-                <p class="msg"></p>
-            </div>
-        </div>
+        <!-- The application shell (header, nav, path-bar, content) is rendered
+             by the Yew `App` root, which mounts into <body>. -->
     </body>
 </html>

@@ -12,28 +12,45 @@ use cache::CachingRepo;
 use error::{GitContext, error_html};
 use fs::{HttpDirectory, HttpFilesystem};
 use git_async::Repo;
+use git_async::object::{Commit, Tree};
 use route::{handle_route, set_text};
 use stats::{format_stats, set_stats_loaded};
 use std::rc::Rc;
+use tera::Tera;
 use wasm_bindgen::prelude::*;
 use web_sys::Document;
+use yew::prelude::*;
 
 fn console_log(msg: &str) {
     web_sys::console::log_1(&JsValue::from_str(msg));
+}
+
+fn current_hash() -> String {
+    web_sys::window()
+        .and_then(|w| w.location().hash().ok())
+        .unwrap_or_default()
 }
 
 // ---------------------------------------------------------------------------
 // Initial repo load
 // ---------------------------------------------------------------------------
 
-async fn load_repo(url: String, doc: Document) {
-    let output = doc.get_element_by_id("output").unwrap();
-    if let Err(e) = try_load_repo(url, doc.clone()).await {
-        output.set_inner_html(&error_html(&format!("{e:#}")));
-    }
+/// Everything a route render needs from the loaded repository. Cheaply
+/// cloneable (all `Rc`), so it can live in Yew state and be handed to
+/// `handle_route`.
+#[derive(Clone)]
+struct RepoBundle {
+    repo: Rc<CachingRepo>,
+    head_commit: Rc<Commit>,
+    root_tree: Rc<Tree>,
+    clone_url: Rc<String>,
+    tera: Rc<Tera>,
 }
 
-async fn try_load_repo(url: String, doc: Document) -> anyhow::Result<()> {
+/// Open the repository, populate the header chrome, and assemble a
+/// [`RepoBundle`]. Does not render a route — that's driven reactively from the
+/// `App` route effect once the bundle lands in state.
+async fn load_repo_bundle(url: String, doc: &Document) -> anyhow::Result<RepoBundle> {
     // Register live progress updates on the persistent stats bar.
     let stats_el = doc.get_element_by_id("fetch-stats");
     fetch::reset_and_watch(Box::new(move |reqs, bytes, cached_bytes| {
@@ -79,7 +96,7 @@ async fn try_load_repo(url: String, doc: Document) -> anyhow::Result<()> {
 
     let path = repo_path(&url);
     doc.set_title(&path);
-    set_text(&doc, "repo-path-name", &path);
+    set_text(doc, "repo-path-name", &path);
 
     let root_tree = repo
         .lookup_object(commit.tree())
@@ -88,71 +105,121 @@ async fn try_load_repo(url: String, doc: Document) -> anyhow::Result<()> {
         .tree()
         .map_err(|e| anyhow::anyhow!("Root object is not a tree: {e:?}"))?;
 
-    let head_commit = Rc::new(commit);
-    let root_tree = Rc::new(root_tree);
-    let repo = Rc::new(repo);
-    let clone_url = Rc::new(url.clone());
-    let tera = Rc::new(render::init_tera());
+    Ok(RepoBundle {
+        repo: Rc::new(repo),
+        head_commit: Rc::new(commit),
+        root_tree: Rc::new(root_tree),
+        clone_url: Rc::new(url),
+        tera: Rc::new(render::init_tera()),
+    })
+}
 
-    // Initial route.
-    let hash = web_sys::window()
-        .unwrap()
-        .location()
-        .hash()
-        .unwrap_or_default();
-    handle_route(
-        hash,
-        &head_commit,
-        &root_tree,
-        &repo,
-        &clone_url,
-        &doc,
-        &tera,
-    )
-    .await;
-    set_stats_loaded(&doc);
+// ---------------------------------------------------------------------------
+// Root component
+// ---------------------------------------------------------------------------
 
-    // hashchange listener.
-    let doc_c = doc.clone();
-    let head_commit_c = Rc::clone(&head_commit);
-    let root_tree_c = Rc::clone(&root_tree);
-    let repo_c = Rc::clone(&repo);
-    let clone_url_c = Rc::clone(&clone_url);
-    let tera_c = Rc::clone(&tera);
-    let cb = Closure::<dyn Fn(web_sys::Event)>::new(move |_: web_sys::Event| {
-        let hash = web_sys::window()
-            .unwrap()
-            .location()
-            .hash()
-            .unwrap_or_default();
-        let doc = doc_c.clone();
-        let head_commit = Rc::clone(&head_commit_c);
-        let root_tree = Rc::clone(&root_tree_c);
-        let repo = Rc::clone(&repo_c);
-        let clone_url = Rc::clone(&clone_url_c);
-        let tera = Rc::clone(&tera_c);
-        wasm_bindgen_futures::spawn_local(async move {
-            handle_route(
-                hash,
-                &head_commit,
-                &root_tree,
-                &repo,
-                &clone_url,
-                &doc,
-                &tera,
-            )
-            .await;
-            set_stats_loaded(&doc);
+/// The single Yew root. It renders the static application shell, loads the
+/// repository into state, and re-runs the (still Tera-based) route renderer
+/// whenever the location hash changes.
+#[function_component(App)]
+fn app() -> Html {
+    // The loaded repository, or `None` while loading / on the repo index page.
+    let bundle = use_state(|| None::<RepoBundle>);
+    // Current location hash; updated by the hashchange listener below. This is
+    // the "router": the route effect re-parses it via `route::parse_hash`.
+    let hash = use_state(current_hash);
+
+    // Mount: register the hashchange listener and kick off the repo load (or
+    // the repository index when the URL doesn't name a repo).
+    {
+        let bundle = bundle.clone();
+        let hash = hash.clone();
+        use_effect_with((), move |_| {
+            let window = web_sys::window().expect("no window");
+
+            let hash_setter = hash.clone();
+            let on_hash = Closure::<dyn Fn()>::new(move || hash_setter.set(current_hash()));
+            window
+                .add_event_listener_with_callback("hashchange", on_hash.as_ref().unchecked_ref())
+                .expect("failed to add hashchange listener");
+
+            wasm_bindgen_futures::spawn_local(async move {
+                let window = web_sys::window().expect("no window");
+                let doc = window.document().expect("no document");
+                match resolve_repo_url(&window) {
+                    Some(url) => {
+                        let output = doc.get_element_by_id("output").unwrap();
+                        match load_repo_bundle(url, &doc).await {
+                            Ok(b) => bundle.set(Some(b)),
+                            Err(e) => output.set_inner_html(&error_html(&format!("{e:#}"))),
+                        }
+                    }
+                    None => load_index(doc).await,
+                }
+            });
+
+            move || drop(on_hash)
         });
-    });
+    }
 
-    web_sys::window()
-        .unwrap()
-        .add_event_listener_with_callback("hashchange", cb.as_ref().unchecked_ref())
-        .expect("failed to add hashchange listener");
+    // Render the current route whenever the hash changes or the repo finishes
+    // loading. Reuses the existing imperative renderer; because the shell vdom
+    // is static, Yew never re-diffs the chrome it touches.
+    {
+        let bundle = bundle.clone();
+        use_effect_with(((*hash).clone(), bundle.is_some()), move |(hash, _)| {
+            if let Some(b) = (*bundle).clone() {
+                let hash = hash.clone();
+                wasm_bindgen_futures::spawn_local(async move {
+                    let doc = web_sys::window().unwrap().document().unwrap();
+                    handle_route(
+                        hash,
+                        &b.head_commit,
+                        &b.root_tree,
+                        &b.repo,
+                        &b.clone_url,
+                        &doc,
+                        &b.tera,
+                    )
+                    .await;
+                    set_stats_loaded(&doc);
+                });
+            }
+            || ()
+        });
+    }
 
-    cb.forget();
-    Ok(())
+    html! {
+        <>
+            <div id="idb-warning" class="hide">
+                { "IndexedDB is unavailable, so object caching is disabled. \
+                   Pages will load more slowly and re-fetch data on every navigation." }
+            </div>
+
+            <div id="header">
+                <div id="header-sub">
+                    <h1 id="repo-path"><span id="repo-path-name">{ "\u{2014}" }</span></h1>
+                    <div id="repo-desc">{ "\u{00a0}" }</div>
+                </div>
+            </div>
+
+            <nav id="nav">
+                <a href="#!/summary" class="nav-tab">{ "summary" }</a>
+                <a href="#!/refs" class="nav-tab">{ "refs" }</a>
+                <a href="#!/log" class="nav-tab">{ "log" }</a>
+                <a href="#!/tree" class="nav-tab">{ "tree" }</a>
+                <a href="#!/commit" class="nav-tab">{ "commit" }</a>
+                <a href="#!/about" class="nav-tab">{ "about" }</a>
+            </nav>
+
+            <div id="fetch-stats"></div>
+            <div id="path-bar" class="hide"></div>
+
+            <div id="content">
+                <div id="output"></div>
+            </div>
+        </>
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -244,24 +311,7 @@ fn resolve_repo_url(window: &web_sys::Window) -> Option<String> {
 #[wasm_bindgen(start)]
 pub fn main() {
     console_error_panic_hook::set_once();
-
-    let window = web_sys::window().expect("no window");
-    let document: Document = window.document().expect("no document");
-
-    let url = match resolve_repo_url(&window) {
-        Some(u) => u,
-        None => {
-            // No repository in the URL: show the server's repository index.
-            wasm_bindgen_futures::spawn_local(async move {
-                load_index(document).await;
-            });
-            return;
-        }
-    };
-
-    wasm_bindgen_futures::spawn_local(async move {
-        load_repo(url, document).await;
-    });
+    yew::Renderer::<App>::new().render();
 }
 
 #[cfg(test)]

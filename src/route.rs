@@ -402,7 +402,7 @@ async fn try_handle_route(
             hide_path_bar(doc);
             set_active_tab(doc, "#!/refs");
             console_log(&tag);
-            render_tag(tera, repo, tag, output).await?;
+            render_tag(repo, tag, output).await?;
         }
         Route::Refs(RefsRoute::All) => {
             hide_path_bar(doc);
