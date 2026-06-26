@@ -438,7 +438,7 @@ async fn try_handle_route(
 
             output.set_inner_html("<p class=\"msg\">Loading\u{2026}</p>");
             match walk_to_blob(tree, &path, repo).await {
-                Some((id, data)) => render_blob(tera, id, &data, output)?,
+                Some((id, data)) => render_blob(id, &data, output)?,
                 None => output.set_inner_html(&format!(
                     "<p class=\"msg error\">Not found: <code>{}</code></p>",
                     path
