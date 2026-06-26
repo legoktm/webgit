@@ -5,7 +5,7 @@ use crate::{
         DirEntry, Directory, FileSystem, FileSystemError, read_file_if_exists, search_for_files,
     },
     object::{Object, ObjectId},
-    object_store::{ObjectSize, ObjectType, RawObject, cache::IndexCache, lookup::PackName},
+    object_store::{RawObject, cache::IndexCache, lookup::PackName},
     reference::{
         Ref, RefEntry, RefName, RefTarget, lookup_loose_ref, parse_info_refs, parse_packed_refs,
     },
@@ -258,7 +258,7 @@ impl<F: FileSystem> Repo<F> {
     }
 
     /// Take a ref name and look up its content.
-    pub async fn lookup_ref(&self, name: &RefName) -> GResult<Ref> {
+    pub(crate) async fn lookup_ref(&self, name: &RefName) -> GResult<Ref> {
         Ref::lookup(self, name).await
     }
 
@@ -274,12 +274,6 @@ impl<F: FileSystem> Repo<F> {
     /// Use [`Object::from_raw`] to parse the result into a typed object.
     pub async fn lookup_raw(&self, id: ObjectId) -> GResult<Option<RawObject>> {
         crate::object_store::lookup::lookup(self, id).await
-    }
-
-    /// Look up the size and type of an object, without reading it to memory or
-    /// parsing its content.
-    pub async fn lookup_object_size_type(&self, id: ObjectId) -> GResult<(ObjectSize, ObjectType)> {
-        Object::lookup_size_type(self, id).await
     }
 }
 

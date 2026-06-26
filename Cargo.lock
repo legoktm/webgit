@@ -273,7 +273,6 @@ dependencies = [
  "nom",
  "rand_core",
  "rand_pcg",
- "similar 3.1.1",
  "tempfile",
 ]
 

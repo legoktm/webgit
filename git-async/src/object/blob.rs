@@ -1,4 +1,4 @@
-use crate::object::{Object, ObjectId};
+use crate::object::ObjectId;
 use accessory::Accessors;
 use alloc::vec::Vec;
 
@@ -41,10 +41,5 @@ impl Blob {
     /// Move the data out of the blob object.
     pub fn data_owned(self) -> Vec<u8> {
         self.data
-    }
-
-    /// Wrap the [`Blob`] as a generic [`Object`].
-    pub fn as_object(self) -> Object {
-        Object::Blob(self)
     }
 }

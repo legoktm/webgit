@@ -22,7 +22,7 @@ pub enum ObjectType {
 
 /// The size of a git object; a newtype wrapper around a [`u64`]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ObjectSize(pub u64);
+pub(crate) struct ObjectSize(pub(crate) u64);
 
 #[derive(Debug)]
 pub struct RawObject {

@@ -7,7 +7,7 @@
 use crate::{
     error::{Error, GResult, InternalObjectError, UnexpectedObjectType, annotate_with_object_id},
     file_system::FileSystem,
-    object_store::lookup::{lookup, lookup_size_type},
+    object_store::lookup::lookup,
     parsing::ParseResult,
     repo::Repo,
 };
@@ -34,7 +34,7 @@ pub use crate::object::commit::Commit;
 pub use crate::object::header::{ObjectHeader, ObjectHeaderIter};
 pub use crate::object::tag::Tag;
 pub use crate::object::tree::{Tree, TreeEntry, TreeEntryIter, TreeEntryType};
-pub use crate::object_store::{ObjectSize, ObjectType, RawObject};
+pub use crate::object_store::{ObjectType, RawObject};
 
 /// The ID of a git object
 ///
@@ -255,15 +255,6 @@ impl Object {
             .await?
             .ok_or_else(|| Error::MissingObject(id))?;
         Self::from_raw(id, raw)
-    }
-
-    pub(crate) async fn lookup_size_type<F: FileSystem>(
-        repo: &Repo<F>,
-        id: ObjectId,
-    ) -> GResult<(ObjectSize, ObjectType)> {
-        lookup_size_type(repo, id)
-            .await?
-            .ok_or_else(|| Error::MissingObject(id))
     }
 }
 

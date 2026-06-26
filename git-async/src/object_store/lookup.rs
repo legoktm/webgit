@@ -3,10 +3,10 @@ use crate::{
     file_system::{Directory, FileSystem, Offset},
     object::ObjectId,
     object_store::{
-        ObjectSize, ObjectType, RawObject,
+        RawObject,
         cache::IndexCache,
         index::{FanoutTable, ShortOffsetTable, find_object_in_pack_index},
-        loose::{read_loose_object, read_loose_object_size_type},
+        loose::read_loose_object,
         pack::{form_deltified_chain, reconstruct_deltified_object_from_chain},
         page_read::CachingPageReader,
     },
@@ -49,21 +49,6 @@ pub(crate) struct IndexedPackFile<'f, F> {
     pub(crate) fanout: &'f FanoutTable,
     pub(crate) offsets: Option<&'f ShortOffsetTable>,
     pub(crate) pack: CachingPageReader<F>,
-}
-
-pub(crate) async fn lookup_size_type<F: FileSystem>(
-    repo: &Repo<F>,
-    id: ObjectId,
-) -> GResult<Option<(ObjectSize, ObjectType)>> {
-    // Look in packs first; see `lookup` for the rationale.
-    let pack_cache = &repo.index_cache;
-    if let Some((mut pack, offset)) = find_packed_object(repo, pack_cache, id).await? {
-        let (_, object_type, final_object) = form_deltified_chain(&mut pack, offset)
-            .await
-            .map_err(annotate_with_object_id(id))?;
-        return Ok(Some((final_object.size, object_type)));
-    }
-    read_loose_object_size_type(repo, id).await
 }
 
 pub(crate) async fn lookup<F: FileSystem>(

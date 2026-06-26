@@ -194,6 +194,62 @@ async fn load_blob(repo: &CachingRepo, id: ObjectId) -> Vec<u8> {
     }
 }
 
+/// Compute the rendered diff lines and (additions, deletions) for a single
+/// changed file. The returned lines always begin with the `diff --git` header;
+/// a file detected as binary yields just that header plus a "Binary files
+/// differ" line and zero counts. The `+++`/`---` unified-diff headers are
+/// emitted but excluded from the counts, matching `git`'s diffstat.
+fn diff_file(path: &str, old_data: Vec<u8>, new_data: Vec<u8>) -> (Vec<DiffLine>, usize, usize) {
+    let mut lines = vec![DiffLine {
+        kind: "hunk".to_string(),
+        content: format!("diff --git a/{path} b/{path}"),
+    }];
+
+    // Git treats a blob as binary if it contains a NUL byte; in that case it
+    // shows "Binary files differ" rather than a line-by-line diff, which would
+    // be meaningless (and potentially huge). Mirror that here.
+    if is_binary(&old_data) || is_binary(&new_data) {
+        lines.push(DiffLine {
+            kind: "ctx".to_string(),
+            content: format!("Binary files a/{path} and b/{path} differ"),
+        });
+        return (lines, 0, 0);
+    }
+
+    let text_diff = TextDiffConfig::default().diff_lines(old_data, new_data);
+    let udiff = text_diff
+        .unified_diff()
+        .header(&format!("a/{path}"), &format!("b/{path}"))
+        .to_string();
+
+    let mut additions = 0usize;
+    let mut deletions = 0usize;
+    for line in udiff.lines() {
+        let lkind = match line.chars().next() {
+            Some('+') => {
+                if !line.starts_with("+++") {
+                    additions += 1;
+                }
+                "add"
+            }
+            Some('-') => {
+                if !line.starts_with("---") {
+                    deletions += 1;
+                }
+                "del"
+            }
+            Some('@') => "hunk",
+            _ => "ctx",
+        };
+        lines.push(DiffLine {
+            kind: lkind.to_string(),
+            content: line.to_string(),
+        });
+    }
+
+    (lines, additions, deletions)
+}
+
 async fn build_diff(repo: &CachingRepo, td: &TreeDiff) -> (Vec<FileDiff>, Vec<DiffLine>) {
     let mut files: Vec<FileDiff> = Vec::new();
     let mut diff_lines: Vec<DiffLine> = Vec::new();
@@ -225,61 +281,8 @@ async fn build_diff(repo: &CachingRepo, td: &TreeDiff) -> (Vec<FileDiff>, Vec<Di
     .await;
 
     for (path, old_data, new_data) in loaded {
-        diff_lines.push(DiffLine {
-            kind: "hunk".to_string(),
-            content: format!("diff --git a/{path} b/{path}"),
-        });
-
-        // Git treats a blob as binary if it contains a NUL byte; in that case
-        // it shows "Binary files differ" rather than a line-by-line diff, which
-        // would be meaningless (and potentially huge). Mirror that here.
-        if is_binary(&old_data) || is_binary(&new_data) {
-            diff_lines.push(DiffLine {
-                kind: "ctx".to_string(),
-                content: format!("Binary files a/{path} and b/{path} differ"),
-            });
-            files.push(FileDiff {
-                path,
-                additions: 0,
-                deletions: 0,
-                bar_add: 0,
-                bar_del: 0,
-            });
-            continue;
-        }
-
-        let text_diff = TextDiffConfig::default().diff_lines(old_data, new_data);
-        let udiff = text_diff
-            .unified_diff()
-            .header(&format!("a/{path}"), &format!("b/{path}"))
-            .to_string();
-
-        let mut additions = 0usize;
-        let mut deletions = 0usize;
-
-        for line in udiff.lines() {
-            let lkind = match line.chars().next() {
-                Some('+') => {
-                    if !line.starts_with("+++") {
-                        additions += 1;
-                    }
-                    "add"
-                }
-                Some('-') => {
-                    if !line.starts_with("---") {
-                        deletions += 1;
-                    }
-                    "del"
-                }
-                Some('@') => "hunk",
-                _ => "ctx",
-            };
-            diff_lines.push(DiffLine {
-                kind: lkind.to_string(),
-                content: line.to_string(),
-            });
-        }
-
+        let (lines, additions, deletions) = diff_file(&path, old_data, new_data);
+        diff_lines.extend(lines);
         files.push(FileDiff {
             path,
             additions,
@@ -359,6 +362,60 @@ mod tests {
         let mut late_nul = vec![b'a'; 8000];
         late_nul.push(0);
         assert!(!is_binary(&late_nul));
+    }
+
+    #[test]
+    fn test_diff_file_modification() {
+        let (lines, additions, deletions) = diff_file(
+            "foo.txt",
+            b"alpha\nbeta\n".to_vec(),
+            b"alpha\nbeta changed\n".to_vec(),
+        );
+        assert_eq!(additions, 1);
+        assert_eq!(deletions, 1);
+        // The first line is always the git-style header.
+        assert_eq!(lines[0].kind, "hunk");
+        assert_eq!(lines[0].content, "diff --git a/foo.txt b/foo.txt");
+        // A hunk marker and the changed lines are present and classified.
+        assert!(lines.iter().any(|l| l.kind == "hunk" && l.content.starts_with("@@")));
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.kind == "add" && l.content.starts_with('+') && !l.content.starts_with("+++"))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.kind == "del" && l.content.starts_with('-') && !l.content.starts_with("---"))
+        );
+    }
+
+    #[test]
+    fn test_diff_file_pure_addition_and_deletion() {
+        // A brand-new file: every line counts as an addition, none as deletion.
+        let (_lines, additions, deletions) =
+            diff_file("new.txt", Vec::new(), b"one\ntwo\nthree\n".to_vec());
+        assert_eq!((additions, deletions), (3, 0));
+
+        // A removed file: the reverse.
+        let (_lines, additions, deletions) =
+            diff_file("gone.txt", b"one\ntwo\n".to_vec(), Vec::new());
+        assert_eq!((additions, deletions), (0, 2));
+    }
+
+    #[test]
+    fn test_diff_file_binary() {
+        // A NUL byte makes the file binary: no line-by-line diff, zero counts.
+        let (lines, additions, deletions) =
+            diff_file("blob.bin", b"\0\x01\x02".to_vec(), b"\0\x03".to_vec());
+        assert_eq!((additions, deletions), (0, 0));
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].content, "diff --git a/blob.bin b/blob.bin");
+        assert_eq!(lines[1].kind, "ctx");
+        assert_eq!(
+            lines[1].content,
+            "Binary files a/blob.bin and b/blob.bin differ"
+        );
     }
 
     #[test]

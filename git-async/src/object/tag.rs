@@ -1,13 +1,10 @@
 use crate::{
-    error::GResult,
-    file_system::FileSystem,
     object::{
-        Object, ObjectId, ObjectType,
+        ObjectId, ObjectType,
         header::{ObjectHeaderIter, RangeObjectHeader},
         parse_author_committer_tagger,
     },
     parsing::ParseError,
-    repo::Repo,
     subslice_range::SubsliceRange,
 };
 use accessory::Accessors;
@@ -97,16 +94,6 @@ impl Tag {
     /// Additional headers are those not parsed by `git-async`, e.g. `mergetag`.
     pub fn additional_headers(&self) -> ObjectHeaderIter<'_> {
         ObjectHeaderIter::new(self.body.as_slice(), self.additional_headers.as_slice())
-    }
-
-    /// Wrap the [`Tag`] as a generic [`Object`].
-    pub fn as_object(self) -> Object {
-        Object::Tag(self)
-    }
-
-    /// Look up the target object of the tag using the provided [`Repo`].
-    pub async fn lookup_target<F: FileSystem>(&self, repo: &Repo<F>) -> GResult<Object> {
-        repo.lookup_object(self.target).await
     }
 
     pub(crate) fn parse(id: ObjectId, body: Vec<u8>) -> Result<Self, ParseError> {

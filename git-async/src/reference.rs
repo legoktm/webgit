@@ -117,14 +117,6 @@ pub enum RefTarget {
 }
 
 impl Ref {
-    /// Construct a [`Ref`] with a direct (non-symbolic) target.
-    pub fn new_direct(name: RefName, id: ObjectId) -> Self {
-        Self {
-            name,
-            target: RefTarget::Direct(id),
-        }
-    }
-
     pub(crate) async fn lookup<F: FileSystem>(repo: &Repo<F>, name: &RefName) -> GResult<Ref> {
         // Consult the freshest direct sources first — a loose ref file, then
         // packed-refs — and only then fall back to the info/refs snapshot.

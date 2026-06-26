@@ -180,11 +180,6 @@ impl Tree {
         }
     }
 
-    /// Wrap the [`Tree`] as a generic [`Object`].
-    pub fn as_object(self) -> Object {
-        Object::Tree(self)
-    }
-
     pub(crate) fn parse(id: ObjectId, body: Vec<u8>) -> Result<Self, ParseError> {
         let (_, entries): (_, Vec<_>) =
             all_consuming(many(0.., RangeTreeEntry::parser(&body))).parse(&body)?;

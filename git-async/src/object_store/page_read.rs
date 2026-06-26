@@ -35,7 +35,7 @@ impl<F: File> CachingPageReader<F> {
     }
 
     /// Create a reader backed by an existing, shared page cache.
-    pub fn with_cache(file: F, pages: PageCache) -> Self {
+    pub(crate) fn with_cache(file: F, pages: PageCache) -> Self {
         Self { file, pages }
     }
 

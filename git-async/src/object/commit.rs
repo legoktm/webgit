@@ -2,7 +2,7 @@ use crate::{
     error::GResult,
     file_system::FileSystem,
     object::{
-        Object, ObjectId, Tree,
+        ObjectId,
         header::{ObjectHeaderIter, RangeObjectHeader},
         parse_author_committer_tagger,
     },
@@ -101,16 +101,6 @@ impl Commit {
     /// Additional headers are those not parsed by `git-async`, e.g. `mergetag`.
     pub fn additional_headers(&self) -> ObjectHeaderIter<'_> {
         ObjectHeaderIter::new(&self.body, &self.additional_headers)
-    }
-
-    /// Wrap the [`Commit`] as a generic [`Object`].
-    pub fn as_object(self) -> Object {
-        Object::Commit(self)
-    }
-
-    /// Look up the tree that the commit points to, using the provided [`Repo`].
-    pub async fn lookup_tree<F: FileSystem>(&self, repo: &Repo<F>) -> GResult<Tree> {
-        Ok(repo.lookup_object(self.tree).await?.tree()?)
     }
 
     /// Look up all the parents of the commit, using the provided [`Repo`].

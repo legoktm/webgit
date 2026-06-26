@@ -2,27 +2,19 @@
 //!
 //! # Usage
 //!
-//! First, construct a [`TreeDiff`] object, which walks the specified trees and
-//! finds differing files. Then, use [`TreeDiff::to_text_diff`] to perform a
-//! line-by-line diff on each differing file.
+//! Construct a [`TreeDiff`] object, which walks the specified trees and finds
+//! the files that differ between them, recording the [`ObjectId`] of each side.
+//! Iterate [`TreeDiff::entries`] to inspect the changes; resolving the object
+//! IDs to blobs and computing line-by-line diffs is left to the caller.
 //!
 //! # Example
 //!
 //! ```
-//! # use git_async::{diff::{TreeDiff, Diff}, error::GResult, object::Tree, Repo, file_system::FileSystem};
-//! async fn get_diff<F: FileSystem>(repo: &Repo<F>, left: &Tree, right: &Tree) -> GResult<Diff> {
-//!     let tree_diff = TreeDiff::new(repo, left, right).await?;
-//!     tree_diff.to_text_diff(repo).await
+//! # use git_async::{diff::TreeDiff, error::GResult, object::Tree, Repo, file_system::FileSystem};
+//! async fn changed_files<F: FileSystem>(repo: &Repo<F>, left: &Tree, right: &Tree) -> GResult<TreeDiff> {
+//!     TreeDiff::new(repo, left, right).await
 //! }
 //! ```
-//!
-//! # Notes
-//!
-//! This algorithm is relatively naive, in that it simply loads each object in
-//! full and then computes their diff. You will find that using `git diff` on
-//! the command line is much faster. This is likely because because `git diff`
-//! may be aware of the packfile delta encoding and may use it to compute
-//! efficient diffs.
 
 use crate::{
     Repo,
@@ -31,10 +23,8 @@ use crate::{
     object::{Object, ObjectId, Tree, TreeEntry, TreeEntryIter, TreeEntryType},
 };
 use accessory::Accessors;
-use alloc::format;
 use alloc::{string::String, vec::Vec};
-use core::{cmp::Ordering, convert::Infallible};
-use similar::{TextDiff, TextDiffConfig};
+use core::cmp::Ordering;
 
 /// A path for a file in a diff
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -80,8 +70,7 @@ fn join(path: Option<&Path>, component: &[u8]) -> Path {
 /// Represents a diff of a single file
 ///
 /// It is generic over the content of the file diff. For tree diffs, `Content`
-/// is a pair of [`ObjectId`]s, one of which may be zero. For full diffs,
-/// `Content` is a `similar::TextDiff`.
+/// is a pair of [`ObjectId`]s, one of which may be zero.
 #[expect(missing_docs)]
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
 pub enum DiffEntry<Content> {
@@ -121,62 +110,6 @@ impl<Content> DiffEntry<Content> {
             | DiffEntry::RightOnly { path, .. } => path,
         }
     }
-
-    /// Map a function over the content contained in the entry.
-    pub fn map_content<T>(&self, fun: impl Fn(&Content) -> T) -> DiffEntry<T> {
-        self.map_content_res(|c| Ok::<T, Infallible>(fun(c)))
-            .unwrap()
-    }
-
-    /// Map a fallible function over the content contained in the entry.
-    pub fn map_content_res<T, E>(
-        &self,
-        fun: impl Fn(&Content) -> Result<T, E>,
-    ) -> Result<DiffEntry<T>, E> {
-        use DiffEntry::*;
-        Ok(match self {
-            LeftOnly {
-                path,
-                entry_type,
-                content,
-            } => DiffEntry::LeftOnly {
-                path: path.clone(),
-                entry_type: *entry_type,
-                content: fun(content)?,
-            },
-            Both {
-                path,
-                left_type,
-                right_type,
-                content,
-            } => DiffEntry::Both {
-                path: path.clone(),
-                left_type: *left_type,
-                right_type: *right_type,
-                content: fun(content)?,
-            },
-            RightOnly {
-                path,
-                entry_type,
-                content,
-            } => DiffEntry::RightOnly {
-                path: path.clone(),
-                entry_type: *entry_type,
-                content: fun(content)?,
-            },
-        })
-    }
-}
-
-/// A "full" diff, i.e. one which encapsulates line changes between files
-///
-/// This is constructed by first creating a [`TreeDiff`] object and then calling
-/// the [`TreeDiff::to_text_diff`] method.
-#[derive(Accessors)]
-pub struct Diff {
-    /// The entries of the diff, one per differing path in the tree
-    #[access(get(ty(&[DiffEntry<TextDiff<'static, 'static, [u8]>>])))]
-    entries: Vec<DiffEntry<TextDiff<'static, 'static, [u8]>>>,
 }
 
 /// A diff of git trees, holding the [`ObjectId`]s of differing files
@@ -369,106 +302,6 @@ impl TreeDiff {
     ) -> GResult<Self> {
         tree_diff_impl(left, right, async |id| repo.lookup_object(id).await, cancel).await
     }
-
-    /// Turn the [`TreeDiff`] into a [`Diff`] by creating a line diff of each
-    /// file.
-    pub async fn to_text_diff<F: FileSystem>(&self, repo: &Repo<F>) -> GResult<Diff> {
-        self.to_text_diff_full(repo, &TextDiffConfig::default(), async || false)
-            .await
-    }
-
-    /// Like [`TreeDiff::to_text_diff`] but accepts a
-    /// [`similar::TextDiffConfig`] parameter to configure the file diff
-    /// operations and a `cancel` parameter to externally cancel the diff.
-    ///
-    /// The `cancel` parameter is analogous to the `cancel` parameter on
-    /// [`TreeDiff::new_cancelable`]; see there for further details.
-    pub async fn to_text_diff_full<F: FileSystem>(
-        &self,
-        repo: &Repo<F>,
-        config: &TextDiffConfig,
-        mut cancel: impl AsyncFnMut() -> bool,
-    ) -> GResult<Diff> {
-        let mut out: Vec<_> = Vec::with_capacity(self.entries.len());
-        for entry in &self.entries {
-            if cancel().await {
-                return Err(Error::DiffCanceled);
-            }
-            let entry = entry.resolve(repo, config.clone()).await?;
-            out.push(entry);
-        }
-        Ok(Diff { entries: out })
-    }
-}
-
-impl DiffEntry<(ObjectId, ObjectId)> {
-    /// Look up the objects encoded in the diff entry and compute a diff of the
-    /// files.
-    pub async fn resolve<F: FileSystem>(
-        &self,
-        repo: &Repo<F>,
-        config: TextDiffConfig,
-    ) -> GResult<DiffEntry<TextDiff<'static, 'static, [u8]>>> {
-        match self {
-            DiffEntry::LeftOnly {
-                path,
-                entry_type,
-                content: (id, _),
-            } => {
-                let body = read_leaf(repo, *entry_type, *id).await?;
-                Ok(DiffEntry::LeftOnly {
-                    path: path.clone(),
-                    entry_type: *entry_type,
-                    content: config.diff_lines(body, Vec::new()),
-                })
-            }
-            DiffEntry::RightOnly {
-                path,
-                entry_type,
-                content: (_, id),
-            } => {
-                let body = read_leaf(repo, *entry_type, *id).await?;
-                Ok(DiffEntry::RightOnly {
-                    path: path.clone(),
-                    entry_type: *entry_type,
-                    content: config.diff_lines(Vec::new(), body),
-                })
-            }
-            DiffEntry::Both {
-                path,
-                left_type,
-                right_type,
-                content: (left_id, right_id),
-            } => {
-                let left_body = read_leaf(repo, *left_type, *left_id).await?;
-                let right_body = read_leaf(repo, *right_type, *right_id).await?;
-                let diff = config.diff_lines(left_body, right_body);
-                Ok(DiffEntry::Both {
-                    path: path.clone(),
-                    left_type: *left_type,
-                    right_type: *right_type,
-                    content: diff,
-                })
-            }
-        }
-    }
-}
-
-async fn read_leaf<F: FileSystem>(
-    repo: &Repo<F>,
-    entry_type: TreeEntryType,
-    id: ObjectId,
-) -> GResult<Vec<u8>> {
-    debug_assert!(entry_type != TreeEntryType::Tree);
-    if entry_type == TreeEntryType::Commit {
-        let s = format!("{id}");
-        return Ok(s.into_bytes());
-    }
-    let object = repo.lookup_object(id).await?;
-    if let Object::Blob(b) = object {
-        return Ok(b.data_owned());
-    }
-    unreachable!("Tree entry resolved object was not a blob")
 }
 
 #[cfg(test)]

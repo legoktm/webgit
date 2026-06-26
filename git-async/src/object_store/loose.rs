@@ -9,7 +9,7 @@ use nom::{
 
 use crate::{
     error::{Error, GResult},
-    file_system::{Directory, File, FileSystem, FileSystemError, Offset},
+    file_system::{Directory, File, FileSystem, FileSystemError},
     object::ObjectId,
     object_store::{ObjectSize, ObjectType, RawObject},
     repo::Repo,
@@ -36,25 +36,6 @@ async fn get_loose_object_file<F: FileSystem>(
         Err(e) => return Err(e.into()),
     };
     Ok(Some(file))
-}
-
-pub(crate) async fn read_loose_object_size_type<F: FileSystem>(
-    repo: &Repo<F>,
-    id: ObjectId,
-) -> GResult<Option<(ObjectSize, ObjectType)>> {
-    let file = get_loose_object_file(repo, id).await?;
-    let Some(mut file) = file else {
-        return Ok(None);
-    };
-    let mut buf = [0u8; 32];
-    match file.read_segment(Offset(0), &mut buf).await {
-        Ok(_) => {}
-        // A lazily-opened object file that turns out not to exist.
-        Err(FileSystemError::NotFound(_)) => return Ok(None),
-        Err(e) => return Err(e.into()),
-    }
-    let (_, (size, object_type)) = parse_header(&buf).map_err(|_| Error::MalformedObject(id))?;
-    Ok(Some((size, object_type)))
 }
 
 pub(crate) async fn read_loose_object<F: FileSystem>(

@@ -199,12 +199,6 @@ impl<F: FileSystem> CommitGraph<F> {
         self.bloom
     }
 
-    /// The byte length of the chunk data (excludes the trailing checksum); an
-    /// approximation of the file size, useful for deciding whether to bulk-load.
-    pub fn data_len(&self) -> u64 {
-        self.data_end
-    }
-
     /// Look up a commit's position and metadata in one pass, reusing a single
     /// page reader. Returns `None` if the commit is not in the graph.
     pub async fn lookup(&self, id: ObjectId) -> GResult<Option<(u32, CommitGraphEntry)>> {
