@@ -51,7 +51,6 @@ pub(crate) fn init_tera() -> Tera {
         ),
         ("refs_all.html", include_str!("../templates/refs_all.html")),
         ("summary.html", include_str!("../templates/summary.html")),
-        ("commit.html", include_str!("../templates/commit.html")),
         ("commits.html", include_str!("../templates/commits.html")),
         ("log.html", include_str!("../templates/log.html")),
     ])

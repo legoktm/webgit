@@ -1,30 +1,27 @@
 ---
 source: src/render/commit.rs
-expression: "render_to_string(&init_tera(), \"commit.html\", &base_fixture()).unwrap()"
+expression: render(base_fixture())
 ---
 <table class="tag-table">
-    <tbody>
-        <tr>
-            <td class="label">author</td>
-            <td>Kunal Mehta &lt;author@example.org&gt; 2026-01-15 12:34:56 +00:00</td>
-        </tr>
-        <tr>
-            <td class="label">committer</td>
-            <td>Committer Person &lt;committer@example.org&gt; 2026-01-15 13:00:00 +00:00</td>
-        </tr>
-        
-        <tr>
-            <td class="label">commit</td>
-            <td class="mono">0123abcd0123abcd0123abcd0123abcd0123abcd</td>
-        </tr>
-        <tr>
-            <td class="label">tree</td>
-            <td class="mono">fedcba98fedcba98fedcba98fedcba98fedcba98</td>
-        </tr>
-    </tbody>
-</table>
+<tbody>
+<tr>
+<td class="label">author</td>
+<td>Kunal Mehta &lt;author@example.org&gt; 2026-01-15 12:34:56 +00:00</td>
+</tr>
+<tr>
+<td class="label">committer</td>
+<td>Committer Person &lt;committer@example.org&gt; 2026-01-15 13:00:00 +00:00</td>
+</tr>
+<tr>
+<td class="label">commit</td>
+<td class="mono">0123abcd0123abcd0123abcd0123abcd0123abcd</td>
+</tr>
+<tr>
+<td class="label">tree</td>
+<td class="mono">fedcba98fedcba98fedcba98fedcba98fedcba98</td>
+</tr>
+</tbody>
+</table><pre class="tag-message">Fix the thing
 
-<pre class="tag-message">Fix the thing
-
-Longer explanation with &lt;html&gt; &amp; &quot;chars&quot;.
+Longer explanation with &lt;html&gt; &amp; "chars".
 See <a href="#!/commit/0123abcd">0123abcd</a> for context.</pre>

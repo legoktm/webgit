@@ -379,12 +379,12 @@ async fn try_handle_route(
         Route::CommitHead => {
             hide_path_bar(doc);
             set_active_tab(doc, "#!/commit");
-            render_commit(tera, repo, format!("{}", head_commit.id()), output).await?;
+            render_commit(repo, format!("{}", head_commit.id()), output).await?;
         }
         Route::Commit(sha) => {
             hide_path_bar(doc);
             set_active_tab(doc, "#!/commit");
-            render_commit(tera, repo, sha, output).await?;
+            render_commit(repo, sha, output).await?;
         }
         Route::Refs(RefsRoute::Heads) => {
             hide_path_bar(doc);

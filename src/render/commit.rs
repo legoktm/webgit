@@ -1,25 +1,24 @@
+use crate::cache::CachingRepo;
 use crate::error::GitContext;
-use crate::{cache::CachingRepo, render::render_template};
 use git_async::diff::{DiffEntry, TreeDiff};
 use git_async::error::Error as GitError;
 use git_async::object::{Object, ObjectId};
-use serde::Serialize;
 use similar::TextDiffConfig;
-use tera::Tera;
+use yew::prelude::*;
 
-#[derive(Serialize)]
+#[derive(PartialEq, Clone)]
 struct ParentRef {
     hash: String,
     short: String,
 }
 
-#[derive(Serialize)]
+#[derive(PartialEq, Clone)]
 struct DiffLine {
     kind: String,
     content: String,
 }
 
-#[derive(Serialize)]
+#[derive(PartialEq, Clone)]
 struct FileDiff {
     path: String,
     additions: usize,
@@ -28,10 +27,22 @@ struct FileDiff {
     bar_del: usize,
 }
 
-#[derive(Serialize)]
-struct CommitTemplate {
+/// One piece of a commit message: either literal text (escaped by Yew when
+/// rendered) or a SHA-1 reference that becomes a link to that commit. Splitting
+/// the message into segments lets Yew handle escaping natively instead of us
+/// hand-building trusted HTML.
+#[derive(PartialEq, Clone, Debug)]
+enum MessageSegment {
+    Text(String),
+    Sha(String),
+}
+
+/// The view inputs for a commit. These double as the component's props and the
+/// unit-test fixture, so the data-building (`build_commit`) and the markup
+/// (`CommitView`) can be exercised independently.
+#[derive(Properties, PartialEq, Clone)]
+pub(crate) struct CommitProps {
     hash: String,
-    short_hash: String,
     author_name: String,
     author_email: String,
     author_date: String,
@@ -40,14 +51,14 @@ struct CommitTemplate {
     committer_date: String,
     parents: Vec<ParentRef>,
     tree_hash: String,
-    message_html: String,
+    message: Vec<MessageSegment>,
     total_additions: usize,
     total_deletions: usize,
     files: Vec<FileDiff>,
     diff_lines: Vec<DiffLine>,
 }
 
-async fn build_commit(repo: &CachingRepo, sha: &str) -> anyhow::Result<CommitTemplate> {
+async fn build_commit(repo: &CachingRepo, sha: &str) -> anyhow::Result<CommitProps> {
     let oid =
         ObjectId::from_hex(sha.as_bytes()).ok_or_else(|| anyhow::anyhow!("invalid SHA: {sha}"))?;
     let commit = repo
@@ -99,10 +110,8 @@ async fn build_commit(repo: &CachingRepo, sha: &str) -> anyhow::Result<CommitTem
     let total_additions: usize = files.iter().map(|f| f.additions).sum();
     let total_deletions: usize = files.iter().map(|f| f.deletions).sum();
 
-    let hash = format!("{}", commit.id());
-    Ok(CommitTemplate {
-        short_hash: hash[..8].to_string(),
-        hash,
+    Ok(CommitProps {
+        hash: format!("{}", commit.id()),
         author_name: String::from_utf8_lossy(commit.author_name()).into_owned(),
         author_email: String::from_utf8_lossy(commit.author_email()).into_owned(),
         author_date: commit.author_date().to_string(),
@@ -111,23 +120,12 @@ async fn build_commit(repo: &CachingRepo, sha: &str) -> anyhow::Result<CommitTem
         committer_date: commit.commit_date().to_string(),
         parents,
         tree_hash: format!("{}", commit.tree()),
-        message_html: linkify_message(&String::from_utf8_lossy(commit.message())),
+        message: linkify_message(&String::from_utf8_lossy(commit.message())),
         total_additions,
         total_deletions,
         files,
         diff_lines,
     })
-}
-
-fn escape_char(c: char, out: &mut String) {
-    match c {
-        '&' => out.push_str("&amp;"),
-        '<' => out.push_str("&lt;"),
-        '>' => out.push_str("&gt;"),
-        '"' => out.push_str("&quot;"),
-        '\'' => out.push_str("&#x27;"),
-        _ => out.push(c),
-    }
 }
 
 /// A token is treated as a commit reference if it is a run of 7-40 lowercase
@@ -139,28 +137,27 @@ fn is_sha1(token: &str) -> bool {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
-/// Turn SHA-1 references in a commit message into links to the referenced
-/// commit, HTML-escaping everything else. The result is trusted HTML, so it
-/// must be rendered with Tera's `safe` filter.
-fn linkify_message(message: &str) -> String {
-    let mut out = String::with_capacity(message.len());
-    let mut token = String::new();
-
-    let flush = |token: &str, out: &mut String| {
-        if is_sha1(token) {
-            // `token` is pure lowercase hex, so it is safe both as an attribute
-            // value and as text without further escaping.
-            out.push_str("<a href=\"#!/commit/");
-            out.push_str(token);
-            out.push_str("\">");
-            out.push_str(token);
-            out.push_str("</a>");
-        } else {
-            for c in token.chars() {
-                escape_char(c, out);
-            }
+/// Flush the current alphanumeric run: emit it as a `Sha` segment if it looks
+/// like a commit reference, otherwise fold it into the running text buffer.
+fn flush_token(token: &mut String, text: &mut String, segments: &mut Vec<MessageSegment>) {
+    if is_sha1(token) {
+        if !text.is_empty() {
+            segments.push(MessageSegment::Text(std::mem::take(text)));
         }
-    };
+        segments.push(MessageSegment::Sha(std::mem::take(token)));
+    } else {
+        text.push_str(token);
+        token.clear();
+    }
+}
+
+/// Split a commit message into text/SHA segments. SHA-1 references become links
+/// to the referenced commit; everything else is plain text. Escaping is left to
+/// Yew, which encodes text nodes when it renders them.
+fn linkify_message(message: &str) -> Vec<MessageSegment> {
+    let mut segments = Vec::new();
+    let mut text = String::new();
+    let mut token = String::new();
 
     for c in message.chars() {
         // Word boundaries are ASCII alphanumerics; anything else ends the
@@ -168,13 +165,15 @@ fn linkify_message(message: &str) -> String {
         if c.is_ascii_alphanumeric() {
             token.push(c);
         } else {
-            flush(&token, &mut out);
-            token.clear();
-            escape_char(c, &mut out);
+            flush_token(&mut token, &mut text, &mut segments);
+            text.push(c);
         }
     }
-    flush(&token, &mut out);
-    out
+    flush_token(&mut token, &mut text, &mut segments);
+    if !text.is_empty() {
+        segments.push(MessageSegment::Text(text));
+    }
+    segments
 }
 
 /// Heuristic matching git's: a blob is treated as binary if a NUL byte appears
@@ -313,25 +312,198 @@ async fn build_diff(repo: &CachingRepo, td: &TreeDiff) -> (Vec<FileDiff>, Vec<Di
     (files, diff_lines)
 }
 
+/// The Yew component used to mount the commit view into the DOM. The markup
+/// lives in the plain `commit_view` function below so it can be exercised
+/// without a renderer.
+#[function_component(CommitView)]
+pub(crate) fn commit_view_component(props: &CommitProps) -> Html {
+    commit_view(props)
+}
+
+pub(crate) fn commit_view(props: &CommitProps) -> Html {
+    let CommitProps {
+        hash,
+        author_name,
+        author_email,
+        author_date,
+        committer_name,
+        committer_email,
+        committer_date,
+        parents,
+        tree_hash,
+        message,
+        total_additions,
+        total_deletions,
+        files,
+        diff_lines,
+    } = props.clone();
+
+    html! {
+        <>
+            <table class="tag-table">
+                <tbody>
+                    <tr>
+                        <td class="label">{ "author" }</td>
+                        <td>{ format!("{author_name} <{author_email}> {author_date}") }</td>
+                    </tr>
+                    <tr>
+                        <td class="label">{ "committer" }</td>
+                        <td>{ format!("{committer_name} <{committer_email}> {committer_date}") }</td>
+                    </tr>
+                    { for parents.iter().enumerate().map(|(i, p)| parent_row(i == 0, p)) }
+                    <tr>
+                        <td class="label">{ "commit" }</td>
+                        <td class="mono">{ hash }</td>
+                    </tr>
+                    <tr>
+                        <td class="label">{ "tree" }</td>
+                        <td class="mono">{ tree_hash }</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <pre class="tag-message">{ for message.iter().map(message_segment) }</pre>
+
+            if !files.is_empty() {
+                <>
+                    <div class="diffstat">
+                        <p class="diffstat-summary">
+                            { diffstat_summary(files.len(), total_additions, total_deletions) }
+                        </p>
+                        <table class="diffstat-table">
+                            { for files.iter().map(diffstat_row) }
+                        </table>
+                    </div>
+                    <pre class="diff-pre">{ for diff_lines.iter().map(diff_line) }</pre>
+                </>
+            }
+        </>
+    }
+}
+
+fn parent_row(first: bool, p: &ParentRef) -> Html {
+    let href = format!("#!/commit/{}", p.hash);
+    html! {
+        <tr>
+            <td class="label">{ if first { "parent" } else { "" } }</td>
+            <td class="mono"><a href={href}>{ p.short.clone() }</a></td>
+        </tr>
+    }
+}
+
+fn message_segment(seg: &MessageSegment) -> Html {
+    match seg {
+        MessageSegment::Text(t) => html! { { t.clone() } },
+        MessageSegment::Sha(s) => {
+            let href = format!("#!/commit/{s}");
+            html! { <a href={href}>{ s.clone() }</a> }
+        }
+    }
+}
+
+fn diffstat_row(f: &FileDiff) -> Html {
+    let bar_add = format!("width: {}%", f.bar_add);
+    let bar_del = format!("width: {}%", f.bar_del);
+    html! {
+        <tr>
+            <td class="diffstat-name">{ f.path.clone() }</td>
+            <td class="diffstat-count">{ f.additions + f.deletions }</td>
+            <td class="diffstat-bar-cell">
+                <span class="diffstat-bar">
+                    <span class="bar-add" style={bar_add}></span><span class="bar-del" style={bar_del}></span>
+                </span>
+            </td>
+            <td class="diffstat-pm">
+                if f.additions > 0 {
+                    <span class="add-count">{ format!("+{}", f.additions) }</span>
+                }
+                if f.deletions > 0 {
+                    <span class="del-count">{ format!("-{}", f.deletions) }</span>
+                }
+            </td>
+        </tr>
+    }
+}
+
+fn diff_line(line: &DiffLine) -> Html {
+    let class = format!("diff-{}", line.kind);
+    // The trailing newline is part of the line's content inside the <pre>, so
+    // each line's span ends with it (matching git's own line-oriented output).
+    let content = format!("{}\n", line.content);
+    html! { <span class={class}>{ content }</span> }
+}
+
+fn diffstat_summary(files: usize, additions: usize, deletions: usize) -> String {
+    format!(
+        "{files} {} changed, {additions} {}(+), {deletions} {}(-)",
+        plural(files, "file", "files"),
+        plural(additions, "insertion", "insertions"),
+        plural(deletions, "deletion", "deletions"),
+    )
+}
+
+fn plural(n: usize, one: &'static str, many: &'static str) -> &'static str {
+    if n == 1 { one } else { many }
+}
+
 pub(crate) async fn render_commit(
-    tera: &Tera,
     repo: &CachingRepo,
     sha: String,
     output: &web_sys::Element,
 ) -> anyhow::Result<()> {
-    let template = build_commit(repo, &sha).await?;
-    render_template(tera, "commit.html", &template, output)
+    let props = build_commit(repo, &sha).await?;
+    // Incremental migration: mount a self-contained Yew app at #output. The
+    // handle is leaked because the next navigation clears #output directly.
+    let handle = yew::Renderer::<CommitView>::with_root_and_props(output.clone(), props).render();
+    std::mem::forget(handle);
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::render::{init_tera, render_to_string};
 
-    fn base_fixture() -> CommitTemplate {
-        CommitTemplate {
+    /// Render `CommitView` to a static HTML string via SSR. See `render::tag`
+    /// for why we go through SSR rather than comparing `VNode`s.
+    fn render(props: CommitProps) -> String {
+        let html = futures::executor::block_on(
+            yew::ServerRenderer::<CommitView>::with_props(move || props)
+                .hydratable(false)
+                .render(),
+        );
+        prettify(&html)
+    }
+
+    /// Break adjacent tags onto their own lines for readable snapshots, but emit
+    /// the contents of `<pre>` elements verbatim. Unlike the other ported views,
+    /// the commit diff renders sibling `<span>`s *inside* `<pre class="diff-pre">`,
+    /// so the blanket `><` split the others use would inject newlines into
+    /// whitespace the browser renders literally.
+    fn prettify(html: &str) -> String {
+        let mut out = String::with_capacity(html.len());
+        let mut rest = html;
+        while let Some(open) = rest.find("<pre") {
+            out.push_str(&rest[..open].replace("><", ">\n<"));
+            rest = &rest[open..];
+            match rest.find("</pre>") {
+                Some(close) => {
+                    let end = close + "</pre>".len();
+                    out.push_str(&rest[..end]);
+                    rest = &rest[end..];
+                }
+                None => {
+                    out.push_str(rest);
+                    return out;
+                }
+            }
+        }
+        out.push_str(&rest.replace("><", ">\n<"));
+        out
+    }
+
+    fn base_fixture() -> CommitProps {
+        CommitProps {
             hash: "0123abcd0123abcd0123abcd0123abcd0123abcd".to_string(),
-            short_hash: "0123abcd".to_string(),
             author_name: "Kunal Mehta".to_string(),
             author_email: "author@example.org".to_string(),
             author_date: "2026-01-15 12:34:56 +00:00".to_string(),
@@ -340,7 +512,7 @@ mod tests {
             committer_date: "2026-01-15 13:00:00 +00:00".to_string(),
             parents: vec![],
             tree_hash: "fedcba98fedcba98fedcba98fedcba98fedcba98".to_string(),
-            message_html: linkify_message(
+            message: linkify_message(
                 "Fix the thing\n\nLonger explanation with <html> & \"chars\".\nSee 0123abcd for context.",
             ),
             total_additions: 0,
@@ -420,56 +592,53 @@ mod tests {
 
     #[test]
     fn test_linkify_message() {
-        // A 7-40 char hex run becomes a link; surrounding text is escaped.
+        use MessageSegment::{Sha, Text};
+        // A 7-40 char hex run becomes a SHA segment; surrounding text stays text.
         assert_eq!(
             linkify_message("see 0123abcd <ok>"),
-            "see <a href=\"#!/commit/0123abcd\">0123abcd</a> &lt;ok&gt;"
+            vec![
+                Text("see ".to_string()),
+                Sha("0123abcd".to_string()),
+                Text(" <ok>".to_string()),
+            ]
         );
         // Full 40-char SHA-1.
         let full = "0123456789abcdef0123456789abcdef01234567";
+        assert_eq!(linkify_message(full), vec![Sha(full.to_string())]);
+        // Too short (<7), too long (>40), uppercase, or embedded in a word: text.
+        assert_eq!(linkify_message("abc123"), vec![Text("abc123".to_string())]);
         assert_eq!(
-            linkify_message(full),
-            format!("<a href=\"#!/commit/{full}\">{full}</a>")
+            linkify_message("0123ABCD"),
+            vec![Text("0123ABCD".to_string())]
         );
-        // Too short (<7), too long (>40), uppercase, or embedded in a word: no link.
-        assert_eq!(linkify_message("abc123"), "abc123");
-        assert_eq!(linkify_message("0123ABCD"), "0123ABCD");
-        assert_eq!(linkify_message("x0123abcd"), "x0123abcd");
-        assert_eq!(linkify_message(&"a".repeat(41)), "a".repeat(41));
+        assert_eq!(
+            linkify_message("x0123abcd"),
+            vec![Text("x0123abcd".to_string())]
+        );
+        assert_eq!(linkify_message(&"a".repeat(41)), vec![Text("a".repeat(41))]);
     }
 
     #[test]
-    fn test_linkify_message_escapes_xss() {
-        // A script-injection attempt must be fully neutralised: no raw angle
-        // brackets, quotes, or ampersands survive into the trusted HTML.
+    fn test_linkify_message_no_spurious_links() {
+        // Markup and quotes are never mistaken for SHAs: the whole string stays
+        // one text run, and Yew escapes it at render time (see the snapshots).
         let attack = "<script>alert('xss')</script> & \"quotes\"";
-        let html = linkify_message(attack);
         assert_eq!(
-            html,
-            "&lt;script&gt;alert(&#x27;xss&#x27;)&lt;/script&gt; &amp; &quot;quotes&quot;"
-        );
-        assert!(!html.contains('<'));
-        assert!(!html.contains('>'));
-        // Escaping still happens around a linkified hash on the same line.
-        let mixed = linkify_message("<b>0123abcd</b>");
-        assert_eq!(
-            mixed,
-            "&lt;b&gt;<a href=\"#!/commit/0123abcd\">0123abcd</a>&lt;/b&gt;"
+            linkify_message(attack),
+            vec![MessageSegment::Text(attack.to_string())]
         );
     }
 
     #[test]
     fn test_commit_html_root_commit() {
         // No parents and no diff: the diffstat section should be absent.
-        insta::assert_snapshot!(
-            render_to_string(&init_tera(), "commit.html", &base_fixture()).unwrap()
-        );
+        insta::assert_snapshot!(render(base_fixture()));
     }
 
     #[test]
     fn test_commit_html_merge_with_diff() {
-        let mut template = base_fixture();
-        template.parents = vec![
+        let mut props = base_fixture();
+        props.parents = vec![
             ParentRef {
                 hash: "1111111111111111111111111111111111111111".to_string(),
                 short: "11111111".to_string(),
@@ -479,7 +648,7 @@ mod tests {
                 short: "22222222".to_string(),
             },
         ];
-        template.files = vec![
+        props.files = vec![
             FileDiff {
                 path: "src/main.rs".to_string(),
                 additions: 3,
@@ -495,9 +664,9 @@ mod tests {
                 bar_del: 0,
             },
         ];
-        template.total_additions = 4;
-        template.total_deletions = 1;
-        template.diff_lines = vec![
+        props.total_additions = 4;
+        props.total_deletions = 1;
+        props.diff_lines = vec![
             DiffLine {
                 kind: "hunk".to_string(),
                 content: "diff --git a/src/main.rs b/src/main.rs".to_string(),
@@ -519,6 +688,6 @@ mod tests {
                 content: "+    println!(\"<new> & escaped\");".to_string(),
             },
         ];
-        insta::assert_snapshot!(render_to_string(&init_tera(), "commit.html", &template).unwrap());
+        insta::assert_snapshot!(render(props));
     }
 }
