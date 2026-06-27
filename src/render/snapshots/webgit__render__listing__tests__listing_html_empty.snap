@@ -1,7 +1,6 @@
 ---
 source: src/render/listing.rs
-expression: "render_to_string(&init_tera(), \"listing.html\", &template).unwrap()"
+expression: "render(ListingProps { groups: vec![] })"
 ---
 <h3 class="summary-heading">Repositories</h3>
-
 <p class="msg">No repositories found.</p>

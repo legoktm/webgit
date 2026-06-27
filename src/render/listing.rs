@@ -1,9 +1,7 @@
-use crate::render::render_template;
-use serde::Serialize;
 use std::collections::BTreeMap;
-use tera::Tera;
+use yew::prelude::*;
 
-#[derive(Serialize)]
+#[derive(PartialEq, Clone)]
 struct RepoEntry {
     /// Basename within its section, e.g. `foo.git`.
     name: String,
@@ -11,15 +9,18 @@ struct RepoEntry {
     href: String,
 }
 
-#[derive(Serialize)]
+#[derive(PartialEq, Clone)]
 struct RepoGroup {
     /// The shared parent-directory prefix; empty for top-level repositories.
     section: String,
     repos: Vec<RepoEntry>,
 }
 
-#[derive(Serialize)]
-struct ListingTemplate {
+/// The view inputs for the repository index: repositories grouped by their
+/// common parent directory. Doubles as the component's props and the unit-test
+/// fixture.
+#[derive(Properties, PartialEq, Clone)]
+pub(crate) struct ListingProps {
     groups: Vec<RepoGroup>,
 }
 
@@ -52,21 +53,80 @@ fn group_repos(paths: &[String]) -> Vec<RepoGroup> {
         .collect()
 }
 
-pub(crate) fn render_listing(
-    tera: &Tera,
-    paths: Vec<String>,
-    output: &web_sys::Element,
-) -> anyhow::Result<()> {
-    let template = ListingTemplate {
+/// The Yew component used to mount the repository index into the DOM. The markup
+/// lives in the plain `listing_view` function below so it can be exercised
+/// without a renderer.
+#[function_component(ListingView)]
+pub(crate) fn listing_view_component(props: &ListingProps) -> Html {
+    listing_view(props)
+}
+
+pub(crate) fn listing_view(props: &ListingProps) -> Html {
+    let ListingProps { groups } = props;
+
+    html! {
+        <>
+            <h3 class="summary-heading">{ "Repositories" }</h3>
+            if groups.is_empty() {
+                <p class="msg">{ "No repositories found." }</p>
+            } else {
+                <table class="summary-table repo-listing">
+                    <thead>
+                        <tr><th>{ "Name" }</th></tr>
+                    </thead>
+                    <tbody>
+                        { for groups.iter().map(repo_group_rows) }
+                    </tbody>
+                </table>
+            }
+        </>
+    }
+}
+
+/// A section's rows: an optional section header (omitted for top-level repos,
+/// which have no prefix) followed by one row per repository.
+fn repo_group_rows(g: &RepoGroup) -> Html {
+    html! {
+        <>
+            if !g.section.is_empty() {
+                <tr class="repo-section"><td>{ g.section.clone() }</td></tr>
+            }
+            { for g.repos.iter().map(repo_row) }
+        </>
+    }
+}
+
+fn repo_row(r: &RepoEntry) -> Html {
+    html! {
+        <tr><td class="name"><a href={r.href.clone()}>{ r.name.clone() }</a></td></tr>
+    }
+}
+
+pub(crate) fn render_listing(paths: Vec<String>, output: &web_sys::Element) -> anyhow::Result<()> {
+    let props = ListingProps {
         groups: group_repos(&paths),
     };
-    render_template(tera, "listing.html", &template, output)
+    // Incremental migration: mount a self-contained Yew app at #output. The
+    // handle is leaked because the next navigation clears #output directly.
+    let handle = yew::Renderer::<ListingView>::with_root_and_props(output.clone(), props).render();
+    std::mem::forget(handle);
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::render::{init_tera, render_to_string};
+
+    /// Render `ListingView` to a static HTML string via SSR, breaking adjacent
+    /// tags onto their own lines. See `render::tag` for why we go through SSR.
+    fn render(props: ListingProps) -> String {
+        let html = futures::executor::block_on(
+            yew::ServerRenderer::<ListingView>::with_props(move || props)
+                .hydratable(false)
+                .render(),
+        );
+        html.replace("><", ">\n<")
+    }
 
     fn entries(paths: &[&str]) -> Vec<String> {
         paths.iter().map(|p| p.to_string()).collect()
@@ -113,15 +173,13 @@ mod tests {
 
     #[test]
     fn test_listing_html() {
-        let template = ListingTemplate {
+        insta::assert_snapshot!(render(ListingProps {
             groups: group_repos(&entries(&["public/foo.git", "public/bar.git", "top.git"])),
-        };
-        insta::assert_snapshot!(render_to_string(&init_tera(), "listing.html", &template).unwrap());
+        }));
     }
 
     #[test]
     fn test_listing_html_empty() {
-        let template = ListingTemplate { groups: vec![] };
-        insta::assert_snapshot!(render_to_string(&init_tera(), "listing.html", &template).unwrap());
+        insta::assert_snapshot!(render(ListingProps { groups: vec![] }));
     }
 }

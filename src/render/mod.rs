@@ -1,10 +1,8 @@
 use crate::cache::CachingRepo;
 use git_async::object::{Commit, ObjectId, TreeEntryType};
 use git_async::reference::{RefEntry, RefName, RefTarget};
-use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
 use std::rc::Rc;
-use tera::{Context, Tera};
 use yew::{Html, html};
 
 pub(crate) mod about;
@@ -19,36 +17,7 @@ pub(crate) mod summary;
 pub(crate) mod tag;
 pub(crate) mod tree;
 
-pub(crate) fn render_to_string(
-    tera: &Tera,
-    name: &str,
-    data: &impl Serialize,
-) -> anyhow::Result<String> {
-    let ctx = Context::from_serialize(data)?;
-    Ok(tera.render(name, &ctx)?)
-}
-
-pub(crate) fn render_template(
-    tera: &Tera,
-    name: &str,
-    data: &impl Serialize,
-    output: &web_sys::Element,
-) -> anyhow::Result<()> {
-    output.set_inner_html(&render_to_string(tera, name, data)?);
-    Ok(())
-}
-
-pub(crate) fn init_tera() -> Tera {
-    let mut tera = Tera::default();
-    tera.add_raw_templates(vec![(
-        "listing.html",
-        include_str!("../templates/listing.html"),
-    )])
-    .unwrap();
-    tera
-}
-
-#[derive(Serialize, PartialEq, Clone)]
+#[derive(PartialEq, Clone)]
 pub(crate) struct RefRow {
     name: String,
     short_hash: String,
@@ -127,7 +96,7 @@ fn refs_table_row(href: String, r: &RefRow) -> Html {
     }
 }
 
-#[derive(Serialize, PartialEq, Clone)]
+#[derive(PartialEq, Clone)]
 pub(crate) struct CommitRow {
     hash: String,
     short_hash: String,
@@ -138,14 +107,13 @@ pub(crate) struct CommitRow {
 }
 
 /// A branch or tag decoration shown next to a commit, cgit-style.
-#[derive(Serialize, PartialEq, Clone)]
+#[derive(PartialEq, Clone)]
 pub(crate) struct RefLabel {
     name: String,
     kind: RefLabelKind,
 }
 
-#[derive(Serialize, PartialEq, Clone, Copy)]
-#[serde(rename_all = "lowercase")]
+#[derive(PartialEq, Clone, Copy)]
 pub(crate) enum RefLabelKind {
     Branch,
     Tag,
@@ -230,15 +198,9 @@ impl Age {
     }
 
     /// The rendered age: a coarse relative bucket within two weeks, else an
-    /// absolute date. Shared by the Yew views and the Tera `Serialize` impl.
+    /// absolute date. Used by every view that renders a row's age.
     pub(crate) fn display(&self) -> String {
         format_age(self.secs, &self.when)
-    }
-}
-
-impl serde::Serialize for Age {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(&self.display())
     }
 }
 

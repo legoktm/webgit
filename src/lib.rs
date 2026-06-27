@@ -249,8 +249,7 @@ async fn try_load_index(output: &web_sys::Element) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to load {url}: {e:?}"))?;
     let paths: Vec<String> = serde_json::from_str(&text)
         .map_err(|e| anyhow::anyhow!("Failed to parse listing.json: {e}"))?;
-    let tera = render::init_tera();
-    render::listing::render_listing(&tera, paths, output)
+    render::listing::render_listing(paths, output)
 }
 
 // ---------------------------------------------------------------------------

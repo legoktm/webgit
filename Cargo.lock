@@ -1094,16 +1094,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tera"
-version = "2.0.0-alpha.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "11e171ef354c78b17ae70f6ebfe229e6f04722f23d6084df811f0b3150b21d57"
-dependencies = [
- "serde",
- "unicode-segmentation",
-]
-
-[[package]]
 name = "thiserror"
 version = "1.0.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1245,12 +1235,6 @@ name = "unicode-ident"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
-
-[[package]]
-name = "unicode-segmentation"
-version = "1.13.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c6f5d3c3b1bf09027a88a6bc961fc00497d651009560b5463668dc81b0fa87a8"
 
 [[package]]
 name = "unicode-xid"
@@ -1419,7 +1403,6 @@ dependencies = [
  "serde",
  "serde_json",
  "similar 3.1.1",
- "tera",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
