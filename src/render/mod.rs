@@ -167,6 +167,20 @@ fn ref_label(r: &RefLabel) -> Html {
     }
 }
 
+/// Hand control back to the browser event loop so it can paint pending DOM
+/// updates before the next chunk of work. A resolved `Promise` (microtask)
+/// would not give the renderer a turn — a 0 ms `setTimeout` is a real macrotask
+/// boundary, which is where the browser gets to repaint. Used between streamed
+/// render batches whose data resolves too fast (cached) to yield on its own.
+pub(crate) async fn yield_to_browser() {
+    let promise = js_sys::Promise::new(&mut |resolve, _reject| {
+        if let Some(win) = web_sys::window() {
+            let _ = win.set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 0);
+        }
+    });
+    let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+}
+
 fn age(dt: &chrono::DateTime<chrono::FixedOffset>) -> u64 {
     let now_ms = js_sys::Date::now();
     let then_ms = dt.timestamp_millis() as f64;

@@ -1,5 +1,6 @@
 use crate::cache::CachingRepo;
 use crate::error::GitContext;
+use crate::render::yield_to_browser;
 use futures::stream::{FuturesOrdered, StreamExt};
 use git_async::diff::{DiffEntry, TreeDiff};
 use git_async::error::Error as GitError;
@@ -26,6 +27,10 @@ struct FileDiff {
     deletions: usize,
     bar_add: usize,
     bar_del: usize,
+    /// True between the tree diff (which gives us the path) and this file's
+    /// blobs loading (which give us the counts): the row shows the name with the
+    /// stats column blank until they arrive.
+    pending: bool,
 }
 
 /// One piece of a commit message: either literal text (escaped by Yew when
@@ -278,8 +283,8 @@ fn diff_file(path: &str, old_data: Vec<u8>, new_data: Vec<u8>) -> (Vec<DiffLine>
 }
 
 /// Rescale the diffstat bars to the current widest file (0–40 columns). Called
-/// after each file during streaming, so bars re-normalise as larger files
-/// arrive; the final call leaves them at their finished widths.
+/// before each progress emit, so bars re-normalise as larger files arrive; the
+/// final return leaves them at their finished widths.
 fn recompute_bars(files: &mut [FileDiff]) {
     let max_changes = files
         .iter()
@@ -300,22 +305,48 @@ fn recompute_bars(files: &mut [FileDiff]) {
     }
 }
 
-/// Diff every changed file, calling `on_progress` with the files/lines so far
-/// after each one. Blob loads for all files are kicked off up front (so the
-/// per-object round-trips overlap), but consumed in tree order via
-/// [`FuturesOrdered`], so files render top-to-bottom as they resolve rather
-/// than all at once. Diffing itself is CPU-bound and stays sequential.
+/// How often, in milliseconds of wall time, to emit a partial diff while
+/// streaming. Cached blobs resolve in a back-to-back microtask burst that would
+/// otherwise never yield the renderer a turn; emitting (and yielding) on a time
+/// budget paints progressively without re-rendering the whole diff once per
+/// file. A small/fast diff never trips it and just renders once at the end.
+const DIFF_EMIT_INTERVAL_MS: f64 = 50.0;
+
+/// Diff every changed file, calling `on_progress` as it goes. The diffstat's
+/// file list is emitted immediately from the tree diff (paths known up front,
+/// stats `pending`); then each file's blobs are loaded — kicked off all at once
+/// so the round-trips overlap, but consumed in tree order via [`FuturesOrdered`]
+/// so the diff body fills in top-to-bottom — and its counts/lines folded in,
+/// re-emitting roughly every [`DIFF_EMIT_INTERVAL_MS`]. Diffing itself is
+/// CPU-bound and stays sequential.
 async fn stream_diff(
     repo: &CachingRepo,
     td: &TreeDiff,
     on_progress: impl Fn(&[FileDiff], &[DiffLine]),
 ) -> (Vec<FileDiff>, Vec<DiffLine>) {
+    // The changed-file list is known from the tree diff before any blob loads,
+    // so show it right away with the stats column blank.
+    let mut files: Vec<FileDiff> = td
+        .entries()
+        .iter()
+        .map(|entry| FileDiff {
+            path: String::from_utf8_lossy(entry.path().as_slice()).into_owned(),
+            additions: 0,
+            deletions: 0,
+            bar_add: 0,
+            bar_del: 0,
+            pending: true,
+        })
+        .collect();
+    let mut diff_lines: Vec<DiffLine> = Vec::new();
+    on_progress(&files, &diff_lines);
+    yield_to_browser().await;
+
     let mut loads: FuturesOrdered<_> = td
         .entries()
         .iter()
         .map(|entry| async move {
-            let path = String::from_utf8_lossy(entry.path().as_slice()).into_owned();
-            let (old_data, new_data) = match entry {
+            match entry {
                 DiffEntry::LeftOnly {
                     content: (old_id, _),
                     ..
@@ -330,27 +361,34 @@ async fn stream_diff(
                 } => {
                     futures::join!(load_blob(repo, *old_id), load_blob(repo, *new_id))
                 }
-            };
-            (path, old_data, new_data)
+            }
         })
         .collect();
 
-    let mut files: Vec<FileDiff> = Vec::new();
-    let mut diff_lines: Vec<DiffLine> = Vec::new();
-    while let Some((path, old_data, new_data)) = loads.next().await {
+    // `FuturesOrdered` yields in tree order, matching `files`.
+    let mut idx = 0;
+    let mut last_emit = js_sys::Date::now();
+    while let Some((old_data, new_data)) = loads.next().await {
+        let path = files[idx].path.clone();
         let (lines, additions, deletions) = diff_file(&path, old_data, new_data);
         diff_lines.extend(lines);
-        files.push(FileDiff {
-            path,
-            additions,
-            deletions,
-            bar_add: 0,
-            bar_del: 0,
-        });
-        recompute_bars(&mut files);
-        on_progress(&files, &diff_lines);
+        files[idx].additions = additions;
+        files[idx].deletions = deletions;
+        files[idx].pending = false;
+        idx += 1;
+        // Paint progressively, but only every ~50ms so a large diff isn't
+        // re-rendered (and the growing line list re-cloned) once per file. Yield
+        // to the event loop after emitting so the browser actually repaints —
+        // cached blobs drain as microtasks that wouldn't otherwise let it.
+        if js_sys::Date::now() - last_emit >= DIFF_EMIT_INTERVAL_MS {
+            recompute_bars(&mut files);
+            on_progress(&files, &diff_lines);
+            yield_to_browser().await;
+            last_emit = js_sys::Date::now();
+        }
     }
 
+    recompute_bars(&mut files);
     (files, diff_lines)
 }
 
@@ -444,6 +482,18 @@ fn message_segment(seg: &MessageSegment) -> Html {
 }
 
 fn diffstat_row(f: &FileDiff) -> Html {
+    // Before its blobs load, a file's name is known but its stats aren't: show
+    // the name with the remaining columns blank until they stream in.
+    if f.pending {
+        return html! {
+            <tr>
+                <td class="diffstat-name">{ f.path.clone() }</td>
+                <td class="diffstat-count"></td>
+                <td class="diffstat-bar-cell"></td>
+                <td class="diffstat-pm"></td>
+            </tr>
+        };
+    }
     // The bar widths are data-driven (0-40%), but the CSP (`style-src 'self'`)
     // forbids inline `style` attributes, so the width is selected via a
     // `bar-w-N` class defined in styles.css rather than set inline.
@@ -629,6 +679,7 @@ mod tests {
             deletions,
             bar_add: 0,
             bar_del: 0,
+            pending: false,
         }
     }
 
@@ -720,6 +771,7 @@ mod tests {
                 deletions: 1,
                 bar_add: 30,
                 bar_del: 10,
+                pending: false,
             },
             FileDiff {
                 path: "README".to_string(),
@@ -727,6 +779,7 @@ mod tests {
                 deletions: 0,
                 bar_add: 10,
                 bar_del: 0,
+                pending: false,
             },
         ];
         props.total_additions = 4;
@@ -751,6 +804,37 @@ mod tests {
             DiffLine {
                 kind: "add".to_string(),
                 content: "+    println!(\"<new> & escaped\");".to_string(),
+            },
+        ];
+        insta::assert_snapshot!(render(props));
+    }
+
+    #[test]
+    fn test_commit_html_diff_pending() {
+        // The streamed first frame: the changed-file list is known (from the
+        // tree diff) but no blobs have loaded, so every row is `pending` — name
+        // shown, stats columns blank — and the diff body is still empty.
+        let mut props = base_fixture();
+        props.parents = vec![ParentRef {
+            hash: "1111111111111111111111111111111111111111".to_string(),
+            short: "11111111".to_string(),
+        }];
+        props.files = vec![
+            FileDiff {
+                path: "src/main.rs".to_string(),
+                additions: 0,
+                deletions: 0,
+                bar_add: 0,
+                bar_del: 0,
+                pending: true,
+            },
+            FileDiff {
+                path: "README".to_string(),
+                additions: 0,
+                deletions: 0,
+                bar_add: 0,
+                bar_del: 0,
+                pending: true,
             },
         ];
         insta::assert_snapshot!(render(props));

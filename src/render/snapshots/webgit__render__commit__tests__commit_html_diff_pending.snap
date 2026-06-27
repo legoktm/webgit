@@ -1,0 +1,55 @@
+---
+source: src/render/commit.rs
+expression: render(props)
+---
+<table class="tag-table">
+<tbody>
+<tr>
+<td class="label">author</td>
+<td>Kunal Mehta &lt;author@example.org&gt; 2026-01-15 12:34:56 +00:00</td>
+</tr>
+<tr>
+<td class="label">committer</td>
+<td>Committer Person &lt;committer@example.org&gt; 2026-01-15 13:00:00 +00:00</td>
+</tr>
+<tr>
+<td class="label">parent</td>
+<td class="mono">
+<a href="#!/commit/1111111111111111111111111111111111111111">11111111</a>
+</td>
+</tr>
+<tr>
+<td class="label">commit</td>
+<td class="mono">0123abcd0123abcd0123abcd0123abcd0123abcd</td>
+</tr>
+<tr>
+<td class="label">tree</td>
+<td class="mono">fedcba98fedcba98fedcba98fedcba98fedcba98</td>
+</tr>
+</tbody>
+</table><pre class="tag-message">Fix the thing
+
+Longer explanation with &lt;html&gt; &amp; "chars".
+See <a href="#!/commit/0123abcd">0123abcd</a> for context.</pre><div class="diffstat">
+<p class="diffstat-summary">2 files changed, 0 insertions(+), 0 deletions(-)</p>
+<table class="diffstat-table">
+<tr>
+<td class="diffstat-name">src/main.rs</td>
+<td class="diffstat-count">
+</td>
+<td class="diffstat-bar-cell">
+</td>
+<td class="diffstat-pm">
+</td>
+</tr>
+<tr>
+<td class="diffstat-name">README</td>
+<td class="diffstat-count">
+</td>
+<td class="diffstat-bar-cell">
+</td>
+<td class="diffstat-pm">
+</td>
+</tr>
+</table>
+</div><pre class="diff-pre"></pre>
