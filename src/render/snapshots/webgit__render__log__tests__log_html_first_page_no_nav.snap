@@ -1,24 +1,24 @@
 ---
 source: src/render/log.rs
-expression: "render_to_string(&init_tera(), \"log.html\", &template).unwrap()"
+expression: "render(LogProps\n{\n    commits:\n    vec![fixtures::commit_row(\"0123abcd\", \"Initial commit\", \"Kunal Mehta\",\n    fixtures::relative_age(60),)], prev_url: None, next_url: None,\n})"
 ---
 <table class="summary-table">
-    <thead>
-        <tr>
-            <th>Age</th>
-            <th>Commit</th>
-            <th>Message</th>
-            <th>Author</th>
-        </tr>
-    </thead>
-    <tbody>
-        
-        <tr>
-            <td class="age">60 seconds</td>
-            <td class="name"><a href="#!/commit/0123abcd00000000000000000000000000000000">0123abcd</a></td>
-            <td class="msg">Initial commit</td>
-            <td class="author">Kunal Mehta</td>
-        </tr>
-        
-    </tbody>
+<thead>
+<tr>
+<th>Age</th>
+<th>Commit</th>
+<th>Message</th>
+<th>Author</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="age">60 seconds</td>
+<td class="name">
+<a href="#!/commit/0123abcd00000000000000000000000000000000">0123abcd</a>
+</td>
+<td class="msg">Initial commit</td>
+<td class="author">Kunal Mehta</td>
+</tr>
+</tbody>
 </table>

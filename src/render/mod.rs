@@ -5,6 +5,7 @@ use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
 use std::rc::Rc;
 use tera::{Context, Tera};
+use yew::{Html, html};
 
 pub(crate) mod about;
 pub(crate) mod blob;
@@ -52,7 +53,6 @@ pub(crate) fn init_tera() -> Tera {
         ("refs_all.html", include_str!("../templates/refs_all.html")),
         ("summary.html", include_str!("../templates/summary.html")),
         ("commits.html", include_str!("../templates/commits.html")),
-        ("log.html", include_str!("../templates/log.html")),
     ])
     .unwrap();
     tera
@@ -67,7 +67,7 @@ pub(crate) struct RefRow {
     age: Age,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, PartialEq, Clone)]
 pub(crate) struct CommitRow {
     hash: String,
     short_hash: String,
@@ -78,17 +78,65 @@ pub(crate) struct CommitRow {
 }
 
 /// A branch or tag decoration shown next to a commit, cgit-style.
-#[derive(Serialize, Clone)]
+#[derive(Serialize, PartialEq, Clone)]
 pub(crate) struct RefLabel {
     name: String,
     kind: RefLabelKind,
 }
 
-#[derive(Serialize, Clone, Copy)]
+#[derive(Serialize, PartialEq, Clone, Copy)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum RefLabelKind {
     Branch,
     Tag,
+}
+
+/// The commit list shared by the log and summary views (the old
+/// `commits.html`). Lives here, next to [`CommitRow`], so both callers can
+/// reuse it and reach the row's private fields.
+pub(crate) fn commits_table(commits: &[CommitRow]) -> Html {
+    html! {
+        <table class="summary-table">
+            <thead>
+                <tr>
+                    <th>{ "Age" }</th>
+                    <th>{ "Commit" }</th>
+                    <th>{ "Message" }</th>
+                    <th>{ "Author" }</th>
+                </tr>
+            </thead>
+            <tbody>
+                { for commits.iter().map(commit_table_row) }
+            </tbody>
+        </table>
+    }
+}
+
+fn commit_table_row(c: &CommitRow) -> Html {
+    let href = format!("#!/commit/{}", c.hash);
+    html! {
+        <tr>
+            <td class="age">{ c.age.display() }</td>
+            <td class="name"><a href={href}>{ c.short_hash.clone() }</a></td>
+            <td class="msg">{ c.message.clone() }{ for c.refs.iter().map(ref_label) }</td>
+            <td class="author">{ c.author.clone() }</td>
+        </tr>
+    }
+}
+
+/// A single decoration after the commit message. Each is preceded by a literal
+/// space so consecutive labels (and the message) stay separated.
+fn ref_label(r: &RefLabel) -> Html {
+    match r.kind {
+        RefLabelKind::Tag => {
+            let href = format!("#!/refs/tags/{}", r.name);
+            html! { <>{ " " }<a class="ref-label tag" href={href}>{ r.name.clone() }</a></> }
+        }
+        RefLabelKind::Branch => {
+            let href = format!("#!/log?h={}", r.name);
+            html! { <>{ " " }<a class="ref-label branch" href={href}>{ r.name.clone() }</a></> }
+        }
+    }
 }
 
 fn age(dt: &chrono::DateTime<chrono::FixedOffset>) -> u64 {
@@ -102,7 +150,7 @@ fn age(dt: &chrono::DateTime<chrono::FixedOffset>) -> u64 {
 /// It sorts by recency and serializes — at render time — to a coarse relative
 /// age within the last two weeks, or an absolute `YYYY-MM-DD` date (in the
 /// commit's own timezone) beyond that.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub(crate) struct Age {
     secs: u64,
     when: chrono::DateTime<chrono::FixedOffset>,
@@ -120,11 +168,17 @@ impl Age {
     pub(crate) fn secs(&self) -> u64 {
         self.secs
     }
+
+    /// The rendered age: a coarse relative bucket within two weeks, else an
+    /// absolute date. Shared by the Yew views and the Tera `Serialize` impl.
+    pub(crate) fn display(&self) -> String {
+        format_age(self.secs, &self.when)
+    }
 }
 
 impl serde::Serialize for Age {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(&format_age(self.secs, &self.when))
+        serializer.serialize_str(&self.display())
     }
 }
 

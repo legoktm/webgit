@@ -365,16 +365,7 @@ async fn try_handle_route(
                 update_path_bar(doc, &path, head.as_deref(), display);
                 show(doc, "path-bar");
             }
-            render_log(
-                tera,
-                log_commit,
-                repo,
-                &path,
-                offset,
-                head.as_deref(),
-                output,
-            )
-            .await?;
+            render_log(log_commit, repo, &path, offset, head.as_deref(), output).await?;
         }
         Route::CommitHead => {
             hide_path_bar(doc);
