@@ -1,100 +1,91 @@
 ---
 source: src/render/summary.rs
-expression: "render_to_string(&init_tera(), \"summary.html\", &template).unwrap()"
+expression: "render(SummaryProps\n{\n    branches:\n    vec![fixtures::ref_row(\"main\", \"Fix non-annotated tags\", \"Kunal Mehta\",\n    fixtures::relative_age(3600),),\n    fixtures::ref_row(\"develop\", \"WIP: new parser\", \"Someone Else\",\n    fixtures::date_age(\"2001-01-05\"),),], more_branches: true, tags:\n    vec![fixtures::ref_row(\"v1.0.0\", \"Release 1.0.0\", \"Kunal Mehta\",\n    fixtures::date_age(\"2000-03-15\"),)], more_tags: true, commits:\n    vec![fixtures::commit_row(\"0123abcd\", \"Fix non-annotated tags\",\n    \"Kunal Mehta\", fixtures::relative_age(3600),),\n    fixtures::commit_row(\"89abcdef\", \"Add README\", \"Kunal Mehta\",\n    fixtures::relative_age(86400 * 3),),], clone_url:\n    \"https://example.org/repo.git\".to_string(),\n})"
 ---
 <h3 class="summary-heading">Clone</h3>
 <div class="clone-url">git clone https://example.org/repo.git</div>
-
 <h3 class="summary-heading">Branches</h3>
 <table class="summary-table">
-    <thead>
-        <tr>
-            <th>Branch</th>
-            <th>Commit message</th>
-            <th>Author</th>
-            <th>Age</th>
-        </tr>
-    </thead>
-    <tbody>
-        
-        <tr>
-            <td class="name"><a href="#!/tree?h=main">main</a></td>
-            <td class="msg">Fix non-annotated tags</td>
-            <td class="author">Kunal Mehta</td>
-            <td class="age">60 minutes</td>
-        </tr>
-        
-        <tr>
-            <td class="name"><a href="#!/tree?h=develop">develop</a></td>
-            <td class="msg">WIP: new parser</td>
-            <td class="author">Someone Else</td>
-            <td class="age">2001-01-05</td>
-        </tr>
-        
-        
-        <tr>
-            <td>[<a href="#!/refs/heads">...</a>]</td>
-        </tr>
-        
-    </tbody>
+<thead>
+<tr>
+<th>Branch</th>
+<th>Commit message</th>
+<th>Author</th>
+<th>Age</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="name">
+<a href="#!/tree?h=main">main</a>
+</td>
+<td class="msg">Fix non-annotated tags</td>
+<td class="author">Kunal Mehta</td>
+<td class="age">60 minutes</td>
+</tr>
+<tr>
+<td class="name">
+<a href="#!/tree?h=develop">develop</a>
+</td>
+<td class="msg">WIP: new parser</td>
+<td class="author">Someone Else</td>
+<td class="age">2001-01-05</td>
+</tr>
+<tr>
+<td>[<a href="#!/refs/heads">...</a>]</td>
+</tr>
+</tbody>
 </table>
-
-
 <h3 class="summary-heading">Tags</h3>
-
 <table class="summary-table">
-    <thead>
-        <tr>
-            <th>Tag</th>
-            <th>Commit message</th>
-            <th>Author</th>
-            <th>Age</th>
-        </tr>
-    </thead>
-    <tbody>
-        
-        <tr>
-            <td class="name"><a href="#!/refs/tags/v1.0.0">v1.0.0</a></td>
-            <td class="msg">Release 1.0.0</td>
-            <td class="author">Kunal Mehta</td>
-            <td class="age">2000-03-15</td>
-        </tr>
-        
-        
-        <tr>
-            <td>[<a href="#!/refs/tags">...</a>]</td>
-        </tr>
-        
-    </tbody>
+<thead>
+<tr>
+<th>Tag</th>
+<th>Commit message</th>
+<th>Author</th>
+<th>Age</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="name">
+<a href="#!/refs/tags/v1.0.0">v1.0.0</a>
+</td>
+<td class="msg">Release 1.0.0</td>
+<td class="author">Kunal Mehta</td>
+<td class="age">2000-03-15</td>
+</tr>
+<tr>
+<td>[<a href="#!/refs/tags">...</a>]</td>
+</tr>
+</tbody>
 </table>
-
-
-
 <h3 class="summary-heading">Recent commits</h3>
 <table class="summary-table">
-    <thead>
-        <tr>
-            <th>Age</th>
-            <th>Commit</th>
-            <th>Message</th>
-            <th>Author</th>
-        </tr>
-    </thead>
-    <tbody>
-        
-        <tr>
-            <td class="age">60 minutes</td>
-            <td class="name"><a href="#!/commit/0123abcd00000000000000000000000000000000">0123abcd</a></td>
-            <td class="msg">Fix non-annotated tags</td>
-            <td class="author">Kunal Mehta</td>
-        </tr>
-        
-        <tr>
-            <td class="age">3 days</td>
-            <td class="name"><a href="#!/commit/89abcdef00000000000000000000000000000000">89abcdef</a></td>
-            <td class="msg">Add README</td>
-            <td class="author">Kunal Mehta</td>
-        </tr>
-        
-    </tbody>
+<thead>
+<tr>
+<th>Age</th>
+<th>Commit</th>
+<th>Message</th>
+<th>Author</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="age">60 minutes</td>
+<td class="name">
+<a href="#!/commit/0123abcd00000000000000000000000000000000">0123abcd</a>
+</td>
+<td class="msg">Fix non-annotated tags</td>
+<td class="author">Kunal Mehta</td>
+</tr>
+<tr>
+<td class="age">3 days</td>
+<td class="name">
+<a href="#!/commit/89abcdef00000000000000000000000000000000">89abcdef</a>
+</td>
+<td class="msg">Add README</td>
+<td class="author">Kunal Mehta</td>
+</tr>
+</tbody>
 </table>

@@ -16,7 +16,6 @@ use git_async::object::{Commit, Tree};
 use route::{handle_route, set_text};
 use stats::{format_stats, set_stats_loaded};
 use std::rc::Rc;
-use tera::Tera;
 use wasm_bindgen::prelude::*;
 use web_sys::Document;
 use yew::prelude::*;
@@ -44,7 +43,6 @@ struct RepoBundle {
     head_commit: Rc<Commit>,
     root_tree: Rc<Tree>,
     clone_url: Rc<String>,
-    tera: Rc<Tera>,
 }
 
 /// Open the repository, populate the header chrome, and assemble a
@@ -110,7 +108,6 @@ async fn load_repo_bundle(url: String, doc: &Document) -> anyhow::Result<RepoBun
         head_commit: Rc::new(commit),
         root_tree: Rc::new(root_tree),
         clone_url: Rc::new(url),
-        tera: Rc::new(render::init_tera()),
     })
 }
 
@@ -119,8 +116,8 @@ async fn load_repo_bundle(url: String, doc: &Document) -> anyhow::Result<RepoBun
 // ---------------------------------------------------------------------------
 
 /// The single Yew root. It renders the static application shell, loads the
-/// repository into state, and re-runs the (still Tera-based) route renderer
-/// whenever the location hash changes.
+/// repository into state, and re-runs the route renderer whenever the location
+/// hash changes.
 #[function_component(App)]
 fn app() -> Html {
     // The loaded repository, or `None` while loading / on the repo index page.
@@ -179,7 +176,6 @@ fn app() -> Html {
                         &b.repo,
                         &b.clone_url,
                         &doc,
-                        &b.tera,
                     )
                     .await;
                     set_stats_loaded(&doc);

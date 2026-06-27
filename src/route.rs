@@ -15,7 +15,6 @@ use crate::render::{
 use git_async::object::{ObjectId, Tree, TreeEntryType};
 use git_async::reference::RefName;
 use std::rc::Rc;
-use tera::Tera;
 use wasm_bindgen::JsCast;
 use web_sys::Document;
 
@@ -291,12 +290,10 @@ pub(crate) async fn handle_route(
     repo: &Rc<CachingRepo>,
     clone_url: &Rc<String>,
     doc: &Document,
-    tera: &Rc<Tera>,
 ) {
     let output = doc.get_element_by_id("output").unwrap();
     output.set_inner_html("");
-    if let Err(e) = try_handle_route(hash, head_commit, root_tree, repo, clone_url, doc, tera).await
-    {
+    if let Err(e) = try_handle_route(hash, head_commit, root_tree, repo, clone_url, doc).await {
         output.set_inner_html(&error_html(&format!("{e:#}")));
     }
 }
@@ -308,7 +305,6 @@ async fn try_handle_route(
     repo: &Rc<CachingRepo>,
     clone_url: &Rc<String>,
     doc: &Document,
-    tera: &Rc<Tera>,
 ) -> anyhow::Result<()> {
     let output = &doc.get_element_by_id("output").unwrap();
     let route = parse_hash(&hash);
@@ -330,7 +326,7 @@ async fn try_handle_route(
         Route::Summary => {
             hide_path_bar(doc);
             set_active_tab(doc, "#!/summary");
-            render_summary(tera, head_commit, repo, clone_url, output).await?;
+            render_summary(head_commit, repo, clone_url, output).await?;
         }
         Route::Log { offset, head, path } => {
             set_active_tab(doc, "#!/log");

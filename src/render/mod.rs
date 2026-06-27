@@ -40,19 +40,10 @@ pub(crate) fn render_template(
 
 pub(crate) fn init_tera() -> Tera {
     let mut tera = Tera::default();
-    tera.add_raw_templates(vec![
-        ("listing.html", include_str!("../templates/listing.html")),
-        (
-            "refs_heads.html",
-            include_str!("../templates/refs_heads.html"),
-        ),
-        (
-            "refs_tags.html",
-            include_str!("../templates/refs_tags.html"),
-        ),
-        ("summary.html", include_str!("../templates/summary.html")),
-        ("commits.html", include_str!("../templates/commits.html")),
-    ])
+    tera.add_raw_templates(vec![(
+        "listing.html",
+        include_str!("../templates/listing.html"),
+    )])
     .unwrap();
     tera
 }

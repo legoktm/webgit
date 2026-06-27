@@ -1,19 +1,14 @@
 use crate::{
     cache::CachingRepo,
     render::{
-        CommitRow, RefRow, collect_refs, decoration_map, fetch_ref_rows, head_branch_name,
-        render_template, walk_commits,
+        CommitRow, RefRow, branches_section, collect_refs, commits_table, decoration_map,
+        fetch_ref_rows, head_branch_name, tags_section, walk_commits,
     },
 };
 use git_async::object::Commit;
-use serde::Serialize;
-use tera::Tera;
+use yew::prelude::*;
 
-async fn build_summary(
-    head_commit: &Commit,
-    repo: &CachingRepo,
-    clone_url: &str,
-) -> SummaryTemplate {
+async fn build_summary(head_commit: &Commit, repo: &CachingRepo, clone_url: &str) -> SummaryProps {
     let head_branch: Option<String> = head_branch_name(repo).await;
 
     let (all_branches, mut tags) = collect_refs(repo).await;
@@ -49,7 +44,7 @@ async fn build_summary(
         walk_commits(head_commit, repo, None, 0, 10, &decorations),
     );
 
-    SummaryTemplate {
+    SummaryProps {
         branches,
         more_branches,
         tags,
@@ -59,8 +54,11 @@ async fn build_summary(
     }
 }
 
-#[derive(Serialize)]
-struct SummaryTemplate {
+/// The view inputs for the summary page: clone URL, the (capped) branch and tag
+/// lists with their "more" flags, and the most recent commits. Doubles as the
+/// component's props and the unit-test fixture.
+#[derive(Properties, PartialEq, Clone)]
+pub(crate) struct SummaryProps {
     branches: Vec<RefRow>,
     more_branches: bool,
     tags: Vec<RefRow>,
@@ -69,25 +67,69 @@ struct SummaryTemplate {
     clone_url: String,
 }
 
+/// The Yew component used to mount the summary view into the DOM. The markup
+/// lives in the plain `summary_view` function below so it can be exercised
+/// without a renderer.
+#[function_component(SummaryView)]
+pub(crate) fn summary_view_component(props: &SummaryProps) -> Html {
+    summary_view(props)
+}
+
+pub(crate) fn summary_view(props: &SummaryProps) -> Html {
+    let SummaryProps {
+        branches,
+        more_branches,
+        tags,
+        more_tags,
+        commits,
+        clone_url,
+    } = props;
+
+    html! {
+        <>
+            <h3 class="summary-heading">{ "Clone" }</h3>
+            <div class="clone-url">{ format!("git clone {clone_url}") }</div>
+            { branches_section(branches, *more_branches) }
+            { tags_section(tags, *more_tags) }
+            <h3 class="summary-heading">{ "Recent commits" }</h3>
+            { commits_table(commits) }
+        </>
+    }
+}
+
 pub(crate) async fn render_summary(
-    tera: &Tera,
     head_commit: &Commit,
     repo: &CachingRepo,
     clone_url: &str,
     output: &web_sys::Element,
 ) -> anyhow::Result<()> {
-    let template = build_summary(head_commit, repo, clone_url).await;
-    render_template(tera, "summary.html", &template, output)
+    let props = build_summary(head_commit, repo, clone_url).await;
+    // Incremental migration: mount a self-contained Yew app at #output. The
+    // handle is leaked because the next navigation clears #output directly.
+    let handle = yew::Renderer::<SummaryView>::with_root_and_props(output.clone(), props).render();
+    std::mem::forget(handle);
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::render::{fixtures, init_tera, render_to_string};
+    use crate::render::fixtures;
+
+    /// Render `SummaryView` to a static HTML string via SSR, breaking adjacent
+    /// tags onto their own lines. See `render::tag` for why we go through SSR.
+    fn render(props: SummaryProps) -> String {
+        let html = futures::executor::block_on(
+            yew::ServerRenderer::<SummaryView>::with_props(move || props)
+                .hydratable(false)
+                .render(),
+        );
+        html.replace("><", ">\n<")
+    }
 
     #[test]
     fn test_summary_html() {
-        let template = SummaryTemplate {
+        insta::assert_snapshot!(render(SummaryProps {
             branches: vec![
                 fixtures::ref_row(
                     "main",
@@ -125,7 +167,6 @@ mod tests {
                 ),
             ],
             clone_url: "https://example.org/repo.git".to_string(),
-        };
-        insta::assert_snapshot!(render_to_string(&init_tera(), "summary.html", &template).unwrap());
+        }));
     }
 }
