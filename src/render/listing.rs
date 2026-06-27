@@ -102,15 +102,10 @@ fn repo_row(r: &RepoEntry) -> Html {
     }
 }
 
-pub(crate) fn render_listing(paths: Vec<String>, output: &web_sys::Element) -> anyhow::Result<()> {
-    let props = ListingProps {
+pub(crate) fn build_listing_props(paths: Vec<String>) -> ListingProps {
+    ListingProps {
         groups: group_repos(&paths),
-    };
-    // Incremental migration: mount a self-contained Yew app at #output. The
-    // handle is leaked because the next navigation clears #output directly.
-    let handle = yew::Renderer::<ListingView>::with_root_and_props(output.clone(), props).render();
-    std::mem::forget(handle);
-    Ok(())
+    }
 }
 
 #[cfg(test)]

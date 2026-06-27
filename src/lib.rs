@@ -9,13 +9,14 @@ mod route;
 mod stats;
 
 use cache::CachingRepo;
-use error::{GitContext, error_html};
+use error::GitContext;
 use fs::{HttpDirectory, HttpFilesystem};
 use git_async::Repo;
 use git_async::object::{Commit, Tree};
 use render::about::AboutView;
 use render::blob::BlobView;
 use render::commit::CommitView;
+use render::listing::{ListingProps, ListingView, build_listing_props};
 use render::log::LogView;
 use render::refs_all::RefsAllView;
 use render::refs_heads::RefsHeadsView;
@@ -69,6 +70,15 @@ impl PartialEq for RepoBundle {
             && Rc::ptr_eq(&self.root_tree, &other.root_tree)
             && Rc::ptr_eq(&self.clone_url, &other.clone_url)
     }
+}
+
+/// What the content area (`#content`) is showing. The initial `Loading` is
+/// replaced once the mount effect resolves the URL into a repo or the index.
+enum Content {
+    Loading,
+    Repo(RepoBundle),
+    Index(ListingProps),
+    Error(String),
 }
 
 /// Open the repository, populate the header chrome, and assemble a
@@ -146,8 +156,9 @@ async fn load_repo_bundle(url: String, doc: &Document) -> anyhow::Result<RepoBun
 /// hash changes.
 #[function_component(App)]
 fn app() -> Html {
-    // The loaded repository, or `None` while loading / on the repo index page.
-    let bundle = use_state(|| None::<RepoBundle>);
+    // What the content area shows: loading, a loaded repo (→ `RouteView`), the
+    // repository index, or a load error.
+    let content = use_state(|| Content::Loading);
     // Current location hash; updated by the hashchange listener below. This is
     // the "router": the route effect re-parses it via `route::parse_hash`.
     let hash = use_state(current_hash);
@@ -160,7 +171,7 @@ fn app() -> Html {
     // Mount: register the hashchange listener and kick off the repo load (or
     // the repository index when the URL doesn't name a repo).
     {
-        let bundle = bundle.clone();
+        let content = content.clone();
         let hash = hash.clone();
         use_effect_with((), move |_| {
             let window = web_sys::window().expect("no window");
@@ -174,16 +185,20 @@ fn app() -> Html {
             wasm_bindgen_futures::spawn_local(async move {
                 let window = web_sys::window().expect("no window");
                 let doc = window.document().expect("no document");
-                match resolve_repo_url(&window) {
-                    Some(url) => {
-                        let output = doc.get_element_by_id("output").unwrap();
-                        match load_repo_bundle(url, &doc).await {
-                            Ok(b) => bundle.set(Some(b)),
-                            Err(e) => output.set_inner_html(&error_html(&format!("{e:#}"))),
+                content.set(match resolve_repo_url(&window) {
+                    Some(url) => match load_repo_bundle(url, &doc).await {
+                        Ok(b) => Content::Repo(b),
+                        Err(e) => Content::Error(format!("{e:#}")),
+                    },
+                    None => {
+                        set_text(&doc, "repo-path-name", "repositories");
+                        doc.set_title("repositories");
+                        match load_listing().await {
+                            Ok(props) => Content::Index(props),
+                            Err(e) => Content::Error(format!("{e:#}")),
                         }
                     }
-                    None => load_index(doc).await,
-                }
+                });
             });
 
             move || drop(on_hash)
@@ -194,14 +209,16 @@ fn app() -> Html {
     // loading. The nav (active tab, hrefs) is derived synchronously by `NavBar`;
     // only the path bar's ref label needs an async ref lookup.
     {
-        let bundle = bundle.clone();
+        let content = content.clone();
         let path_bar = path_bar.clone();
-        use_effect_with(((*hash).clone(), bundle.is_some()), move |(hash, _)| {
-            if let Some(b) = (*bundle).clone() {
+        let repo_loaded = matches!(&*content, Content::Repo(_));
+        use_effect_with(((*hash).clone(), repo_loaded), move |(hash, _)| {
+            if let Content::Repo(b) = &*content {
+                let repo = Rc::clone(&b.repo);
                 let hash = hash.clone();
                 let path_bar = path_bar.clone();
                 wasm_bindgen_futures::spawn_local(async move {
-                    path_bar.set(compute_path_bar(&hash, &b.repo).await);
+                    path_bar.set(compute_path_bar(&hash, &repo).await);
                     let doc = web_sys::window().unwrap().document().unwrap();
                     set_stats_loaded(&doc);
                 });
@@ -232,13 +249,13 @@ fn app() -> Html {
 
             <div id="content">
                 {
-                    // Once a repo is loaded, its content is a real Yew subtree
-                    // (`RouteView`). Until then — while loading, or on the repo
-                    // index / error paths — `#output` stays an imperative mount
-                    // point used by the loaders below.
-                    match (*bundle).clone() {
-                        Some(b) => html! { <RouteView bundle={b} hash={(*hash).clone()} /> },
-                        None => html! { <div id="output"></div> },
+                    match &*content {
+                        Content::Loading => html! { <p class="msg">{ "Loading\u{2026}" }</p> },
+                        Content::Repo(b) => {
+                            html! { <RouteView bundle={b.clone()} hash={(*hash).clone()} /> }
+                        }
+                        Content::Index(props) => html! { <ListingView ..props.clone() /> },
+                        Content::Error(e) => html! { <p class="msg error">{ e.clone() }</p> },
                     }
                 }
             </div>
@@ -472,20 +489,9 @@ fn crumb_links(path: &str, head_suffix: &str) -> Vec<Html> {
 // Repository index
 // ---------------------------------------------------------------------------
 
-/// Shown when the URL doesn't name a repository: lists the server's repos from
-/// `/listing.json`.
-async fn load_index(doc: Document) {
-    let output = doc.get_element_by_id("output").unwrap();
-    // The repo-scoped chrome (nav tabs, fetch stats) isn't rendered on the index
-    // (gated by `is_repo` in `App`), so there's nothing to hide here.
-    set_text(&doc, "repo-path-name", "repositories");
-    doc.set_title("repositories");
-    if let Err(e) = try_load_index(&output).await {
-        output.set_inner_html(&error_html(&format!("{e:#}")));
-    }
-}
-
-async fn try_load_index(output: &web_sys::Element) -> anyhow::Result<()> {
+/// Shown when the URL doesn't name a repository: fetch and parse the server's
+/// `/listing.json` into the repository-index props.
+async fn load_listing() -> anyhow::Result<ListingProps> {
     let origin = web_sys::window()
         .and_then(|w| w.location().origin().ok())
         .unwrap_or_default();
@@ -495,7 +501,7 @@ async fn try_load_index(output: &web_sys::Element) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to load {url}: {e:?}"))?;
     let paths: Vec<String> = serde_json::from_str(&text)
         .map_err(|e| anyhow::anyhow!("Failed to parse listing.json: {e}"))?;
-    render::listing::render_listing(paths, output)
+    Ok(build_listing_props(paths))
 }
 
 // ---------------------------------------------------------------------------
