@@ -449,6 +449,24 @@ a.ref-label:hover {
     display: block;
 }
 
+/* Diffstat bar widths, 0-40% (the diff scales the longest file to 40%). The
+   width is data-driven but the CSP (style-src 'self') forbids inline styles,
+   so commit.rs picks one of these classes instead of setting `style` inline. */
+.bar-w-0  { width: 0%; }  .bar-w-1  { width: 1%; }  .bar-w-2  { width: 2%; }
+.bar-w-3  { width: 3%; }  .bar-w-4  { width: 4%; }  .bar-w-5  { width: 5%; }
+.bar-w-6  { width: 6%; }  .bar-w-7  { width: 7%; }  .bar-w-8  { width: 8%; }
+.bar-w-9  { width: 9%; }  .bar-w-10 { width: 10%; } .bar-w-11 { width: 11%; }
+.bar-w-12 { width: 12%; } .bar-w-13 { width: 13%; } .bar-w-14 { width: 14%; }
+.bar-w-15 { width: 15%; } .bar-w-16 { width: 16%; } .bar-w-17 { width: 17%; }
+.bar-w-18 { width: 18%; } .bar-w-19 { width: 19%; } .bar-w-20 { width: 20%; }
+.bar-w-21 { width: 21%; } .bar-w-22 { width: 22%; } .bar-w-23 { width: 23%; }
+.bar-w-24 { width: 24%; } .bar-w-25 { width: 25%; } .bar-w-26 { width: 26%; }
+.bar-w-27 { width: 27%; } .bar-w-28 { width: 28%; } .bar-w-29 { width: 29%; }
+.bar-w-30 { width: 30%; } .bar-w-31 { width: 31%; } .bar-w-32 { width: 32%; }
+.bar-w-33 { width: 33%; } .bar-w-34 { width: 34%; } .bar-w-35 { width: 35%; }
+.bar-w-36 { width: 36%; } .bar-w-37 { width: 37%; } .bar-w-38 { width: 38%; }
+.bar-w-39 { width: 39%; } .bar-w-40 { width: 40%; }
+
 .diffstat-pm {
     font-size: 0.8rem;
 }

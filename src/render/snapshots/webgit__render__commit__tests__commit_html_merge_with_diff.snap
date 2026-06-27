@@ -45,9 +45,9 @@ See <a href="#!/commit/0123abcd">0123abcd</a> for context.</pre><div class="diff
 <td class="diffstat-count">4</td>
 <td class="diffstat-bar-cell">
 <span class="diffstat-bar">
-<span style="width: 30%" class="bar-add">
+<span class="bar-add bar-w-30">
 </span>
-<span style="width: 10%" class="bar-del">
+<span class="bar-del bar-w-10">
 </span>
 </span>
 </td>
@@ -61,9 +61,9 @@ See <a href="#!/commit/0123abcd">0123abcd</a> for context.</pre><div class="diff
 <td class="diffstat-count">1</td>
 <td class="diffstat-bar-cell">
 <span class="diffstat-bar">
-<span style="width: 10%" class="bar-add">
+<span class="bar-add bar-w-10">
 </span>
-<span style="width: 0%" class="bar-del">
+<span class="bar-del bar-w-0">
 </span>
 </span>
 </td>

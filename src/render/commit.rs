@@ -402,15 +402,18 @@ fn message_segment(seg: &MessageSegment) -> Html {
 }
 
 fn diffstat_row(f: &FileDiff) -> Html {
-    let bar_add = format!("width: {}%", f.bar_add);
-    let bar_del = format!("width: {}%", f.bar_del);
+    // The bar widths are data-driven (0-40%), but the CSP (`style-src 'self'`)
+    // forbids inline `style` attributes, so the width is selected via a
+    // `bar-w-N` class defined in styles.css rather than set inline.
+    let bar_add = format!("bar-add bar-w-{}", f.bar_add);
+    let bar_del = format!("bar-del bar-w-{}", f.bar_del);
     html! {
         <tr>
             <td class="diffstat-name">{ f.path.clone() }</td>
             <td class="diffstat-count">{ f.additions + f.deletions }</td>
             <td class="diffstat-bar-cell">
                 <span class="diffstat-bar">
-                    <span class="bar-add" style={bar_add}></span><span class="bar-del" style={bar_del}></span>
+                    <span class={bar_add}></span><span class={bar_del}></span>
                 </span>
             </td>
             <td class="diffstat-pm">
