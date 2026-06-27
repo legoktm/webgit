@@ -59,6 +59,12 @@ pub(crate) fn fetch_stats() -> (u32, u64, u64) {
     STATS.with(|s| *s.borrow())
 }
 
+/// Drop the progress callback (e.g. when the stats component unmounts) so a
+/// stale `use_state` setter isn't held or invoked.
+pub(crate) fn clear_watch() {
+    ON_PROGRESS.with(|cb| *cb.borrow_mut() = None);
+}
+
 /// Record a cache hit and fire the progress callback.
 pub(crate) fn record_cache_hit(bytes: u64) {
     fire(0, 0, bytes);

@@ -26,13 +26,11 @@ use render::tag::TagView;
 use render::tree::TreeView;
 use route::{
     LoadedView, RefKind, Route, active_tab, build_route, log_url, parse_hash, resolve_display_head,
-    set_text,
 };
-use stats::{format_stats, set_stats_loaded};
-use std::cell::Cell;
+use stats::format_stats;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use wasm_bindgen::prelude::*;
-use web_sys::Document;
 use yew::prelude::*;
 
 fn console_log(msg: &str) {
@@ -81,23 +79,11 @@ enum Content {
     Error(String),
 }
 
-/// Open the repository, populate the header chrome, and assemble a
-/// [`RepoBundle`]. Does not render a route — that's driven reactively from the
-/// `App` route effect once the bundle lands in state.
-async fn load_repo_bundle(url: String, doc: &Document) -> anyhow::Result<RepoBundle> {
-    // Register live progress updates on the persistent stats bar.
-    let stats_el = doc.get_element_by_id("fetch-stats");
-    fetch::reset_and_watch(Box::new(move |reqs, bytes, cached_bytes| {
-        if let Some(el) = &stats_el {
-            el.set_text_content(Some(&format_stats(
-                "Loading\u{2026}",
-                reqs,
-                bytes,
-                cached_bytes,
-            )));
-        }
-    }));
-
+/// Open the repository and assemble a [`RepoBundle`]. Touches no DOM and renders
+/// no route — the header, the IndexedDB banner, and the route content are all
+/// derived reactively from the resulting `Content` state; fetch progress is
+/// shown by the [`FetchStats`] component.
+async fn load_repo_bundle(url: String) -> anyhow::Result<RepoBundle> {
     let dir = HttpDirectory::new(url.clone());
     let repo = Repo::<HttpFilesystem>::open(dir)
         .await
@@ -112,14 +98,6 @@ async fn load_repo_bundle(url: String, doc: &Document) -> anyhow::Result<RepoBun
         None => console_log("webgit: no commit-graph; walking commit objects directly"),
     }
 
-    // Surface a banner when caching is disabled so the slow performance is
-    // explained rather than mysterious.
-    if !repo.idb_available()
-        && let Some(el) = doc.get_element_by_id("idb-warning")
-    {
-        el.class_list().remove_1("hide").ok();
-    }
-
     let head = repo.head().await.context("Failed to read HEAD")?;
 
     let commit = repo
@@ -127,10 +105,6 @@ async fn load_repo_bundle(url: String, doc: &Document) -> anyhow::Result<RepoBun
         .await
         .context("Failed to peel HEAD to commit")?
         .ok_or_else(|| anyhow::anyhow!("HEAD does not point to a commit"))?;
-
-    let path = repo_path(&url);
-    doc.set_title(&path);
-    set_text(doc, "repo-path-name", &path);
 
     let root_tree = repo
         .lookup_object(commit.tree())
@@ -184,20 +158,15 @@ fn app() -> Html {
 
             wasm_bindgen_futures::spawn_local(async move {
                 let window = web_sys::window().expect("no window");
-                let doc = window.document().expect("no document");
                 content.set(match resolve_repo_url(&window) {
-                    Some(url) => match load_repo_bundle(url, &doc).await {
+                    Some(url) => match load_repo_bundle(url).await {
                         Ok(b) => Content::Repo(b),
                         Err(e) => Content::Error(format!("{e:#}")),
                     },
-                    None => {
-                        set_text(&doc, "repo-path-name", "repositories");
-                        doc.set_title("repositories");
-                        match load_listing().await {
-                            Ok(props) => Content::Index(props),
-                            Err(e) => Content::Error(format!("{e:#}")),
-                        }
-                    }
+                    None => match load_listing().await {
+                        Ok(props) => Content::Index(props),
+                        Err(e) => Content::Error(format!("{e:#}")),
+                    },
                 });
             });
 
@@ -219,31 +188,55 @@ fn app() -> Html {
                 let path_bar = path_bar.clone();
                 wasm_bindgen_futures::spawn_local(async move {
                     path_bar.set(compute_path_bar(&hash, &repo).await);
-                    let doc = web_sys::window().unwrap().document().unwrap();
-                    set_stats_loaded(&doc);
                 });
             }
             || ()
         });
     }
 
+    // The repository display name (and document title): the repo path, or
+    // "repositories" for the index; `None` while loading or on error.
+    let doc_name: Option<String> = match &*content {
+        Content::Repo(b) => Some(repo_path(&b.clone_url)),
+        Content::Index(_) => Some("repositories".to_string()),
+        Content::Loading | Content::Error(_) => None,
+    };
+    // `<title>` lives in `<head>`, outside the Yew root, so it's the one thing
+    // still set imperatively — but now declaratively, keyed off the name.
+    {
+        let doc_name = doc_name.clone();
+        use_effect_with(doc_name, |name| {
+            if let Some(name) = name
+                && let Some(doc) = web_sys::window().and_then(|w| w.document())
+            {
+                doc.set_title(name);
+            }
+            || ()
+        });
+    }
+    let idb_unavailable = matches!(&*content, Content::Repo(b) if !b.repo.idb_available());
+
     html! {
         <>
-            <div id="idb-warning" class="hide">
+            <div id="idb-warning" class={classes!((!idb_unavailable).then_some("hide"))}>
                 { "IndexedDB is unavailable, so object caching is disabled. \
                    Pages will load more slowly and re-fetch data on every navigation." }
             </div>
 
             <div id="header">
                 <div id="header-sub">
-                    <h1 id="repo-path"><span id="repo-path-name">{ "\u{2014}" }</span></h1>
+                    <h1 id="repo-path">
+                        <span id="repo-path-name">
+                            { doc_name.clone().unwrap_or_else(|| "\u{2014}".to_string()) }
+                        </span>
+                    </h1>
                     <div id="repo-desc">{ "\u{00a0}" }</div>
                 </div>
             </div>
 
             if is_repo {
                 <NavBar hash={(*hash).clone()} />
-                <div id="fetch-stats"></div>
+                <FetchStats />
             }
             { render_path_bar(&path_bar) }
 
@@ -356,8 +349,77 @@ fn render_loaded(view: &LoadedView) -> Html {
 }
 
 // ---------------------------------------------------------------------------
-// Reactive chrome (nav + path bar)
+// Reactive chrome (nav + path bar + fetch stats)
 // ---------------------------------------------------------------------------
+
+/// How long (ms) the fetch line waits with no new fetches before relabelling
+/// "Loading…" → "Loaded".
+const STATS_SETTLE_MS: i32 = 200;
+
+/// The pending "settle" timer: its `setTimeout` handle (to cancel/re-arm) and
+/// the closure it runs, kept alive alongside it. Shared so each progress tick
+/// can replace it.
+type SettleTimer = Rc<RefCell<Option<(i32, Closure<dyn FnMut()>)>>>;
+
+/// The persistent fetch-progress line. It subscribes to the fetch layer's
+/// progress callback and renders the running totals; after [`STATS_SETTLE_MS`]
+/// with no further fetches it relabels "Loading…" → "Loaded". Fully
+/// self-contained — nothing else writes to it (replacing the old imperative
+/// `#fetch-stats` text + the `set_stats_loaded` call wedged into the path-bar
+/// effect).
+#[function_component(FetchStats)]
+fn fetch_stats() -> Html {
+    let text = use_state(String::new);
+
+    {
+        let text = text.clone();
+        use_effect_with((), move |_| {
+            let window = web_sys::window().expect("no window");
+            // Debounce slot: each progress tick cancels the pending "settle" and
+            // re-arms it. Holds the timer id and its closure, which must outlive
+            // the `set_timeout` call.
+            let settle: SettleTimer = Rc::new(RefCell::new(None));
+
+            let on_progress = {
+                let text = text.clone();
+                let settle = settle.clone();
+                let window = window.clone();
+                move |reqs, bytes, cached| {
+                    text.set(format_stats("Loading\u{2026}", reqs, bytes, cached));
+                    if let Some((id, _)) = settle.borrow_mut().take() {
+                        window.clear_timeout_with_handle(id);
+                    }
+                    let settle_cb = {
+                        let text = text.clone();
+                        Closure::<dyn FnMut()>::new(move || {
+                            let (r, b, c) = fetch::fetch_stats();
+                            text.set(format_stats("Loaded", r, b, c));
+                        })
+                    };
+                    let id = window
+                        .set_timeout_with_callback_and_timeout_and_arguments_0(
+                            settle_cb.as_ref().unchecked_ref(),
+                            STATS_SETTLE_MS,
+                        )
+                        .unwrap_or(0);
+                    *settle.borrow_mut() = Some((id, settle_cb));
+                }
+            };
+            fetch::reset_and_watch(Box::new(on_progress));
+
+            move || {
+                fetch::clear_watch();
+                if let Some((id, _)) = settle.borrow_mut().take()
+                    && let Some(w) = web_sys::window()
+                {
+                    w.clear_timeout_with_handle(id);
+                }
+            }
+        });
+    }
+
+    html! { <div id="fetch-stats">{ (*text).clone() }</div> }
+}
 
 /// Props for [`NavBar`]: the current location hash, from which the active tab
 /// and the head-scoped log/tree hrefs are derived.

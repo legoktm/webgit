@@ -1,6 +1,3 @@
-use crate::fetch;
-use web_sys::Document;
-
 fn format_bytes(b: u64) -> String {
     if b < 1_024 {
         format!("{} B", b)
@@ -18,11 +15,4 @@ pub(crate) fn format_stats(label: &str, reqs: u32, bytes: u64, cached_bytes: u64
     } else {
         base
     }
-}
-
-pub(crate) fn set_stats_loaded(doc: &Document) {
-    let (reqs, bytes, cached_bytes) = fetch::fetch_stats();
-    doc.get_element_by_id("fetch-stats")
-        .unwrap()
-        .set_text_content(Some(&format_stats("Loaded", reqs, bytes, cached_bytes)));
 }

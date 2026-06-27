@@ -14,17 +14,6 @@ use crate::render::{commit_for_entry, head_branch_name};
 use git_async::object::{ObjectId, Tree, TreeEntryType};
 use git_async::reference::RefName;
 use std::rc::Rc;
-use web_sys::Document;
-
-// ---------------------------------------------------------------------------
-// DOM helpers
-// ---------------------------------------------------------------------------
-
-pub(crate) fn set_text(doc: &Document, id: &str, text: &str) {
-    doc.get_element_by_id(id)
-        .unwrap()
-        .set_text_content(Some(text));
-}
 
 // ---------------------------------------------------------------------------
 // Tree / blob walking
