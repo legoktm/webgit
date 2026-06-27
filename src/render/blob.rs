@@ -9,7 +9,7 @@ pub(crate) struct BlobProps {
     pub lines: Vec<String>,
 }
 
-fn build_blob_props(blob_id: ObjectId, data: &[u8]) -> BlobProps {
+pub(crate) fn build_blob_props(blob_id: ObjectId, data: &[u8]) -> BlobProps {
     let text = String::from_utf8_lossy(data);
     let mut lines: Vec<&str> = text.split('\n').collect();
     // A trailing newline yields a spurious empty final element; drop it so a
@@ -57,19 +57,6 @@ fn blob_row(n: usize, line: &str) -> Html {
             <td class="code">{ line }</td>
         </tr>
     }
-}
-
-pub(crate) fn render_blob(
-    blob_id: ObjectId,
-    data: &[u8],
-    output: &web_sys::Element,
-) -> anyhow::Result<()> {
-    let props = build_blob_props(blob_id, data);
-    // Incremental migration: mount a self-contained Yew app at #output. The
-    // handle is leaked because the next navigation clears #output directly.
-    let handle = yew::Renderer::<BlobView>::with_root_and_props(output.clone(), props).render();
-    std::mem::forget(handle);
-    Ok(())
 }
 
 #[cfg(test)]

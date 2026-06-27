@@ -112,11 +112,7 @@ pub(crate) fn about_view(props: &AboutProps) -> Html {
     }
 }
 
-pub(crate) async fn render_about(
-    repo: &Rc<CachingRepo>,
-    clone_url: &Rc<String>,
-    output: &web_sys::Element,
-) -> anyhow::Result<()> {
+pub(crate) async fn build_about(repo: &Rc<CachingRepo>, clone_url: &Rc<String>) -> AboutProps {
     let head_branch = repo
         .head()
         .await
@@ -151,7 +147,7 @@ pub(crate) async fn render_about(
         })
     };
 
-    let props = AboutProps {
+    AboutProps {
         clone_url: clone_url.as_str().to_string(),
         head_branch,
         branch_count,
@@ -160,13 +156,7 @@ pub(crate) async fn render_about(
         objects,
         size_mb,
         on_clear,
-    };
-
-    // Incremental migration: mount a self-contained Yew app at #output. The
-    // handle is leaked because the next navigation clears #output directly.
-    let handle = yew::Renderer::<AboutView>::with_root_and_props(output.clone(), props).render();
-    std::mem::forget(handle);
-    Ok(())
+    }
 }
 
 #[cfg(test)]

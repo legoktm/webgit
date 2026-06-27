@@ -13,8 +13,19 @@ use error::{GitContext, error_html};
 use fs::{HttpDirectory, HttpFilesystem};
 use git_async::Repo;
 use git_async::object::{Commit, Tree};
-use route::{handle_route, set_text};
+use render::about::AboutView;
+use render::blob::BlobView;
+use render::commit::CommitView;
+use render::log::LogView;
+use render::refs_all::RefsAllView;
+use render::refs_heads::RefsHeadsView;
+use render::refs_tags::RefsTagsView;
+use render::summary::SummaryView;
+use render::tag::TagView;
+use render::tree::TreeView;
+use route::{LoadedView, build_route, handle_route, set_text};
 use stats::{format_stats, set_stats_loaded};
+use std::cell::Cell;
 use std::rc::Rc;
 use wasm_bindgen::prelude::*;
 use web_sys::Document;
@@ -43,6 +54,18 @@ struct RepoBundle {
     head_commit: Rc<Commit>,
     root_tree: Rc<Tree>,
     clone_url: Rc<String>,
+}
+
+/// A bundle is created once per repository load and never mutated, so identity
+/// (pointer equality on the `Rc`s) is the right equality for prop-diffing —
+/// and avoids requiring `PartialEq` on `CachingRepo`/`Commit`/`Tree`.
+impl PartialEq for RepoBundle {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.repo, &other.repo)
+            && Rc::ptr_eq(&self.head_commit, &other.head_commit)
+            && Rc::ptr_eq(&self.root_tree, &other.root_tree)
+            && Rc::ptr_eq(&self.clone_url, &other.clone_url)
+    }
 }
 
 /// Open the repository, populate the header chrome, and assemble a
@@ -159,9 +182,10 @@ fn app() -> Html {
         });
     }
 
-    // Render the current route whenever the hash changes or the repo finishes
-    // loading. Reuses the existing imperative renderer; because the shell vdom
-    // is static, Yew never re-diffs the chrome it touches.
+    // Update the chrome (nav active tab, nav hrefs, path bar) whenever the hash
+    // changes or the repo finishes loading. The route *content* is rendered by
+    // `RouteView` below; this only touches the static shell, which Yew never
+    // re-diffs.
     {
         let bundle = bundle.clone();
         use_effect_with(((*hash).clone(), bundle.is_some()), move |(hash, _)| {
@@ -169,15 +193,7 @@ fn app() -> Html {
                 let hash = hash.clone();
                 wasm_bindgen_futures::spawn_local(async move {
                     let doc = web_sys::window().unwrap().document().unwrap();
-                    handle_route(
-                        hash,
-                        &b.head_commit,
-                        &b.root_tree,
-                        &b.repo,
-                        &b.clone_url,
-                        &doc,
-                    )
-                    .await;
+                    handle_route(hash, &b.repo, &doc).await;
                     set_stats_loaded(&doc);
                 });
             }
@@ -212,9 +228,98 @@ fn app() -> Html {
             <div id="path-bar" class="hide"></div>
 
             <div id="content">
-                <div id="output"></div>
+                {
+                    // Once a repo is loaded, its content is a real Yew subtree
+                    // (`RouteView`). Until then — while loading, or on the repo
+                    // index / error paths — `#output` stays an imperative mount
+                    // point used by the loaders below.
+                    match (*bundle).clone() {
+                        Some(b) => html! { <RouteView bundle={b} hash={(*hash).clone()} /> },
+                        None => html! { <div id="output"></div> },
+                    }
+                }
             </div>
         </>
+    }
+}
+
+/// Props for [`RouteView`]: the loaded repository and the current location hash.
+#[derive(Properties, PartialEq, Clone)]
+struct RouteViewProps {
+    bundle: RepoBundle,
+    hash: String,
+}
+
+/// Renders the content for the current route as a child of the single Yew tree.
+/// An effect (re-run on hash/repo change) resolves the route's data via
+/// [`build_route`] into local state; the markup is a `match` over the result,
+/// with loading and error states. Replaces the old per-route mount-and-leak.
+#[function_component(RouteView)]
+fn route_view(props: &RouteViewProps) -> Html {
+    let RouteViewProps { bundle, hash } = props;
+    // `None` while resolving; `Some(Ok)` rendered; `Some(Err)` an error message.
+    let loaded = use_state(|| None::<Result<LoadedView, String>>);
+
+    {
+        let loaded = loaded.clone();
+        use_effect_with(
+            (hash.clone(), bundle.clone()),
+            move |(hash, bundle): &(String, RepoBundle)| {
+                loaded.set(None);
+                // Guard against a stale in-flight resolution overwriting a newer
+                // one: navigating away flips the flag in the cleanup closure.
+                let cancelled = Rc::new(Cell::new(false));
+                {
+                    let (loaded, bundle, hash, cancelled) = (
+                        loaded.clone(),
+                        bundle.clone(),
+                        hash.clone(),
+                        cancelled.clone(),
+                    );
+                    wasm_bindgen_futures::spawn_local(async move {
+                        let result = build_route(
+                            &hash,
+                            &bundle.head_commit,
+                            &bundle.root_tree,
+                            &bundle.repo,
+                            &bundle.clone_url,
+                        )
+                        .await
+                        .map_err(|e| format!("{e:#}"));
+                        if !cancelled.get() {
+                            loaded.set(Some(result));
+                        }
+                    });
+                }
+                move || cancelled.set(true)
+            },
+        );
+    }
+
+    match &*loaded {
+        None => html! { <p class="msg">{ "Loading\u{2026}" }</p> },
+        Some(Err(e)) => html! { <p class="msg error">{ e.clone() }</p> },
+        Some(Ok(view)) => render_loaded(view),
+    }
+}
+
+/// Render a resolved [`LoadedView`] by handing its props to the matching view
+/// component (the props spread `..p` provides every field at once).
+fn render_loaded(view: &LoadedView) -> Html {
+    match view {
+        LoadedView::About(p) => html! { <AboutView ..p.clone() /> },
+        LoadedView::Summary(p) => html! { <SummaryView ..p.clone() /> },
+        LoadedView::Log(p) => html! { <LogView ..p.clone() /> },
+        LoadedView::Commit(p) => html! { <CommitView ..p.clone() /> },
+        LoadedView::RefsHeads(p) => html! { <RefsHeadsView ..p.clone() /> },
+        LoadedView::RefsTags(p) => html! { <RefsTagsView ..p.clone() /> },
+        LoadedView::RefsAll(p) => html! { <RefsAllView ..p.clone() /> },
+        LoadedView::Tag(p) => html! { <TagView ..p.clone() /> },
+        LoadedView::Tree(p) => html! { <TreeView ..p.clone() /> },
+        LoadedView::Blob(p) => html! { <BlobView ..p.clone() /> },
+        LoadedView::NotFound(path) => html! {
+            <p class="msg error">{ "Not found: " }<code>{ path.clone() }</code></p>
+        },
     }
 }
 

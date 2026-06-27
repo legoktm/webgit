@@ -4,7 +4,7 @@ use crate::{
 };
 use yew::prelude::*;
 
-async fn build_refs_tags(repo: &CachingRepo) -> RefsTagsProps {
+pub(crate) async fn build_refs_tags(repo: &CachingRepo) -> RefsTagsProps {
     let (_, tags) = collect_refs(repo).await;
     let mut tags = fetch_ref_rows(&tags, repo).await;
     tags.sort_by_key(|t| t.age.secs());
@@ -34,18 +34,6 @@ pub(crate) fn refs_tags_view_component(props: &RefsTagsProps) -> Html {
 pub(crate) fn refs_tags_view(props: &RefsTagsProps) -> Html {
     let RefsTagsProps { tags, more_tags } = props;
     tags_section(tags, *more_tags)
-}
-
-pub(crate) async fn render_refs_tags(
-    repo: &CachingRepo,
-    output: &web_sys::Element,
-) -> anyhow::Result<()> {
-    let props = build_refs_tags(repo).await;
-    // Incremental migration: mount a self-contained Yew app at #output. The
-    // handle is leaked because the next navigation clears #output directly.
-    let handle = yew::Renderer::<RefsTagsView>::with_root_and_props(output.clone(), props).render();
-    std::mem::forget(handle);
-    Ok(())
 }
 
 #[cfg(test)]

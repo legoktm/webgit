@@ -48,7 +48,7 @@ pub(crate) struct TreeProps {
     pub head_suffix: String,
 }
 
-fn build_tree_props(tree: &Tree, prefix: &str, head: Option<&str>) -> TreeProps {
+pub(crate) fn build_tree_props(tree: &Tree, prefix: &str, head: Option<&str>) -> TreeProps {
     TreeProps {
         entries: tree_rows(tree, prefix),
         head_suffix: head.map_or(String::new(), |h| format!("?h={h}")),
@@ -98,20 +98,6 @@ fn tree_row(entry: &TreeEntryRow, head_suffix: &str) -> Html {
             </td>
         </tr>
     }
-}
-
-pub(crate) fn render_tree(
-    tree: &Tree,
-    prefix: &str,
-    head: Option<&str>,
-    output: &web_sys::Element,
-) -> anyhow::Result<()> {
-    let props = build_tree_props(tree, prefix, head);
-    // Incremental migration: mount a self-contained Yew app at #output. The
-    // handle is leaked because the next navigation clears #output directly.
-    let handle = yew::Renderer::<TreeView>::with_root_and_props(output.clone(), props).render();
-    std::mem::forget(handle);
-    Ok(())
 }
 
 #[cfg(test)]

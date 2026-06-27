@@ -1,17 +1,16 @@
 use crate::cache::CachingRepo;
-use crate::console_log;
-use crate::error::{GitContext, error_html};
-use crate::render::about::render_about;
-use crate::render::commit::render_commit;
-use crate::render::log::render_log;
-use crate::render::refs_all::render_refs_all;
-use crate::render::refs_heads::render_refs_heads;
-use crate::render::refs_tags::render_refs_tags;
-use crate::render::tag::render_tag;
-use crate::render::{
-    blob::render_blob, commit_for_entry, head_branch_name, summary::render_summary,
-    tree::render_tree,
-};
+use crate::error::GitContext;
+use crate::render::about::{AboutProps, build_about};
+use crate::render::blob::{BlobProps, build_blob_props};
+use crate::render::commit::{CommitProps, build_commit};
+use crate::render::log::{LogProps, build_log};
+use crate::render::refs_all::{RefsAllProps, build_refs_all};
+use crate::render::refs_heads::{RefsHeadsProps, build_refs_heads};
+use crate::render::refs_tags::{RefsTagsProps, build_refs_tags};
+use crate::render::summary::{SummaryProps, build_summary};
+use crate::render::tag::{TagProps, build_tag};
+use crate::render::tree::{TreeProps, build_tree_props};
+use crate::render::{commit_for_entry, head_branch_name};
 use git_async::object::{ObjectId, Tree, TreeEntryType};
 use git_async::reference::RefName;
 use std::rc::Rc;
@@ -283,30 +282,10 @@ async fn resolve_ref_to_commit(
     Ok((commit, RefKind::Branch))
 }
 
-pub(crate) async fn handle_route(
-    hash: String,
-    head_commit: &git_async::object::Commit,
-    root_tree: &Tree,
-    repo: &Rc<CachingRepo>,
-    clone_url: &Rc<String>,
-    doc: &Document,
-) {
-    let output = doc.get_element_by_id("output").unwrap();
-    output.set_inner_html("");
-    if let Err(e) = try_handle_route(hash, head_commit, root_tree, repo, clone_url, doc).await {
-        output.set_inner_html(&error_html(&format!("{e:#}")));
-    }
-}
-
-async fn try_handle_route(
-    hash: String,
-    head_commit: &git_async::object::Commit,
-    root_tree: &Tree,
-    repo: &Rc<CachingRepo>,
-    clone_url: &Rc<String>,
-    doc: &Document,
-) -> anyhow::Result<()> {
-    let output = &doc.get_element_by_id("output").unwrap();
+/// Update only the chrome (nav active tab, nav hrefs, path bar) for `hash`. The
+/// content is rendered separately by `RouteView` via [`build_route`]; resolving
+/// refs here is best-effort, since content-level errors surface in the view.
+pub(crate) async fn handle_route(hash: String, repo: &Rc<CachingRepo>, doc: &Document) {
     let route = parse_hash(&hash);
     let head = match &route {
         Route::Log { head, .. } | Route::Tree { head, .. } => head.as_deref(),
@@ -317,34 +296,33 @@ async fn try_handle_route(
         _ => "",
     };
     update_nav_for_head(doc, head, nav_path);
-    match route {
-        Route::About => {
-            hide_path_bar(doc);
-            set_active_tab(doc, "#!/about");
-            render_about(repo, clone_url, output).await?;
+
+    let active = match &route {
+        Route::About => "#!/about",
+        Route::Summary => "#!/summary",
+        Route::Log { .. } => "#!/log",
+        Route::CommitHead | Route::Commit(_) => "#!/commit",
+        Route::Refs(_) => "#!/refs",
+        Route::Tree { .. } => "#!/tree",
+    };
+    set_active_tab(doc, active);
+
+    match &route {
+        Route::Tree { path, head } => {
+            let display = resolve_display_head(repo, head.as_deref()).await;
+            update_path_bar(doc, path, head.as_deref(), display_ref(&display));
+            show(doc, "path-bar");
         }
-        Route::Summary => {
-            hide_path_bar(doc);
-            set_active_tab(doc, "#!/summary");
-            render_summary(head_commit, repo, clone_url, output).await?;
+        Route::Log { path, head, .. } if !path.is_empty() => {
+            // Path-scoped log: show the same breadcrumb the tree view uses.
+            let display = resolve_display_head(repo, head.as_deref()).await;
+            update_path_bar(doc, path, head.as_deref(), display_ref(&display));
+            show(doc, "path-bar");
         }
-        Route::Log { offset, head, path } => {
-            set_active_tab(doc, "#!/log");
-            let (resolved, display_head): (
-                Option<git_async::object::Commit>,
-                Option<(String, RefKind)>,
-            ) = if let Some(ref ref_name) = head {
-                let (commit, kind) = resolve_ref_to_commit(repo, ref_name).await?;
-                (Some(commit), Some((ref_name.clone(), kind)))
-            } else {
-                let implicit = head_branch_name(repo).await;
-                (None, implicit.map(|n| (n, RefKind::Branch)))
-            };
-            let log_commit = resolved.as_ref().unwrap_or(head_commit);
-            let display = display_head.as_ref().map(|(n, k)| (n.as_str(), k));
-            if path.is_empty() {
-                // Whole-history log: just label the ref, if any.
-                if let Some((name, kind)) = display {
+        Route::Log { head, .. } => {
+            // Whole-history log: just label the ref, if any.
+            match resolve_display_head(repo, head.as_deref()).await {
+                Some((name, kind)) => {
                     let label = match kind {
                         RefKind::Tag => "tag",
                         RefKind::Branch => "branch",
@@ -353,85 +331,112 @@ async fn try_handle_route(
                         .unwrap()
                         .set_inner_html(&format!("{label}: {name}"));
                     show(doc, "path-bar");
-                } else {
-                    hide_path_bar(doc);
                 }
-            } else {
-                // Path-scoped log: show the same breadcrumb the tree view uses.
-                update_path_bar(doc, &path, head.as_deref(), display);
-                show(doc, "path-bar");
+                None => hide_path_bar(doc),
             }
-            render_log(log_commit, repo, &path, offset, head.as_deref(), output).await?;
         }
-        Route::CommitHead => {
-            hide_path_bar(doc);
-            set_active_tab(doc, "#!/commit");
-            render_commit(repo, format!("{}", head_commit.id()), output).await?;
+        _ => hide_path_bar(doc),
+    }
+}
+
+/// The ref name + kind shown in the path bar / log header: the explicit `?h=`
+/// ref (with its resolved kind), or the implicit HEAD branch. `None` if it
+/// can't be resolved — the content view reports the real error.
+async fn resolve_display_head(repo: &CachingRepo, head: Option<&str>) -> Option<(String, RefKind)> {
+    match head {
+        Some(name) => resolve_ref_to_commit(repo, name)
+            .await
+            .ok()
+            .map(|(_, kind)| (name.to_string(), kind)),
+        None => head_branch_name(repo).await.map(|n| (n, RefKind::Branch)),
+    }
+}
+
+fn display_ref(display: &Option<(String, RefKind)>) -> Option<(&str, &RefKind)> {
+    display.as_ref().map(|(n, k)| (n.as_str(), k))
+}
+
+/// A route's resolved content, ready to render. The chrome (nav, path bar) is
+/// handled separately by [`handle_route`].
+pub(crate) enum LoadedView {
+    About(AboutProps),
+    Summary(SummaryProps),
+    Log(LogProps),
+    Commit(CommitProps),
+    RefsHeads(RefsHeadsProps),
+    RefsTags(RefsTagsProps),
+    RefsAll(RefsAllProps),
+    Tag(TagProps),
+    Tree(TreeProps),
+    Blob(BlobProps),
+    /// A tree path that resolved to neither a subtree nor a blob.
+    NotFound(String),
+}
+
+/// Resolve `hash` into the props for the view it names. Errors (bad refs,
+/// missing objects) propagate so `RouteView` can show them in the content area.
+pub(crate) async fn build_route(
+    hash: &str,
+    head_commit: &git_async::object::Commit,
+    root_tree: &Tree,
+    repo: &Rc<CachingRepo>,
+    clone_url: &Rc<String>,
+) -> anyhow::Result<LoadedView> {
+    match parse_hash(hash) {
+        Route::About => Ok(LoadedView::About(build_about(repo, clone_url).await)),
+        Route::Summary => Ok(LoadedView::Summary(
+            build_summary(head_commit, repo, clone_url.as_str()).await,
+        )),
+        Route::Log { offset, head, path } => {
+            let resolved;
+            let log_commit: &git_async::object::Commit = match &head {
+                Some(name) => {
+                    resolved = resolve_ref_to_commit(repo, name).await?.0;
+                    &resolved
+                }
+                None => head_commit,
+            };
+            Ok(LoadedView::Log(
+                build_log(log_commit, repo, &path, offset, head.as_deref()).await,
+            ))
         }
-        Route::Commit(sha) => {
-            hide_path_bar(doc);
-            set_active_tab(doc, "#!/commit");
-            render_commit(repo, sha, output).await?;
-        }
-        Route::Refs(RefsRoute::Heads) => {
-            hide_path_bar(doc);
-            set_active_tab(doc, "#!/refs");
-            render_refs_heads(repo, output).await?;
-        }
-        Route::Refs(RefsRoute::Tags) => {
-            hide_path_bar(doc);
-            set_active_tab(doc, "#!/refs");
-            render_refs_tags(repo, output).await?;
-        }
-        Route::Refs(RefsRoute::Tag(tag)) => {
-            hide_path_bar(doc);
-            set_active_tab(doc, "#!/refs");
-            console_log(&tag);
-            render_tag(repo, tag, output).await?;
-        }
-        Route::Refs(RefsRoute::All) => {
-            hide_path_bar(doc);
-            set_active_tab(doc, "#!/refs");
-            render_refs_all(repo, output).await?;
-        }
+        Route::CommitHead => Ok(LoadedView::Commit(
+            build_commit(repo, &format!("{}", head_commit.id())).await?,
+        )),
+        Route::Commit(sha) => Ok(LoadedView::Commit(build_commit(repo, &sha).await?)),
+        Route::Refs(RefsRoute::Heads) => Ok(LoadedView::RefsHeads(build_refs_heads(repo).await)),
+        Route::Refs(RefsRoute::Tags) => Ok(LoadedView::RefsTags(build_refs_tags(repo).await)),
+        Route::Refs(RefsRoute::All) => Ok(LoadedView::RefsAll(build_refs_all(repo).await)),
+        Route::Refs(RefsRoute::Tag(tag)) => Ok(LoadedView::Tag(build_tag(repo, tag).await?)),
         Route::Tree { path, head } => {
             let resolved_tree;
-            let (tree, display_head): (&Tree, Option<(String, RefKind)>) =
-                if let Some(ref ref_name) = head {
-                    let (commit, kind) = resolve_ref_to_commit(repo, ref_name).await?;
-                    resolved_tree = repo
-                        .lookup_object(commit.tree())
-                        .await
-                        .context(format!("lookup tree for {ref_name}"))?
-                        .tree()
-                        .map_err(git_async::error::Error::from)
-                        .context(format!("expected tree for {ref_name}"))?;
-                    (&resolved_tree, Some((ref_name.clone(), kind)))
-                } else {
-                    let implicit = head_branch_name(repo).await;
-                    (root_tree, implicit.map(|n| (n, RefKind::Branch)))
-                };
-
-            let display = display_head.as_ref().map(|(n, k)| (n.as_str(), k));
-            update_path_bar(doc, &path, head.as_deref(), display);
-            show(doc, "path-bar");
-            set_active_tab(doc, "#!/tree");
+            let tree: &Tree = if let Some(ref ref_name) = head {
+                let (commit, _kind) = resolve_ref_to_commit(repo, ref_name).await?;
+                resolved_tree = repo
+                    .lookup_object(commit.tree())
+                    .await
+                    .context(format!("lookup tree for {ref_name}"))?
+                    .tree()
+                    .map_err(git_async::error::Error::from)
+                    .context(format!("expected tree for {ref_name}"))?;
+                &resolved_tree
+            } else {
+                root_tree
+            };
 
             if let Some(subtree) = walk_to_tree(tree, &path, repo).await {
-                return render_tree(&subtree, &path, head.as_deref(), output);
-            }
-
-            output.set_inner_html("<p class=\"msg\">Loading\u{2026}</p>");
-            match walk_to_blob(tree, &path, repo).await {
-                Some((id, data)) => render_blob(id, &data, output)?,
-                None => output.set_inner_html(&format!(
-                    "<p class=\"msg error\">Not found: <code>{}</code></p>",
-                    path
-                )),
+                Ok(LoadedView::Tree(build_tree_props(
+                    &subtree,
+                    &path,
+                    head.as_deref(),
+                )))
+            } else if let Some((id, data)) = walk_to_blob(tree, &path, repo).await {
+                Ok(LoadedView::Blob(build_blob_props(id, &data)))
+            } else {
+                Ok(LoadedView::NotFound(path))
             }
         }
     }
-    Ok(())
 }
 
 pub(crate) fn log_url(path: &str, offset: usize, head: Option<&str>) -> String {

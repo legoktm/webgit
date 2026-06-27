@@ -3,7 +3,7 @@ use crate::error::GitContext;
 use git_async::reference::RefName;
 use yew::prelude::*;
 
-async fn build_tag(repo: &CachingRepo, tag: String) -> anyhow::Result<TagProps> {
+pub(crate) async fn build_tag(repo: &CachingRepo, tag: String) -> anyhow::Result<TagProps> {
     let ref_name = RefName::Ref(format!("tags/{tag}").into_bytes());
     let refs = repo.all_refs().await.context("list refs")?;
     let entry = refs
@@ -120,21 +120,6 @@ pub(crate) fn tag_view(props: &TagProps) -> Html {
             }
         </>
     }
-}
-
-pub(crate) async fn render_tag(
-    repo: &CachingRepo,
-    tag: String,
-    output: &web_sys::Element,
-) -> anyhow::Result<()> {
-    let props = build_tag(repo, tag).await?;
-    // Incremental migration: mount a self-contained Yew app at #output. The
-    // handle is intentionally leaked because the next navigation clears
-    // #output's contents directly; once routing moves under a single Yew root
-    // (and yew-router), per-route mounting goes away.
-    let handle = yew::Renderer::<TagView>::with_root_and_props(output.clone(), props).render();
-    std::mem::forget(handle);
-    Ok(())
 }
 
 #[cfg(test)]

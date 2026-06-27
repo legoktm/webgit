@@ -4,7 +4,7 @@ use crate::{
 };
 use yew::prelude::*;
 
-async fn build_refs_heads(repo: &CachingRepo) -> RefsHeadsProps {
+pub(crate) async fn build_refs_heads(repo: &CachingRepo) -> RefsHeadsProps {
     let (branches, _) = collect_refs(repo).await;
     let branches = fetch_ref_rows(&branches, repo).await;
     RefsHeadsProps {
@@ -36,19 +36,6 @@ pub(crate) fn refs_heads_view(props: &RefsHeadsProps) -> Html {
         more_branches,
     } = props;
     branches_section(branches, *more_branches)
-}
-
-pub(crate) async fn render_refs_heads(
-    repo: &CachingRepo,
-    output: &web_sys::Element,
-) -> anyhow::Result<()> {
-    let props = build_refs_heads(repo).await;
-    // Incremental migration: mount a self-contained Yew app at #output. The
-    // handle is leaked because the next navigation clears #output directly.
-    let handle =
-        yew::Renderer::<RefsHeadsView>::with_root_and_props(output.clone(), props).render();
-    std::mem::forget(handle);
-    Ok(())
 }
 
 #[cfg(test)]

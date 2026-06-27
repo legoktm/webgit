@@ -8,7 +8,11 @@ use crate::{
 use git_async::object::Commit;
 use yew::prelude::*;
 
-async fn build_summary(head_commit: &Commit, repo: &CachingRepo, clone_url: &str) -> SummaryProps {
+pub(crate) async fn build_summary(
+    head_commit: &Commit,
+    repo: &CachingRepo,
+    clone_url: &str,
+) -> SummaryProps {
     let head_branch: Option<String> = head_branch_name(repo).await;
 
     let (all_branches, mut tags) = collect_refs(repo).await;
@@ -95,20 +99,6 @@ pub(crate) fn summary_view(props: &SummaryProps) -> Html {
             { commits_table(commits) }
         </>
     }
-}
-
-pub(crate) async fn render_summary(
-    head_commit: &Commit,
-    repo: &CachingRepo,
-    clone_url: &str,
-    output: &web_sys::Element,
-) -> anyhow::Result<()> {
-    let props = build_summary(head_commit, repo, clone_url).await;
-    // Incremental migration: mount a self-contained Yew app at #output. The
-    // handle is leaked because the next navigation clears #output directly.
-    let handle = yew::Renderer::<SummaryView>::with_root_and_props(output.clone(), props).render();
-    std::mem::forget(handle);
-    Ok(())
 }
 
 #[cfg(test)]

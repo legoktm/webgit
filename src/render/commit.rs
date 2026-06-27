@@ -58,7 +58,7 @@ pub(crate) struct CommitProps {
     diff_lines: Vec<DiffLine>,
 }
 
-async fn build_commit(repo: &CachingRepo, sha: &str) -> anyhow::Result<CommitProps> {
+pub(crate) async fn build_commit(repo: &CachingRepo, sha: &str) -> anyhow::Result<CommitProps> {
     let oid =
         ObjectId::from_hex(sha.as_bytes()).ok_or_else(|| anyhow::anyhow!("invalid SHA: {sha}"))?;
     let commit = repo
@@ -447,19 +447,6 @@ fn diffstat_summary(files: usize, additions: usize, deletions: usize) -> String 
 
 fn plural(n: usize, one: &'static str, many: &'static str) -> &'static str {
     if n == 1 { one } else { many }
-}
-
-pub(crate) async fn render_commit(
-    repo: &CachingRepo,
-    sha: String,
-    output: &web_sys::Element,
-) -> anyhow::Result<()> {
-    let props = build_commit(repo, &sha).await?;
-    // Incremental migration: mount a self-contained Yew app at #output. The
-    // handle is leaked because the next navigation clears #output directly.
-    let handle = yew::Renderer::<CommitView>::with_root_and_props(output.clone(), props).render();
-    std::mem::forget(handle);
-    Ok(())
 }
 
 #[cfg(test)]

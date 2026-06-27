@@ -8,7 +8,7 @@ use yew::prelude::*;
 
 const PAGE_SIZE: usize = 50;
 
-async fn build_log(
+pub(crate) async fn build_log(
     head_commit: &Commit,
     repo: &CachingRepo,
     path: &str,
@@ -73,22 +73,6 @@ pub(crate) fn log_view(props: &LogProps) -> Html {
             }
         </>
     }
-}
-
-pub(crate) async fn render_log(
-    head_commit: &Commit,
-    repo: &CachingRepo,
-    path: &str,
-    offset: usize,
-    head: Option<&str>,
-    output: &web_sys::Element,
-) -> anyhow::Result<()> {
-    let props = build_log(head_commit, repo, path, offset, head).await;
-    // Incremental migration: mount a self-contained Yew app at #output. The
-    // handle is leaked because the next navigation clears #output directly.
-    let handle = yew::Renderer::<LogView>::with_root_and_props(output.clone(), props).render();
-    std::mem::forget(handle);
-    Ok(())
 }
 
 #[cfg(test)]
