@@ -1,7 +1,6 @@
 ---
 source: src/render/refs_tags.rs
-expression: "render_to_string(&init_tera(), \"refs_tags.html\", &template).unwrap()"
+expression: "render(RefsTagsProps { tags: vec![], more_tags: false, })"
 ---
 <h3 class="summary-heading">Tags</h3>
-
 <p class="msg">No tags.</p>

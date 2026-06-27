@@ -50,7 +50,6 @@ pub(crate) fn init_tera() -> Tera {
             "refs_tags.html",
             include_str!("../templates/refs_tags.html"),
         ),
-        ("refs_all.html", include_str!("../templates/refs_all.html")),
         ("summary.html", include_str!("../templates/summary.html")),
         ("commits.html", include_str!("../templates/commits.html")),
     ])
@@ -58,13 +57,83 @@ pub(crate) fn init_tera() -> Tera {
     tera
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, PartialEq, Clone)]
 pub(crate) struct RefRow {
     name: String,
     short_hash: String,
     message: String,
     author: String,
     age: Age,
+}
+
+/// The "Branches" section (the old `refs_heads.html`): a heading plus a table
+/// of branch rows, with an optional "more" link to the full branch list. Lives
+/// here, next to [`RefRow`], so the refs and summary views can share it.
+pub(crate) fn branches_section(branches: &[RefRow], more: bool) -> Html {
+    html! {
+        <>
+            <h3 class="summary-heading">{ "Branches" }</h3>
+            { refs_table("Branch", html! {
+                <>
+                    { for branches.iter().map(|b| refs_table_row(format!("#!/tree?h={}", b.name), b)) }
+                    if more {
+                        <tr><td>{ "[" }<a href="#!/refs/heads">{ "..." }</a>{ "]" }</td></tr>
+                    }
+                </>
+            }) }
+        </>
+    }
+}
+
+/// The "Tags" section (the old `refs_tags.html`): a heading plus either a table
+/// of tag rows (with an optional "more" link) or a "No tags." note.
+pub(crate) fn tags_section(tags: &[RefRow], more: bool) -> Html {
+    html! {
+        <>
+            <h3 class="summary-heading">{ "Tags" }</h3>
+            if tags.is_empty() {
+                <p class="msg">{ "No tags." }</p>
+            } else {
+                { refs_table("Tag", html! {
+                    <>
+                        { for tags.iter().map(|t| refs_table_row(format!("#!/refs/tags/{}", t.name), t)) }
+                        if more {
+                            <tr><td>{ "[" }<a href="#!/refs/tags">{ "..." }</a>{ "]" }</td></tr>
+                        }
+                    </>
+                }) }
+            }
+        </>
+    }
+}
+
+/// The shared ref-table shell; `first_col` is the leading column header
+/// ("Branch" or "Tag") and `rows` is the already-rendered `<tbody>` contents.
+fn refs_table(first_col: &'static str, rows: Html) -> Html {
+    html! {
+        <table class="summary-table">
+            <thead>
+                <tr>
+                    <th>{ first_col }</th>
+                    <th>{ "Commit message" }</th>
+                    <th>{ "Author" }</th>
+                    <th>{ "Age" }</th>
+                </tr>
+            </thead>
+            <tbody>{ rows }</tbody>
+        </table>
+    }
+}
+
+fn refs_table_row(href: String, r: &RefRow) -> Html {
+    html! {
+        <tr>
+            <td class="name"><a href={href}>{ r.name.clone() }</a></td>
+            <td class="msg">{ r.message.clone() }</td>
+            <td class="author">{ r.author.clone() }</td>
+            <td class="age">{ r.age.display() }</td>
+        </tr>
+    }
 }
 
 #[derive(Serialize, PartialEq, Clone)]

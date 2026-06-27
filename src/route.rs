@@ -380,12 +380,12 @@ async fn try_handle_route(
         Route::Refs(RefsRoute::Heads) => {
             hide_path_bar(doc);
             set_active_tab(doc, "#!/refs");
-            render_refs_heads(tera, repo, output).await?;
+            render_refs_heads(repo, output).await?;
         }
         Route::Refs(RefsRoute::Tags) => {
             hide_path_bar(doc);
             set_active_tab(doc, "#!/refs");
-            render_refs_tags(tera, repo, output).await?;
+            render_refs_tags(repo, output).await?;
         }
         Route::Refs(RefsRoute::Tag(tag)) => {
             hide_path_bar(doc);
@@ -396,7 +396,7 @@ async fn try_handle_route(
         Route::Refs(RefsRoute::All) => {
             hide_path_bar(doc);
             set_active_tab(doc, "#!/refs");
-            render_refs_all(tera, repo, output).await?;
+            render_refs_all(repo, output).await?;
         }
         Route::Tree { path, head } => {
             let resolved_tree;

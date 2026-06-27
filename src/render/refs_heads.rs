@@ -1,43 +1,75 @@
 use crate::{
     cache::CachingRepo,
-    render::{RefRow, collect_refs, fetch_ref_rows, render_template},
+    render::{RefRow, branches_section, collect_refs, fetch_ref_rows},
 };
-use serde::Serialize;
-use tera::Tera;
+use yew::prelude::*;
 
-async fn build_refs_heads(repo: &CachingRepo) -> RefsHeadsTemplate {
+async fn build_refs_heads(repo: &CachingRepo) -> RefsHeadsProps {
     let (branches, _) = collect_refs(repo).await;
     let branches = fetch_ref_rows(&branches, repo).await;
-    RefsHeadsTemplate {
+    RefsHeadsProps {
         branches,
         // This page lists every branch, so there is never a "more" link.
         more_branches: false,
     }
 }
 
-#[derive(Serialize)]
-struct RefsHeadsTemplate {
+/// The view inputs for the branch list. Doubles as the component's props and
+/// the unit-test fixture.
+#[derive(Properties, PartialEq, Clone)]
+pub(crate) struct RefsHeadsProps {
     branches: Vec<RefRow>,
     more_branches: bool,
 }
 
+/// The Yew component used to mount the branch list into the DOM. The markup
+/// lives in the plain `refs_heads_view` function below so it can be exercised
+/// without a renderer.
+#[function_component(RefsHeadsView)]
+pub(crate) fn refs_heads_view_component(props: &RefsHeadsProps) -> Html {
+    refs_heads_view(props)
+}
+
+pub(crate) fn refs_heads_view(props: &RefsHeadsProps) -> Html {
+    let RefsHeadsProps {
+        branches,
+        more_branches,
+    } = props;
+    branches_section(branches, *more_branches)
+}
+
 pub(crate) async fn render_refs_heads(
-    tera: &Tera,
     repo: &CachingRepo,
     output: &web_sys::Element,
 ) -> anyhow::Result<()> {
-    let template = build_refs_heads(repo).await;
-    render_template(tera, "refs_heads.html", &template, output)
+    let props = build_refs_heads(repo).await;
+    // Incremental migration: mount a self-contained Yew app at #output. The
+    // handle is leaked because the next navigation clears #output directly.
+    let handle =
+        yew::Renderer::<RefsHeadsView>::with_root_and_props(output.clone(), props).render();
+    std::mem::forget(handle);
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::render::{fixtures, init_tera, render_to_string};
+    use crate::render::fixtures;
+
+    /// Render `RefsHeadsView` to a static HTML string via SSR, breaking adjacent
+    /// tags onto their own lines. See `render::tag` for why we go through SSR.
+    fn render(props: RefsHeadsProps) -> String {
+        let html = futures::executor::block_on(
+            yew::ServerRenderer::<RefsHeadsView>::with_props(move || props)
+                .hydratable(false)
+                .render(),
+        );
+        html.replace("><", ">\n<")
+    }
 
     #[test]
     fn test_refs_heads_html() {
-        let template = RefsHeadsTemplate {
+        insta::assert_snapshot!(render(RefsHeadsProps {
             branches: vec![
                 fixtures::ref_row(
                     "main",
@@ -53,9 +85,6 @@ mod tests {
                 ),
             ],
             more_branches: false,
-        };
-        insta::assert_snapshot!(
-            render_to_string(&init_tera(), "refs_heads.html", &template).unwrap()
-        );
+        }));
     }
 }
