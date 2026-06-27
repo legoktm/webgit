@@ -431,26 +431,20 @@ struct WalkNode {
 /// using `known` when the caller already holds it (the walk's starting commit).
 /// `None` only if the commit can be found neither way.
 ///
-/// `bulk` selects the graph accessor: filtered walks need the whole graph (and
-/// its Bloom filters) so they trigger the one-shot bulk load; unfiltered walks
-/// stop after a page, so they read records lazily and never pull the whole file.
+/// The graph is bulk-loaded once (and persisted) via [`CachingRepo::graph_record`],
+/// so traversal is in-memory and survives reloads; a commit missing from the
+/// bulk set (e.g. pushed since the seed) is resolved with a single targeted read.
 async fn ensure_node(
     repo: &CachingRepo,
     cache: &mut BTreeMap<ObjectId, Rc<WalkNode>>,
     id: ObjectId,
     known: Option<&Commit>,
     stats: &mut WalkStats,
-    bulk: bool,
 ) -> Option<Rc<WalkNode>> {
     if let Some(node) = cache.get(&id) {
         return Some(Rc::clone(node));
     }
-    let record = if bulk {
-        repo.graph_record(id).await
-    } else {
-        repo.graph_record_lazy(id).await
-    };
-    let node = if let Some(rec) = record {
+    let node = if let Some(rec) = repo.graph_record(id).await {
         stats.graph_meta_hits += 1;
         WalkNode {
             tree: rec.tree,
@@ -515,6 +509,14 @@ async fn confirm_task(repo: &CachingRepo, task: &ConfirmTask, components: &[&str
 /// negligible against a deep walk while roughly halving the wave count vs 32.
 const CONFIRM_BATCH: usize = 64;
 
+/// How many commit objects to fetch (concurrently) before emitting a partial
+/// page during a streamed walk. Small enough that the first rows paint quickly,
+/// large enough to keep the round-trips well overlapped.
+const STREAM_BATCH: usize = 10;
+
+/// Non-streaming convenience wrapper: walk and return the whole page at once.
+/// Used by the summary's bounded recent-commits list, which has nothing to
+/// stream.
 pub(crate) async fn walk_commits(
     head_commit: &Commit,
     repo: &CachingRepo,
@@ -522,6 +524,22 @@ pub(crate) async fn walk_commits(
     skip: usize,
     limit: usize,
     decorations: &BTreeMap<ObjectId, Vec<RefLabel>>,
+) -> (Vec<CommitRow>, bool) {
+    walk_commits_streamed(head_commit, repo, path, skip, limit, decorations, |_| {}).await
+}
+
+/// Walk history like [`walk_commits`], but call `on_batch` with the rows
+/// gathered so far after each chunk of commit objects is fetched, so the log
+/// can render progressively instead of waiting for the whole page. The return
+/// value is still the complete page plus whether a further page exists.
+pub(crate) async fn walk_commits_streamed(
+    head_commit: &Commit,
+    repo: &CachingRepo,
+    path: Option<&str>,
+    skip: usize,
+    limit: usize,
+    decorations: &BTreeMap<ObjectId, Vec<RefLabel>>,
+    on_batch: impl Fn(&[CommitRow]),
 ) -> (Vec<CommitRow>, bool) {
     // Pre-split the pathspec once; `None` walks the full history unfiltered.
     let path_components: Option<Vec<&str>> =
@@ -534,17 +552,12 @@ pub(crate) async fn walk_commits(
     let mut meta: BTreeMap<ObjectId, Rc<WalkNode>> = BTreeMap::new();
     let mut stats = WalkStats::default();
 
-    // Filtered walks scan all of history (and need Bloom filters), so they pull
-    // the whole graph; unfiltered walks stop after a page and read it lazily.
-    let bulk = path_components.is_some();
-
     if let Some(node) = ensure_node(
         repo,
         &mut meta,
         head_commit.id(),
         Some(head_commit),
         &mut stats,
-        bulk,
     )
     .await
     {
@@ -574,7 +587,7 @@ pub(crate) async fn walk_commits(
                 for parent in node.parents.iter().copied() {
                     if visited.insert(parent)
                         && let Some(parent_node) =
-                            ensure_node(repo, &mut meta, parent, None, &mut stats, bulk).await
+                            ensure_node(repo, &mut meta, parent, None, &mut stats).await
                     {
                         heap.push((parent_node.time, parent));
                     }
@@ -596,7 +609,7 @@ pub(crate) async fn walk_commits(
                     let mut parent_trees = Vec::with_capacity(node.parents.len());
                     for parent in node.parents.iter().copied() {
                         if let Some(parent_node) =
-                            ensure_node(repo, &mut meta, parent, None, &mut stats, bulk).await
+                            ensure_node(repo, &mut meta, parent, None, &mut stats).await
                         {
                             if visited.insert(parent) {
                                 heap.push((parent_node.time, parent));
@@ -660,25 +673,29 @@ pub(crate) async fn walk_commits(
         if has_more { " (more pages)" } else { "" },
     ));
 
-    // Fetch objects only for the commits actually shown — at most `limit` — and
-    // concurrently, since their order is already fixed.
+    // Fetch objects only for the commits actually shown — at most `limit`. Work
+    // in chunks (each chunk fetched concurrently) so the first rows can render
+    // while the rest are still in flight, emitting the rows so far after each.
     let window: Vec<ObjectId> = matched.into_iter().skip(skip).take(limit).collect();
-    let objects = futures::future::join_all(window.iter().map(|id| repo.lookup_object(*id))).await;
-
     let mut commits: Vec<CommitRow> = Vec::with_capacity(window.len());
-    for (id, object) in window.iter().zip(objects) {
-        let Some(commit) = object.ok().and_then(|o| o.commit().ok()) else {
-            continue;
-        };
-        let hash = format!("{id}");
-        commits.push(CommitRow {
-            short_hash: hash[..8].to_string(),
-            hash,
-            message: commit_first_line(commit.message()),
-            author: String::from_utf8_lossy(commit.author_name()).into_owned(),
-            age: Age::new(&commit.author_date()),
-            refs: decorations.get(id).cloned().unwrap_or_default(),
-        });
+    for chunk in window.chunks(STREAM_BATCH) {
+        let objects =
+            futures::future::join_all(chunk.iter().map(|id| repo.lookup_object(*id))).await;
+        for (id, object) in chunk.iter().zip(objects) {
+            let Some(commit) = object.ok().and_then(|o| o.commit().ok()) else {
+                continue;
+            };
+            let hash = format!("{id}");
+            commits.push(CommitRow {
+                short_hash: hash[..8].to_string(),
+                hash,
+                message: commit_first_line(commit.message()),
+                author: String::from_utf8_lossy(commit.author_name()).into_owned(),
+                age: Age::new(&commit.author_date()),
+                refs: decorations.get(id).cloned().unwrap_or_default(),
+            });
+        }
+        on_batch(&commits);
     }
 
     (commits, has_more)

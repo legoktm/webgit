@@ -1,5 +1,6 @@
 use crate::cache::CachingRepo;
 use crate::error::GitContext;
+use futures::stream::{FuturesOrdered, StreamExt};
 use git_async::diff::{DiffEntry, TreeDiff};
 use git_async::error::Error as GitError;
 use git_async::object::{Object, ObjectId};
@@ -58,7 +59,15 @@ pub(crate) struct CommitProps {
     diff_lines: Vec<DiffLine>,
 }
 
-pub(crate) async fn build_commit(repo: &CachingRepo, sha: &str) -> anyhow::Result<CommitProps> {
+/// Build a commit view, calling `on_partial` first with the metadata alone
+/// (empty diff) and then once per file as the diff streams in, so the header
+/// renders immediately and a large diff fills in top-to-bottom. The returned
+/// value is the complete view.
+pub(crate) async fn build_commit(
+    repo: &CachingRepo,
+    sha: &str,
+    on_partial: impl Fn(CommitProps),
+) -> anyhow::Result<CommitProps> {
     let oid =
         ObjectId::from_hex(sha.as_bytes()).ok_or_else(|| anyhow::anyhow!("invalid SHA: {sha}"))?;
     let commit = repo
@@ -90,27 +99,9 @@ pub(crate) async fn build_commit(repo: &CachingRepo, sha: &str) -> anyhow::Resul
         })
         .collect();
 
-    let (files, diff_lines) = if let Some(parent) = parent_commits.first() {
-        let parent_tree = repo
-            .lookup_object(parent.tree())
-            .await
-            .context("lookup parent tree")?
-            .tree()
-            .map_err(GitError::from)
-            .context("unexpected object type")?;
-        let td = repo
-            .tree_diff(&parent_tree, &commit_tree)
-            .await
-            .context("tree diff")?;
-        build_diff(repo, &td).await
-    } else {
-        (Vec::new(), Vec::new())
-    };
-
-    let total_additions: usize = files.iter().map(|f| f.additions).sum();
-    let total_deletions: usize = files.iter().map(|f| f.deletions).sum();
-
-    Ok(CommitProps {
+    // The metadata is ready well before the diff; emit it now so the header
+    // table and message paint while the diff blobs are still loading.
+    let base = CommitProps {
         hash: format!("{}", commit.id()),
         author_name: String::from_utf8_lossy(commit.author_name()).into_owned(),
         author_email: String::from_utf8_lossy(commit.author_email()).into_owned(),
@@ -121,10 +112,47 @@ pub(crate) async fn build_commit(repo: &CachingRepo, sha: &str) -> anyhow::Resul
         parents,
         tree_hash: format!("{}", commit.tree()),
         message: linkify_message(&String::from_utf8_lossy(commit.message())),
-        total_additions,
-        total_deletions,
+        total_additions: 0,
+        total_deletions: 0,
+        files: Vec::new(),
+        diff_lines: Vec::new(),
+    };
+    on_partial(base.clone());
+
+    let Some(parent) = parent_commits.first() else {
+        // Root commit: nothing to diff against.
+        return Ok(base);
+    };
+
+    let parent_tree = repo
+        .lookup_object(parent.tree())
+        .await
+        .context("lookup parent tree")?
+        .tree()
+        .map_err(GitError::from)
+        .context("unexpected object type")?;
+    let td = repo
+        .tree_diff(&parent_tree, &commit_tree)
+        .await
+        .context("tree diff")?;
+
+    let (files, diff_lines) = stream_diff(repo, &td, |files, diff_lines| {
+        on_partial(CommitProps {
+            total_additions: files.iter().map(|f| f.additions).sum(),
+            total_deletions: files.iter().map(|f| f.deletions).sum(),
+            files: files.to_vec(),
+            diff_lines: diff_lines.to_vec(),
+            ..base.clone()
+        });
+    })
+    .await;
+
+    Ok(CommitProps {
+        total_additions: files.iter().map(|f| f.additions).sum(),
+        total_deletions: files.iter().map(|f| f.deletions).sum(),
         files,
         diff_lines,
+        ..base
     })
 }
 
@@ -249,37 +277,67 @@ fn diff_file(path: &str, old_data: Vec<u8>, new_data: Vec<u8>) -> (Vec<DiffLine>
     (lines, additions, deletions)
 }
 
-async fn build_diff(repo: &CachingRepo, td: &TreeDiff) -> (Vec<FileDiff>, Vec<DiffLine>) {
+/// Rescale the diffstat bars to the current widest file (0–40 columns). Called
+/// after each file during streaming, so bars re-normalise as larger files
+/// arrive; the final call leaves them at their finished widths.
+fn recompute_bars(files: &mut [FileDiff]) {
+    let max_changes = files
+        .iter()
+        .map(|f| f.additions + f.deletions)
+        .max()
+        .unwrap_or(1)
+        .max(1);
+
+    for f in files {
+        let total = f.additions + f.deletions;
+        let bar_total = total * 40 / max_changes;
+        f.bar_add = f
+            .additions
+            .checked_mul(bar_total)
+            .and_then(|n| n.checked_div(total))
+            .unwrap_or(0);
+        f.bar_del = bar_total - f.bar_add;
+    }
+}
+
+/// Diff every changed file, calling `on_progress` with the files/lines so far
+/// after each one. Blob loads for all files are kicked off up front (so the
+/// per-object round-trips overlap), but consumed in tree order via
+/// [`FuturesOrdered`], so files render top-to-bottom as they resolve rather
+/// than all at once. Diffing itself is CPU-bound and stays sequential.
+async fn stream_diff(
+    repo: &CachingRepo,
+    td: &TreeDiff,
+    on_progress: impl Fn(&[FileDiff], &[DiffLine]),
+) -> (Vec<FileDiff>, Vec<DiffLine>) {
+    let mut loads: FuturesOrdered<_> = td
+        .entries()
+        .iter()
+        .map(|entry| async move {
+            let path = String::from_utf8_lossy(entry.path().as_slice()).into_owned();
+            let (old_data, new_data) = match entry {
+                DiffEntry::LeftOnly {
+                    content: (old_id, _),
+                    ..
+                } => (load_blob(repo, *old_id).await, Vec::new()),
+                DiffEntry::RightOnly {
+                    content: (_, new_id),
+                    ..
+                } => (Vec::new(), load_blob(repo, *new_id).await),
+                DiffEntry::Both {
+                    content: (old_id, new_id),
+                    ..
+                } => {
+                    futures::join!(load_blob(repo, *old_id), load_blob(repo, *new_id))
+                }
+            };
+            (path, old_data, new_data)
+        })
+        .collect();
+
     let mut files: Vec<FileDiff> = Vec::new();
     let mut diff_lines: Vec<DiffLine> = Vec::new();
-
-    // Phase 1: load every changed file's blobs concurrently, so the per-object
-    // IndexedDB/network round-trips overlap across files instead of being
-    // serialised one file at a time. The diffing itself (phase 2) is CPU-bound
-    // and stays sequential to preserve output order.
-    let loaded = futures::future::join_all(td.entries().iter().map(|entry| async move {
-        let path = String::from_utf8_lossy(entry.path().as_slice()).into_owned();
-        let (old_data, new_data) = match entry {
-            DiffEntry::LeftOnly {
-                content: (old_id, _),
-                ..
-            } => (load_blob(repo, *old_id).await, Vec::new()),
-            DiffEntry::RightOnly {
-                content: (_, new_id),
-                ..
-            } => (Vec::new(), load_blob(repo, *new_id).await),
-            DiffEntry::Both {
-                content: (old_id, new_id),
-                ..
-            } => {
-                futures::join!(load_blob(repo, *old_id), load_blob(repo, *new_id))
-            }
-        };
-        (path, old_data, new_data)
-    }))
-    .await;
-
-    for (path, old_data, new_data) in loaded {
+    while let Some((path, old_data, new_data)) = loads.next().await {
         let (lines, additions, deletions) = diff_file(&path, old_data, new_data);
         diff_lines.extend(lines);
         files.push(FileDiff {
@@ -289,24 +347,8 @@ async fn build_diff(repo: &CachingRepo, td: &TreeDiff) -> (Vec<FileDiff>, Vec<Di
             bar_add: 0,
             bar_del: 0,
         });
-    }
-
-    let max_changes = files
-        .iter()
-        .map(|f| f.additions + f.deletions)
-        .max()
-        .unwrap_or(1)
-        .max(1);
-
-    for f in &mut files {
-        let total = f.additions + f.deletions;
-        let bar_total = total * 40 / max_changes;
-        f.bar_add = f
-            .additions
-            .checked_mul(bar_total)
-            .and_then(|n| n.checked_div(total))
-            .unwrap_or(0);
-        f.bar_del = bar_total - f.bar_add;
+        recompute_bars(&mut files);
+        on_progress(&files, &diff_lines);
     }
 
     (files, diff_lines)
@@ -578,6 +620,39 @@ mod tests {
             lines[1].content,
             "Binary files a/blob.bin and b/blob.bin differ"
         );
+    }
+
+    fn file(path: &str, additions: usize, deletions: usize) -> FileDiff {
+        FileDiff {
+            path: path.to_string(),
+            additions,
+            deletions,
+            bar_add: 0,
+            bar_del: 0,
+        }
+    }
+
+    #[test]
+    fn test_recompute_bars_normalises_to_widest() {
+        // The widest file (4 changes) fills the 40-column bar split by its
+        // add/del ratio; a smaller file scales proportionally.
+        let mut files = vec![file("big.rs", 3, 1), file("small", 1, 0)];
+        recompute_bars(&mut files);
+        assert_eq!((files[0].bar_add, files[0].bar_del), (30, 10));
+        assert_eq!((files[1].bar_add, files[1].bar_del), (10, 0));
+    }
+
+    #[test]
+    fn test_recompute_bars_rescales_as_files_stream_in() {
+        // Mid-stream the first (and only) file owns the full bar...
+        let mut files = vec![file("first", 4, 0)];
+        recompute_bars(&mut files);
+        assert_eq!((files[0].bar_add, files[0].bar_del), (40, 0));
+        // ...then a larger file arriving rescales the earlier one down.
+        files.push(file("bigger", 0, 8));
+        recompute_bars(&mut files);
+        assert_eq!((files[0].bar_add, files[0].bar_del), (20, 0));
+        assert_eq!((files[1].bar_add, files[1].bar_del), (0, 40));
     }
 
     #[test]

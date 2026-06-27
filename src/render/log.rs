@@ -1,6 +1,6 @@
 use crate::{
     cache::CachingRepo,
-    render::{CommitRow, commits_table, decoration_map, walk_commits},
+    render::{CommitRow, commits_table, decoration_map, walk_commits_streamed},
     route::log_url,
 };
 use git_async::object::Commit;
@@ -8,27 +8,41 @@ use yew::prelude::*;
 
 const PAGE_SIZE: usize = 50;
 
+/// Build the log page, calling `on_partial` with progressively longer prefixes
+/// of the page as commits stream in. The returned value is the complete page;
+/// it's the only one carrying the pagination links (see below).
 pub(crate) async fn build_log(
     head_commit: &Commit,
     repo: &CachingRepo,
     path: &str,
     offset: usize,
     head: Option<&str>,
+    on_partial: impl Fn(LogProps),
 ) -> LogProps {
     let decorations = decoration_map(repo).await;
     let path_filter = (!path.is_empty()).then_some(path);
-    let (commits, has_next) = walk_commits(
+    let prev_url = (offset > 0).then(|| log_url(path, offset.saturating_sub(PAGE_SIZE), head));
+    let (commits, has_next) = walk_commits_streamed(
         head_commit,
         repo,
         path_filter,
         offset,
         PAGE_SIZE,
         &decorations,
+        |rows| {
+            // Hold the nav off the partials: `next` isn't known until the walk
+            // finishes, and showing "newer/older" mid-load would be misleading.
+            on_partial(LogProps {
+                commits: rows.to_vec(),
+                prev_url: prev_url.clone(),
+                next_url: None,
+            });
+        },
     )
     .await;
     LogProps {
         commits,
-        prev_url: (offset > 0).then(|| log_url(path, offset.saturating_sub(PAGE_SIZE), head)),
+        prev_url,
         next_url: has_next.then(|| log_url(path, offset + PAGE_SIZE, head)),
     }
 }

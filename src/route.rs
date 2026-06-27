@@ -245,6 +245,7 @@ pub(crate) async fn build_route(
     root_tree: &Tree,
     repo: &Rc<CachingRepo>,
     clone_url: &Rc<String>,
+    on_partial: &dyn Fn(LoadedView),
 ) -> anyhow::Result<LoadedView> {
     match parse_hash(hash) {
         Route::About => Ok(LoadedView::About(build_about(repo, clone_url).await)),
@@ -261,13 +262,21 @@ pub(crate) async fn build_route(
                 None => head_commit,
             };
             Ok(LoadedView::Log(
-                build_log(log_commit, repo, &path, offset, head.as_deref()).await,
+                build_log(log_commit, repo, &path, offset, head.as_deref(), |p| {
+                    on_partial(LoadedView::Log(p))
+                })
+                .await,
             ))
         }
         Route::CommitHead => Ok(LoadedView::Commit(
-            build_commit(repo, &format!("{}", head_commit.id())).await?,
+            build_commit(repo, &format!("{}", head_commit.id()), |p| {
+                on_partial(LoadedView::Commit(p))
+            })
+            .await?,
         )),
-        Route::Commit(sha) => Ok(LoadedView::Commit(build_commit(repo, &sha).await?)),
+        Route::Commit(sha) => Ok(LoadedView::Commit(
+            build_commit(repo, &sha, |p| on_partial(LoadedView::Commit(p))).await?,
+        )),
         Route::Refs(RefsRoute::Heads) => Ok(LoadedView::RefsHeads(build_refs_heads(repo).await)),
         Route::Refs(RefsRoute::Tags) => Ok(LoadedView::RefsTags(build_refs_tags(repo).await)),
         Route::Refs(RefsRoute::All) => Ok(LoadedView::RefsAll(build_refs_all(repo).await)),

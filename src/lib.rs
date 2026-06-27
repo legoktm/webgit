@@ -297,12 +297,24 @@ fn route_view(props: &RouteViewProps) -> Html {
                         cancelled.clone(),
                     );
                     wasm_bindgen_futures::spawn_local(async move {
+                        // Render each partial as it streams in (log pages fill
+                        // in, commit diffs grow file-by-file). The same cancel
+                        // guard drops stale partials from a superseded route.
+                        let emit = {
+                            let (loaded, cancelled) = (loaded.clone(), cancelled.clone());
+                            move |view: LoadedView| {
+                                if !cancelled.get() {
+                                    loaded.set(Some(Ok(view)));
+                                }
+                            }
+                        };
                         let result = build_route(
                             &hash,
                             &bundle.head_commit,
                             &bundle.root_tree,
                             &bundle.repo,
                             &bundle.clone_url,
+                            &emit,
                         )
                         .await
                         .map_err(|e| format!("{e:#}"));

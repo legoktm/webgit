@@ -163,32 +163,6 @@ impl CachingRepo {
         Some(rec)
     }
 
-    /// Like [`graph_record`](Self::graph_record) but never triggers the
-    /// whole-file bulk load. It serves from the in-memory session map (which a
-    /// prior per-file walk may already have populated in full) and otherwise
-    /// does a single targeted read of just this commit's record.
-    ///
-    /// Used by the unfiltered log walk (plain log / summary), which stops after
-    /// one page of commits and so must not pull the entire graph just to show
-    /// the latest few. It deliberately does **not** persist to IndexedDB: the
-    /// bulk loader treats a non-empty store as "fully seeded", so writing
-    /// isolated records here would make a later per-file walk skip the bulk load
-    /// and miss most of history.
-    pub(crate) async fn graph_record_lazy(&self, id: ObjectId) -> Option<Rc<GraphRecord>> {
-        if let Some(rec) = self.graph.borrow().get(&id) {
-            return Some(Rc::clone(rec));
-        }
-        let (entry, bloom) = self.inner.commit_graph()?.record(id).await.ok().flatten()?;
-        let rec = Rc::new(GraphRecord {
-            tree: entry.tree,
-            parents: entry.parents,
-            commit_time: entry.commit_time,
-            bloom,
-        });
-        self.graph.borrow_mut().insert(id, Rc::clone(&rec));
-        Some(rec)
-    }
-
     /// Whether `bloom` (a commit's changed-path filter) definitively says the
     /// path did not change. `false` means "unknown" — no filter or a possible
     /// match — so the caller must diff.
@@ -202,6 +176,9 @@ impl CachingRepo {
     /// Populate the in-memory graph map once per session. Prefers the persisted
     /// per-commit records; if there are none (cold cache), bulk-loads the whole
     /// commit-graph in one request and persists every commit for next time.
+    /// Individual records are only ever written *after* this has run (by
+    /// [`graph_record`](Self::graph_record)'s miss path), so a non-empty store
+    /// always implies a completed bulk load — no separate "seeded" flag needed.
     async fn ensure_graph_loaded(&self) {
         if *self.graph_loaded.borrow() {
             return;
