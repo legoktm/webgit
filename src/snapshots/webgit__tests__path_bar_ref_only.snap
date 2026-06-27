@@ -1,0 +1,5 @@
+---
+source: src/lib.rs
+expression: "render_pb(PathBar::RefOnly\n{ name: \"v1.0.0\".to_string(), kind: RefKind::Tag, })"
+---
+<div id="path-bar">tag: v1.0.0</div>

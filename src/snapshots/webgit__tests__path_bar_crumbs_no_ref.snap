@@ -1,0 +1,6 @@
+---
+source: src/lib.rs
+expression: "render_pb(PathBar::Crumbs\n{ display: None, path: \"src\".to_string(), head: None, })"
+---
+<div id="path-bar">path: <a href="#!/tree">root</a> / <a href="#!/tree/src">src</a>
+</div>

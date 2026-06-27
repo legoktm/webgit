@@ -14,7 +14,6 @@ use crate::render::{commit_for_entry, head_branch_name};
 use git_async::object::{ObjectId, Tree, TreeEntryType};
 use git_async::reference::RefName;
 use std::rc::Rc;
-use wasm_bindgen::JsCast;
 use web_sys::Document;
 
 // ---------------------------------------------------------------------------
@@ -25,96 +24,6 @@ pub(crate) fn set_text(doc: &Document, id: &str, text: &str) {
     doc.get_element_by_id(id)
         .unwrap()
         .set_text_content(Some(text));
-}
-
-fn show(doc: &Document, id: &str) {
-    doc.get_element_by_id(id)
-        .unwrap()
-        .class_list()
-        .remove_1("hide")
-        .unwrap();
-}
-
-fn hide_path_bar(doc: &Document) {
-    doc.get_element_by_id("path-bar")
-        .unwrap()
-        .class_list()
-        .add_1("hide")
-        .unwrap();
-}
-
-fn update_nav_for_head(doc: &Document, head: Option<&str>, path: &str) {
-    let tabs = doc.query_selector_all("#nav a").unwrap();
-    for i in 0..tabs.length() {
-        let Some(node) = tabs.get(i) else { continue };
-        let Ok(el) = node.dyn_into::<web_sys::Element>() else {
-            continue;
-        };
-        let href = el.get_attribute("href").unwrap_or_default();
-        // The href may already carry a path/query from a previous render
-        // (e.g. "#!/log/src?h=main"); reduce it to its tab root first.
-        let base = href.split('?').next().unwrap_or(&href);
-        let new_href = if base == "#!/log" || base.starts_with("#!/log/") {
-            // Scope the log tab to whatever path is currently being viewed, so
-            // clicking "log" from a subtree shows that subtree's history.
-            log_url(path, 0, head)
-        } else if base == "#!/tree" || base.starts_with("#!/tree/") {
-            match head {
-                Some(h) => format!("#!/tree?h={h}"),
-                None => "#!/tree".to_string(),
-            }
-        } else {
-            continue;
-        };
-        el.set_attribute("href", &new_href).ok();
-    }
-}
-
-fn update_path_bar(
-    doc: &Document,
-    path: &str,
-    url_head: Option<&str>,
-    display: Option<(&str, &RefKind)>,
-) {
-    let bar = doc.get_element_by_id("path-bar").unwrap();
-    let head_suffix = url_head.map_or(String::new(), |h| format!("?h={h}"));
-    let mut html = String::new();
-    if let Some((name, kind)) = display {
-        let label = match kind {
-            RefKind::Tag => "tag",
-            RefKind::Branch => "branch",
-        };
-        html.push_str(&format!("{label}: {name} | "));
-    }
-    html.push_str(&format!("path: <a href=\"#!/tree{head_suffix}\">root</a>"));
-    let mut cumulative = String::new();
-    for component in path.split('/').filter(|s| !s.is_empty()) {
-        if !cumulative.is_empty() {
-            cumulative.push('/');
-        }
-        cumulative.push_str(component);
-        html.push_str(&format!(
-            " / <a href=\"#!/tree/{0}{1}\">{2}</a>",
-            cumulative, head_suffix, component
-        ));
-    }
-    bar.set_inner_html(&html);
-}
-
-fn set_active_tab(doc: &Document, tab: &str) {
-    let tabs = doc.query_selector_all("#nav a").unwrap();
-    for i in 0..tabs.length() {
-        if let Some(node) = tabs.get(i)
-            && let Ok(el) = node.dyn_into::<web_sys::Element>()
-        {
-            let href = el.get_attribute("href").unwrap_or_default();
-            if href.starts_with(tab) {
-                el.class_list().add_1("active").ok();
-            } else {
-                el.class_list().remove_1("active").ok();
-            }
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -256,9 +165,22 @@ fn parse_log_query(query_string: &str) -> (usize, Option<String>) {
     (offset, head)
 }
 
+#[derive(Clone, Copy, PartialEq)]
 pub(crate) enum RefKind {
     Tag,
     Branch,
+}
+
+/// The nav tab a route lives under, used for the `active` highlight.
+pub(crate) fn active_tab(route: &Route) -> &'static str {
+    match route {
+        Route::About => "#!/about",
+        Route::Summary => "#!/summary",
+        Route::Log { .. } => "#!/log",
+        Route::CommitHead | Route::Commit(_) => "#!/commit",
+        Route::Refs(_) => "#!/refs",
+        Route::Tree { .. } => "#!/tree",
+    }
 }
 
 async fn resolve_ref_to_commit(
@@ -282,67 +204,13 @@ async fn resolve_ref_to_commit(
     Ok((commit, RefKind::Branch))
 }
 
-/// Update only the chrome (nav active tab, nav hrefs, path bar) for `hash`. The
-/// content is rendered separately by `RouteView` via [`build_route`]; resolving
-/// refs here is best-effort, since content-level errors surface in the view.
-pub(crate) async fn handle_route(hash: String, repo: &Rc<CachingRepo>, doc: &Document) {
-    let route = parse_hash(&hash);
-    let head = match &route {
-        Route::Log { head, .. } | Route::Tree { head, .. } => head.as_deref(),
-        _ => None,
-    };
-    let nav_path = match &route {
-        Route::Log { path, .. } | Route::Tree { path, .. } => path.as_str(),
-        _ => "",
-    };
-    update_nav_for_head(doc, head, nav_path);
-
-    let active = match &route {
-        Route::About => "#!/about",
-        Route::Summary => "#!/summary",
-        Route::Log { .. } => "#!/log",
-        Route::CommitHead | Route::Commit(_) => "#!/commit",
-        Route::Refs(_) => "#!/refs",
-        Route::Tree { .. } => "#!/tree",
-    };
-    set_active_tab(doc, active);
-
-    match &route {
-        Route::Tree { path, head } => {
-            let display = resolve_display_head(repo, head.as_deref()).await;
-            update_path_bar(doc, path, head.as_deref(), display_ref(&display));
-            show(doc, "path-bar");
-        }
-        Route::Log { path, head, .. } if !path.is_empty() => {
-            // Path-scoped log: show the same breadcrumb the tree view uses.
-            let display = resolve_display_head(repo, head.as_deref()).await;
-            update_path_bar(doc, path, head.as_deref(), display_ref(&display));
-            show(doc, "path-bar");
-        }
-        Route::Log { head, .. } => {
-            // Whole-history log: just label the ref, if any.
-            match resolve_display_head(repo, head.as_deref()).await {
-                Some((name, kind)) => {
-                    let label = match kind {
-                        RefKind::Tag => "tag",
-                        RefKind::Branch => "branch",
-                    };
-                    doc.get_element_by_id("path-bar")
-                        .unwrap()
-                        .set_inner_html(&format!("{label}: {name}"));
-                    show(doc, "path-bar");
-                }
-                None => hide_path_bar(doc),
-            }
-        }
-        _ => hide_path_bar(doc),
-    }
-}
-
 /// The ref name + kind shown in the path bar / log header: the explicit `?h=`
 /// ref (with its resolved kind), or the implicit HEAD branch. `None` if it
 /// can't be resolved — the content view reports the real error.
-async fn resolve_display_head(repo: &CachingRepo, head: Option<&str>) -> Option<(String, RefKind)> {
+pub(crate) async fn resolve_display_head(
+    repo: &CachingRepo,
+    head: Option<&str>,
+) -> Option<(String, RefKind)> {
     match head {
         Some(name) => resolve_ref_to_commit(repo, name)
             .await
@@ -352,12 +220,8 @@ async fn resolve_display_head(repo: &CachingRepo, head: Option<&str>) -> Option<
     }
 }
 
-fn display_ref(display: &Option<(String, RefKind)>) -> Option<(&str, &RefKind)> {
-    display.as_ref().map(|(n, k)| (n.as_str(), k))
-}
-
 /// A route's resolved content, ready to render. The chrome (nav, path bar) is
-/// handled separately by [`handle_route`].
+/// handled separately by `RouteView`/`NavBar` in `lib.rs`.
 pub(crate) enum LoadedView {
     About(AboutProps),
     Summary(SummaryProps),

@@ -1,0 +1,12 @@
+---
+source: src/lib.rs
+expression: "render_nav(\"#!/tree/src?h=main\")"
+---
+<nav id="nav">
+<a href="#!/summary" class="nav-tab">summary</a>
+<a href="#!/refs" class="nav-tab">refs</a>
+<a href="#!/log/src?h=main" class="nav-tab">log</a>
+<a href="#!/tree?h=main" class="nav-tab active">tree</a>
+<a href="#!/commit" class="nav-tab">commit</a>
+<a href="#!/about" class="nav-tab">about</a>
+</nav>

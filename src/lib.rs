@@ -23,7 +23,10 @@ use render::refs_tags::RefsTagsView;
 use render::summary::SummaryView;
 use render::tag::TagView;
 use render::tree::TreeView;
-use route::{LoadedView, build_route, handle_route, set_text};
+use route::{
+    LoadedView, RefKind, Route, active_tab, build_route, log_url, parse_hash, resolve_display_head,
+    set_text,
+};
 use stats::{format_stats, set_stats_loaded};
 use std::cell::Cell;
 use std::rc::Rc;
@@ -46,8 +49,8 @@ fn current_hash() -> String {
 // ---------------------------------------------------------------------------
 
 /// Everything a route render needs from the loaded repository. Cheaply
-/// cloneable (all `Rc`), so it can live in Yew state and be handed to
-/// `handle_route`.
+/// cloneable (all `Rc`), so it can live in Yew state and be passed as a prop to
+/// `RouteView`.
 #[derive(Clone)]
 struct RepoBundle {
     repo: Rc<CachingRepo>,
@@ -148,6 +151,11 @@ fn app() -> Html {
     // Current location hash; updated by the hashchange listener below. This is
     // the "router": the route effect re-parses it via `route::parse_hash`.
     let hash = use_state(current_hash);
+    // Repo mode vs the repository index (no repo in the URL). Gates the
+    // repo-scoped chrome (nav tabs, fetch stats).
+    let is_repo = resolve_repo_url(&web_sys::window().expect("no window")).is_some();
+    // The breadcrumb / ref-label shown in `#path-bar`, resolved per route.
+    let path_bar = use_state(|| PathBar::Hidden);
 
     // Mount: register the hashchange listener and kick off the repo load (or
     // the repository index when the URL doesn't name a repo).
@@ -182,18 +190,19 @@ fn app() -> Html {
         });
     }
 
-    // Update the chrome (nav active tab, nav hrefs, path bar) whenever the hash
-    // changes or the repo finishes loading. The route *content* is rendered by
-    // `RouteView` below; this only touches the static shell, which Yew never
-    // re-diffs.
+    // Resolve the path-bar model whenever the hash changes or the repo finishes
+    // loading. The nav (active tab, hrefs) is derived synchronously by `NavBar`;
+    // only the path bar's ref label needs an async ref lookup.
     {
         let bundle = bundle.clone();
+        let path_bar = path_bar.clone();
         use_effect_with(((*hash).clone(), bundle.is_some()), move |(hash, _)| {
             if let Some(b) = (*bundle).clone() {
                 let hash = hash.clone();
+                let path_bar = path_bar.clone();
                 wasm_bindgen_futures::spawn_local(async move {
+                    path_bar.set(compute_path_bar(&hash, &b.repo).await);
                     let doc = web_sys::window().unwrap().document().unwrap();
-                    handle_route(hash, &b.repo, &doc).await;
                     set_stats_loaded(&doc);
                 });
             }
@@ -215,17 +224,11 @@ fn app() -> Html {
                 </div>
             </div>
 
-            <nav id="nav">
-                <a href="#!/summary" class="nav-tab">{ "summary" }</a>
-                <a href="#!/refs" class="nav-tab">{ "refs" }</a>
-                <a href="#!/log" class="nav-tab">{ "log" }</a>
-                <a href="#!/tree" class="nav-tab">{ "tree" }</a>
-                <a href="#!/commit" class="nav-tab">{ "commit" }</a>
-                <a href="#!/about" class="nav-tab">{ "about" }</a>
-            </nav>
-
-            <div id="fetch-stats"></div>
-            <div id="path-bar" class="hide"></div>
+            if is_repo {
+                <NavBar hash={(*hash).clone()} />
+                <div id="fetch-stats"></div>
+            }
+            { render_path_bar(&path_bar) }
 
             <div id="content">
                 {
@@ -324,6 +327,148 @@ fn render_loaded(view: &LoadedView) -> Html {
 }
 
 // ---------------------------------------------------------------------------
+// Reactive chrome (nav + path bar)
+// ---------------------------------------------------------------------------
+
+/// Props for [`NavBar`]: the current location hash, from which the active tab
+/// and the head-scoped log/tree hrefs are derived.
+#[derive(Properties, PartialEq, Clone)]
+struct NavBarProps {
+    hash: String,
+}
+
+/// The repository nav tabs. Active highlight and the log/tree hrefs (scoped to
+/// the current `?h=`/path) are derived synchronously from the route — replacing
+/// the old imperative `set_active_tab` + `update_nav_for_head`.
+#[function_component(NavBar)]
+fn nav_bar(props: &NavBarProps) -> Html {
+    let route = parse_hash(&props.hash);
+    let (head, nav_path): (Option<&str>, &str) = match &route {
+        Route::Log { head, path, .. } => (head.as_deref(), path.as_str()),
+        Route::Tree { head, path } => (head.as_deref(), path.as_str()),
+        _ => (None, ""),
+    };
+    let active = active_tab(&route);
+    let log_href = log_url(nav_path, 0, head);
+    let tree_href = match head {
+        Some(h) => format!("#!/tree?h={h}"),
+        None => "#!/tree".to_string(),
+    };
+    let tab = |base: &'static str, href: String, label: &'static str| -> Html {
+        let class = if base == active {
+            classes!("nav-tab", "active")
+        } else {
+            classes!("nav-tab")
+        };
+        html! { <a href={href} {class}>{ label }</a> }
+    };
+    html! {
+        <nav id="nav">
+            { tab("#!/summary", "#!/summary".to_string(), "summary") }
+            { tab("#!/refs", "#!/refs".to_string(), "refs") }
+            { tab("#!/log", log_href, "log") }
+            { tab("#!/tree", tree_href, "tree") }
+            { tab("#!/commit", "#!/commit".to_string(), "commit") }
+            { tab("#!/about", "#!/about".to_string(), "about") }
+        </nav>
+    }
+}
+
+/// The `#path-bar` contents for the current route: a breadcrumb (tree, or
+/// path-scoped log), a bare ref label (whole-history log on a ref), or hidden.
+#[derive(Clone, PartialEq)]
+enum PathBar {
+    Hidden,
+    Crumbs {
+        display: Option<(String, RefKind)>,
+        path: String,
+        head: Option<String>,
+    },
+    RefOnly {
+        name: String,
+        kind: RefKind,
+    },
+}
+
+/// Resolve the path-bar model for `hash`. Only the ref label needs an async ref
+/// lookup; the breadcrumb itself is derived from the path.
+async fn compute_path_bar(hash: &str, repo: &CachingRepo) -> PathBar {
+    match parse_hash(hash) {
+        Route::Tree { path, head } => {
+            let display = resolve_display_head(repo, head.as_deref()).await;
+            PathBar::Crumbs {
+                display,
+                path,
+                head,
+            }
+        }
+        Route::Log { path, head, .. } if !path.is_empty() => {
+            let display = resolve_display_head(repo, head.as_deref()).await;
+            PathBar::Crumbs {
+                display,
+                path,
+                head,
+            }
+        }
+        Route::Log { head, .. } => match resolve_display_head(repo, head.as_deref()).await {
+            Some((name, kind)) => PathBar::RefOnly { name, kind },
+            None => PathBar::Hidden,
+        },
+        _ => PathBar::Hidden,
+    }
+}
+
+fn ref_label(kind: &RefKind) -> &'static str {
+    match kind {
+        RefKind::Tag => "tag",
+        RefKind::Branch => "branch",
+    }
+}
+
+fn render_path_bar(model: &PathBar) -> Html {
+    match model {
+        PathBar::Hidden => html! { <div id="path-bar" class="hide"></div> },
+        PathBar::RefOnly { name, kind } => html! {
+            <div id="path-bar">{ format!("{}: {}", ref_label(kind), name) }</div>
+        },
+        PathBar::Crumbs {
+            display,
+            path,
+            head,
+        } => {
+            let head_suffix = head.as_deref().map_or(String::new(), |h| format!("?h={h}"));
+            let root_href = format!("#!/tree{head_suffix}");
+            html! {
+                <div id="path-bar">
+                    if let Some((name, kind)) = display {
+                        { format!("{}: {} | ", ref_label(kind), name) }
+                    }
+                    { "path: " }
+                    <a href={root_href}>{ "root" }</a>
+                    { for crumb_links(path, &head_suffix) }
+                </div>
+            }
+        }
+    }
+}
+
+/// The `" / <segment>"` breadcrumb links after the root, each linking to the
+/// cumulative tree path (with the same `?h=` suffix).
+fn crumb_links(path: &str, head_suffix: &str) -> Vec<Html> {
+    let mut cumulative = String::new();
+    let mut out = Vec::new();
+    for component in path.split('/').filter(|s| !s.is_empty()) {
+        if !cumulative.is_empty() {
+            cumulative.push('/');
+        }
+        cumulative.push_str(component);
+        let href = format!("#!/tree/{cumulative}{head_suffix}");
+        out.push(html! { <>{ " / " }<a href={href}>{ component.to_string() }</a></> });
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
 // Repository index
 // ---------------------------------------------------------------------------
 
@@ -331,12 +476,8 @@ fn render_loaded(view: &LoadedView) -> Html {
 /// `/listing.json`.
 async fn load_index(doc: Document) {
     let output = doc.get_element_by_id("output").unwrap();
-    // The repo-scoped chrome (nav tabs, fetch stats) is meaningless here.
-    for id in ["nav", "fetch-stats"] {
-        if let Some(el) = doc.get_element_by_id(id) {
-            el.class_list().add_1("hide").ok();
-        }
-    }
+    // The repo-scoped chrome (nav tabs, fetch stats) isn't rendered on the index
+    // (gated by `is_repo` in `App`), so there's nothing to hide here.
     set_text(&doc, "repo-path-name", "repositories");
     doc.set_title("repositories");
     if let Err(e) = try_load_index(&output).await {
@@ -430,5 +571,94 @@ mod tests {
         // No host component: the whole string is the path.
         assert_eq!(repo_path("bar.git"), "bar.git");
         assert_eq!(repo_path(""), "");
+    }
+
+    // --- Reactive chrome snapshots (see `render::tag` for the SSR approach) ---
+
+    /// Render `NavBar` for `hash` to a static HTML string, breaking adjacent
+    /// tags onto their own lines. Exercises the active-tab highlight and the
+    /// head/path-scoped log & tree hrefs.
+    fn render_nav(hash: &str) -> String {
+        let hash = hash.to_string();
+        let html = futures::executor::block_on(
+            yew::ServerRenderer::<NavBar>::with_props(move || NavBarProps { hash })
+                .hydratable(false)
+                .render(),
+        );
+        html.replace("><", ">\n<")
+    }
+
+    #[test]
+    fn nav_summary() {
+        // Plain route: summary active, log/tree hrefs at their defaults.
+        insta::assert_snapshot!(render_nav("#!/summary"));
+    }
+
+    #[test]
+    fn nav_tree_scoped() {
+        // A subtree on a branch: tree active, and both the log and tree tabs
+        // carry the current path / `?h=`.
+        insta::assert_snapshot!(render_nav("#!/tree/src?h=main"));
+    }
+
+    #[test]
+    fn nav_log_on_tag() {
+        // Whole-history log on a tag: log active, hrefs scoped to the ref.
+        insta::assert_snapshot!(render_nav("#!/log?h=v1.0.0"));
+    }
+
+    // A throwaway host so the plain `render_path_bar` fn can go through SSR
+    // (a renderer needs a component, and `PathBar` itself isn't `Properties`).
+    #[derive(Properties, PartialEq, Clone)]
+    struct PbHostProps {
+        model: PathBar,
+    }
+
+    #[function_component(PbHost)]
+    fn pb_host(props: &PbHostProps) -> Html {
+        render_path_bar(&props.model)
+    }
+
+    fn render_pb(model: PathBar) -> String {
+        let html = futures::executor::block_on(
+            yew::ServerRenderer::<PbHost>::with_props(move || PbHostProps { model })
+                .hydratable(false)
+                .render(),
+        );
+        html.replace("><", ">\n<")
+    }
+
+    #[test]
+    fn path_bar_hidden() {
+        insta::assert_snapshot!(render_pb(PathBar::Hidden));
+    }
+
+    #[test]
+    fn path_bar_crumbs_on_branch() {
+        // Nested path on a branch: ref label prefix + root/segment breadcrumb,
+        // every link carrying `?h=`.
+        insta::assert_snapshot!(render_pb(PathBar::Crumbs {
+            display: Some(("main".to_string(), RefKind::Branch)),
+            path: "src/render".to_string(),
+            head: Some("main".to_string()),
+        }));
+    }
+
+    #[test]
+    fn path_bar_crumbs_no_ref() {
+        // Implicit HEAD (no `?h=`): no ref label, no suffix on the hrefs.
+        insta::assert_snapshot!(render_pb(PathBar::Crumbs {
+            display: None,
+            path: "src".to_string(),
+            head: None,
+        }));
+    }
+
+    #[test]
+    fn path_bar_ref_only() {
+        insta::assert_snapshot!(render_pb(PathBar::RefOnly {
+            name: "v1.0.0".to_string(),
+            kind: RefKind::Tag,
+        }));
     }
 }

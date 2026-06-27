@@ -1,0 +1,6 @@
+---
+source: src/lib.rs
+expression: "render_pb(PathBar::Crumbs\n{\n    display: Some((\"main\".to_string(), RefKind::Branch)), path:\n    \"src/render\".to_string(), head: Some(\"main\".to_string()),\n})"
+---
+<div id="path-bar">branch: main | path: <a href="#!/tree?h=main">root</a> / <a href="#!/tree/src?h=main">src</a> / <a href="#!/tree/src/render?h=main">render</a>
+</div>
