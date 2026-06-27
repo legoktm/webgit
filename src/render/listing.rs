@@ -89,7 +89,9 @@ fn repo_group_rows(g: &RepoGroup) -> Html {
     html! {
         <>
             if !g.section.is_empty() {
-                <tr class="repo-section"><td>{ g.section.clone() }</td></tr>
+                <tr class="repo-section" key={format!("section:{}", g.section)}>
+                    <td>{ g.section.clone() }</td>
+                </tr>
             }
             { for g.repos.iter().map(repo_row) }
         </>
@@ -98,7 +100,9 @@ fn repo_group_rows(g: &RepoGroup) -> Html {
 
 fn repo_row(r: &RepoEntry) -> Html {
     html! {
-        <tr><td class="name"><a href={r.href.clone()}>{ r.name.clone() }</a></td></tr>
+        <tr key={r.href.clone()}>
+            <td class="name"><a href={r.href.clone()}>{ r.name.clone() }</a></td>
+        </tr>
     }
 }
 

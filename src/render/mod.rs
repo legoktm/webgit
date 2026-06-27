@@ -87,7 +87,7 @@ fn refs_table(first_col: &'static str, rows: Html) -> Html {
 
 fn refs_table_row(href: String, r: &RefRow) -> Html {
     html! {
-        <tr>
+        <tr key={r.name.clone()}>
             <td class="name"><a href={href}>{ r.name.clone() }</a></td>
             <td class="msg">{ r.message.clone() }</td>
             <td class="author">{ r.author.clone() }</td>
@@ -143,7 +143,7 @@ pub(crate) fn commits_table(commits: &[CommitRow]) -> Html {
 fn commit_table_row(c: &CommitRow) -> Html {
     let href = format!("#!/commit/{}", c.hash);
     html! {
-        <tr>
+        <tr key={c.hash.clone()}>
             <td class="age">{ c.age.display() }</td>
             <td class="name"><a href={href}>{ c.short_hash.clone() }</a></td>
             <td class="msg">{ c.message.clone() }{ for c.refs.iter().map(ref_label) }</td>

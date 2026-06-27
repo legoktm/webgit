@@ -87,7 +87,7 @@ pub(crate) fn tree_view(props: &TreeProps) -> Html {
 fn tree_row(entry: &TreeEntryRow, head_suffix: &str) -> Html {
     let href = format!("#!/tree/{}{}", entry.path, head_suffix);
     html! {
-        <tr>
+        <tr key={entry.path.clone()}>
             <td class="mode">{ &entry.mode }</td>
             <td class="name">
                 if entry.is_dir {

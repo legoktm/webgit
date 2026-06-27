@@ -416,7 +416,7 @@ pub(crate) fn commit_view(props: &CommitProps) -> Html {
         total_deletions,
         files,
         diff_lines,
-    } = props.clone();
+    } = props;
 
     html! {
         <>
@@ -433,11 +433,11 @@ pub(crate) fn commit_view(props: &CommitProps) -> Html {
                     { for parents.iter().enumerate().map(|(i, p)| parent_row(i == 0, p)) }
                     <tr>
                         <td class="label">{ "commit" }</td>
-                        <td class="mono">{ hash }</td>
+                        <td class="mono">{ hash.clone() }</td>
                     </tr>
                     <tr>
                         <td class="label">{ "tree" }</td>
-                        <td class="mono">{ tree_hash }</td>
+                        <td class="mono">{ tree_hash.clone() }</td>
                     </tr>
                 </tbody>
             </table>
@@ -448,7 +448,7 @@ pub(crate) fn commit_view(props: &CommitProps) -> Html {
                 <>
                     <div class="diffstat">
                         <p class="diffstat-summary">
-                            { diffstat_summary(files.len(), total_additions, total_deletions) }
+                            { diffstat_summary(files.len(), *total_additions, *total_deletions) }
                         </p>
                         <table class="diffstat-table">
                             { for files.iter().map(diffstat_row) }
@@ -464,7 +464,7 @@ pub(crate) fn commit_view(props: &CommitProps) -> Html {
 fn parent_row(first: bool, p: &ParentRef) -> Html {
     let href = format!("#!/commit/{}", p.hash);
     html! {
-        <tr>
+        <tr key={p.hash.clone()}>
             <td class="label">{ if first { "parent" } else { "" } }</td>
             <td class="mono"><a href={href}>{ p.short.clone() }</a></td>
         </tr>
@@ -486,7 +486,7 @@ fn diffstat_row(f: &FileDiff) -> Html {
     // the name with the remaining columns blank until they stream in.
     if f.pending {
         return html! {
-            <tr>
+            <tr key={f.path.clone()}>
                 <td class="diffstat-name">{ f.path.clone() }</td>
                 <td class="diffstat-count"></td>
                 <td class="diffstat-bar-cell"></td>
@@ -500,7 +500,7 @@ fn diffstat_row(f: &FileDiff) -> Html {
     let bar_add = format!("bar-add bar-w-{}", f.bar_add);
     let bar_del = format!("bar-del bar-w-{}", f.bar_del);
     html! {
-        <tr>
+        <tr key={f.path.clone()}>
             <td class="diffstat-name">{ f.path.clone() }</td>
             <td class="diffstat-count">{ f.additions + f.deletions }</td>
             <td class="diffstat-bar-cell">

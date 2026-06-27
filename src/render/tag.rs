@@ -77,7 +77,7 @@ pub(crate) fn tag_view(props: &TagProps) -> Html {
         tagger_name,
         commit,
         contents,
-    } = props.clone();
+    } = props;
 
     let commit_href = format!("#!/commit/{commit}");
     let tree_href = format!("#!/tree?h={name}");
@@ -89,21 +89,21 @@ pub(crate) fn tag_view(props: &TagProps) -> Html {
                 <tbody>
                     <tr>
                         <td class="label">{ "tag name" }</td>
-                        <td>{ name }</td>
+                        <td>{ name.clone() }</td>
                     </tr>
                     <tr>
                         <td class="label">{ "tag date" }</td>
-                        <td>{ date }</td>
+                        <td>{ date.clone() }</td>
                     </tr>
                     if let Some(tagger) = tagger_name {
                         <tr>
                             <td class="label">{ "tagged by" }</td>
-                            <td>{ tagger }</td>
+                            <td>{ tagger.clone() }</td>
                         </tr>
                     }
                     <tr>
                         <td class="label">{ "tagged object" }</td>
-                        <td class="mono"><a href={commit_href}>{ commit }</a></td>
+                        <td class="mono"><a href={commit_href}>{ commit.clone() }</a></td>
                     </tr>
                     <tr>
                         <td class="label">{ "browse" }</td>
@@ -116,7 +116,7 @@ pub(crate) fn tag_view(props: &TagProps) -> Html {
                 </tbody>
             </table>
             if let Some(body) = contents {
-                <pre class="tag-message">{ body }</pre>
+                <pre class="tag-message">{ body.clone() }</pre>
             }
         </>
     }
