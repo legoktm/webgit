@@ -23,6 +23,7 @@ web-sys = { version = "0.3", features = [
     "Location",
     "Document",
     "Element",
+    "HtmlIFrameElement",
     "NodeList",
     "DomParser",
     "SupportedType",
@@ -54,6 +55,7 @@ serde_json = "1"
 similar = { version = "3.1.1", features = ["bytes"] }
 yew = { version = "0.23", features = ["csr"] }
 git-version = "0.3.9"
+comrak = { version = "0.54.0", default-features = false }
 
 [dev-dependencies]
 insta = "1"
