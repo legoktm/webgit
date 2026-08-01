@@ -1,6 +1,0 @@
----
-source: src/render/readme.rs
-expression: "render(ReadmeProps\n{ text: Some(\"<script>alert(1)</script> & <b>bold</b>\\n\".to_string()), })"
----
-<pre class="readme">&lt;script&gt;alert(1)&lt;/script&gt; &amp; &lt;b&gt;bold&lt;/b&gt;
-</pre>

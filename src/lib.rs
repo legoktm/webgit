@@ -1,5 +1,6 @@
 #![deny(clippy::all)]
 
+mod assets;
 mod cache;
 mod error;
 mod fetch;
@@ -635,6 +636,7 @@ fn resolve_repo_url(window: &web_sys::Window) -> Option<String> {
 #[wasm_bindgen(start)]
 pub fn main() {
     console_error_panic_hook::set_once();
+    assets::init();
     yew::Renderer::<App>::new().render();
 }
 

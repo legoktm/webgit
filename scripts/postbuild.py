@@ -1,13 +1,15 @@
-#!/usr/bin/env python3
 """Trunk post-build hook.
 
-Two steps, run in order:
+Three steps, run in order:
 
 1. Relocate the hashed CSS/JS/WASM that Trunk emits at the dist root into an
    `assets/` subdir, matching the `/assets/` prefix from `public_url`.
 2. Replace Trunk's inline module loader with an external, self-initializing
    module script. That removes the only inline <script> on the page, which lets
    the Content-Security-Policy drop 'unsafe-inline' from script-src.
+3. Turn markdown.css's <link> into a <meta>, so the page doesn't apply a
+   stylesheet meant only for the sandboxed readme frame while the app can still
+   read its hashed URL at startup (see `assets::init`).
 """
 
 import base64
@@ -73,5 +75,18 @@ html, n = re.subn(
 )
 if n != 1:
     sys.exit(f"postbuild: expected 1 inline module script, replaced {n}")
+
+# 3. Demote markdown.css from a stylesheet to a meta tag. It styles only the
+# readme frame's document, so applying it here would be wrong (and would fetch
+# it on every page load); a meta keeps the hashed URL readable from JS/wasm
+# without costing a request. Integrity is dropped with the <link> — the frame
+# loads it as an ordinary same-origin stylesheet.
+html, n = re.subn(
+    r'<link rel="stylesheet" href="(/assets/markdown-[^"]*\.css)"[^>]*/?>',
+    lambda m: f'<meta name="markdown-css" content="{m.group(1)}">',
+    html,
+)
+if n != 1:
+    sys.exit(f"postbuild: expected 1 markdown.css link, rewrote {n}")
 
 index.write_text(html)

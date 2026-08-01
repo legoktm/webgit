@@ -9,6 +9,11 @@
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>webgit</title>
         <link data-trunk rel="css" href="styles.css" />
+        <!-- Styles the sandboxed readme frame, not this page. Trunk emits and
+             hashes it like any stylesheet; the post-build hook then rewrites
+             its <link> into a <meta> so the page doesn't apply it, leaving the
+             hashed URL discoverable at startup. See scripts/postbuild.py. -->
+        <link data-trunk rel="css" href="markdown.css" />
     </head>
     <body>
         <!-- The application shell (header, nav, path-bar, content) is rendered
