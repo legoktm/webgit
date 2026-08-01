@@ -6,7 +6,7 @@ use yew::prelude::*;
 /// The README file names looked for in the root of the HEAD tree, in the order
 /// they're preferred; first one wins. Only `.md` is treated as markdown — the
 /// extension-less and `.txt` spellings are shown verbatim.
-const README_NAMES: [&str; 3] = ["README.md", "README", "README.txt"];
+const README_NAMES: [&str; 4] = ["README.md", "README", "README.txt", "README.rst"];
 
 /// A README's content, in the form it should be displayed.
 #[derive(PartialEq, Clone)]
