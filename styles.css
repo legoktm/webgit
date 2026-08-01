@@ -251,6 +251,18 @@ code {
     font-family: var(--mono);
 }
 
+/* ── Blob image ──────────────────────────────────────────────── */
+.blob-image {
+    /* Never wider than the content column; scale the height with it so the
+       aspect ratio holds. Small images keep their natural size. */
+    max-width: 100%;
+    height: auto;
+    /* A backdrop so a transparent PNG doesn't dissolve into the page, and a
+       border so the image's own edges are distinguishable from it. */
+    background: var(--bg-alt);
+    border: 1px solid var(--border);
+}
+
 /* ── Blob / source table ─────────────────────────────────────── */
 .blob-table {
     width: 100%;
