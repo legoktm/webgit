@@ -1,0 +1,6 @@
+---
+source: src/render/blob.rs
+expression: "render(b\"\\x89PNG\\r\\n\\x1a\\n\\0\\0\\0\\x0dIHDR\")"
+---
+<div class="blob-info">blob: e69de29bb2d1d6434b8b29ae775ad8c2e48c5391</div>
+<p class="msg">Binary file (16 bytes).</p>

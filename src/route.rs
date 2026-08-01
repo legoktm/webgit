@@ -35,6 +35,13 @@ async fn walk_to_tree(root: &Tree, path: &str, repo: &CachingRepo) -> Option<Tre
     Some(current)
 }
 
+/// Resolve `path` to a blob and hand back its bytes.
+///
+/// There is deliberately no size cap here. A loose object is a single zlib
+/// stream that has to be inflated in full before anything can be read out of
+/// it, so the whole blob is already in memory by the time this returns and an
+/// early bail would save nothing. The cap lives where the expense actually is:
+/// `build_blob_props` decides what to render before copying or splitting.
 async fn walk_to_blob(root: &Tree, path: &str, repo: &CachingRepo) -> Option<(ObjectId, Vec<u8>)> {
     let (dir_path, filename) = match path.rfind('/') {
         Some(i) => (&path[..i], &path[i + 1..]),

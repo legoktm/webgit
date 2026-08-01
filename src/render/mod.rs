@@ -286,6 +286,16 @@ fn plural(n: u64, unit: &str) -> String {
     }
 }
 
+/// Heuristic matching git's: a blob is treated as binary if a NUL byte appears
+/// in its leading bytes. git scans the first 8000 bytes, so do the same.
+///
+/// Shared by the two views that must decide whether bytes can be shown as text:
+/// the diff (which prints "Binary files differ" instead of a hunk) and the blob
+/// view (which refuses to render the file at all).
+pub(crate) fn is_binary(data: &[u8]) -> bool {
+    data.iter().take(8000).any(|&b| b == 0)
+}
+
 fn commit_first_line(message: &[u8]) -> String {
     String::from_utf8_lossy(message)
         .trim_end()
@@ -1132,6 +1142,20 @@ mod tests {
             [60, 3600, 86400 * 400],
             "expected ascending recency order"
         );
+    }
+
+    #[test]
+    fn test_is_binary() {
+        assert!(!is_binary(b""));
+        assert!(!is_binary(b"hello\nworld\n"));
+        // UTF-8 multibyte content has no NUL bytes and must stay textual.
+        assert!(!is_binary("café — résumé".as_bytes()));
+        assert!(is_binary(b"PK\x03\x04\x00\x00"));
+        assert!(is_binary(b"text then \0 nul"));
+        // A NUL past the 8000-byte scan window is not flagged, matching git.
+        let mut late_nul = vec![b'a'; 8000];
+        late_nul.push(0);
+        assert!(!is_binary(&late_nul));
     }
 
     #[test]
