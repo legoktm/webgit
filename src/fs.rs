@@ -13,7 +13,7 @@ pub(crate) struct HttpFile {
 
 impl File for HttpFile {
     async fn read_all(&mut self) -> Result<Vec<u8>, FileSystemError> {
-        web_sys::console::debug_1(&JsValue::from_str(&format!("read_all for {}", &self.url)));
+        web_sys::console::debug_1(&JsValue::from_str(&format!("read_all for {}", self.url)));
         let data = fetch_bytes(&self.url, None).await?;
         Ok(data)
     }
@@ -27,7 +27,7 @@ impl File for HttpFile {
             "read_segment({}, {}) for {}",
             offset.0,
             offset.0 as usize + dest.len(),
-            &self.url
+            self.url
         )));
         let start = offset.0 as usize;
         let range = format!("bytes={start}-{}", dest.len() - 1 + start);
