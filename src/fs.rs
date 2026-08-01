@@ -23,6 +23,13 @@ impl File for HttpFile {
         offset: Offset,
         dest: &mut [u8],
     ) -> Result<usize, FileSystemError> {
+        // No bytes wanted, no request to make: there is no valid `Range` for an
+        // empty read ("bytes=N-{N-1}"), and the end offset below would underflow
+        // computing it. Callers currently never do this, but a read of length 0
+        // is a legal request and shouldn't depend on them to filter it out.
+        if dest.is_empty() {
+            return Ok(0);
+        }
         web_sys::console::debug_1(&JsValue::from_str(&format!(
             "read_segment({}, {}) for {}",
             offset.0,
