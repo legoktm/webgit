@@ -40,7 +40,7 @@ pub(crate) async fn build_tag(repo: &CachingRepo, tag: String) -> anyhow::Result
                 .into_owned(),
             ),
             commit: commit.id().to_string(),
-            contents: Some(String::from_utf8(tag_obj.message().to_vec())?),
+            contents: Some(String::from_utf8_lossy(tag_obj.message()).into_owned()),
         }),
         Err(_) => Ok(TagProps {
             name: tag,
