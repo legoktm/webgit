@@ -664,13 +664,17 @@ const STREAM_BATCH: usize = 10;
 /// gathered so far after each chunk of commit objects is fetched, so the log
 /// can render progressively instead of waiting for the whole page. The return
 /// value is still the complete page plus whether a further page exists.
+///
+/// Rows are emitted with no ref decorations (`refs` empty), as
+/// [`recent_commits`] does: the caller computes the decoration map concurrently
+/// and folds it in with [`apply_decorations`], so peeling every tag never holds
+/// up the walk.
 pub(crate) async fn walk_commits_streamed(
     head_commit: &Commit,
     repo: &CachingRepo,
     path: Option<&str>,
     skip: usize,
     limit: usize,
-    decorations: &BTreeMap<ObjectId, Vec<RefLabel>>,
     on_batch: impl Fn(&[CommitRow]),
 ) -> (Vec<CommitRow>, bool) {
     // Pre-split the pathspec once; `None` walks the full history unfiltered.
@@ -824,7 +828,7 @@ pub(crate) async fn walk_commits_streamed(
                 message: commit_first_line(commit.message()),
                 author: String::from_utf8_lossy(commit.author_name()).into_owned(),
                 age: Age::new(commit.author_date()),
-                refs: decorations.get(id).cloned().unwrap_or_default(),
+                refs: Vec::new(),
             });
         }
         on_batch(&commits);

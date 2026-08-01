@@ -5,7 +5,7 @@ use futures::stream::{FuturesOrdered, StreamExt};
 use git_async::diff::{DiffEntry, TreeDiff};
 use git_async::error::Error as GitError;
 use git_async::object::{Object, ObjectId, ObjectIdPrefix, PrefixResolution};
-use similar::TextDiffConfig;
+use similar::{ChangeTag, TextDiffConfig};
 use yew::prelude::*;
 
 #[derive(PartialEq, Clone)]
@@ -276,34 +276,69 @@ fn diff_file(path: &str, old_data: Vec<u8>, new_data: Vec<u8>) -> (Vec<DiffLine>
     }
 
     let text_diff = TextDiffConfig::default().diff_lines(old_data, new_data);
-    let udiff = text_diff
-        .unified_diff()
-        .header(&format!("a/{path}"), &format!("b/{path}"))
-        .to_string();
 
+    // Walk `similar`'s hunk/change iterators rather than rendering the unified
+    // diff with `to_string()` and re-splitting it: that would build the entire
+    // diff as one allocation and then copy every line out of it again, so a
+    // large diff was held in memory twice over before a row was rendered. The
+    // output is byte-for-byte what `UnifiedDiff`'s `Display` would have
+    // produced (see `test_diff_file_matches_unified_diff`), just emitted one
+    // `DiffLine` at a time: file headers before the first hunk, the `@@` header
+    // before a hunk's first change, and the "no newline" hint after a change
+    // that lacks one.
     let mut additions = 0usize;
     let mut deletions = 0usize;
-    for line in udiff.lines() {
-        let lkind = match line.chars().next() {
-            Some('+') => {
-                if !line.starts_with("+++") {
+    let mut file_header_pending = true;
+    for hunk in text_diff.unified_diff().iter_hunks() {
+        if std::mem::take(&mut file_header_pending) {
+            lines.push(DiffLine {
+                kind: "del".to_string(),
+                content: format!("--- a/{path}"),
+            });
+            lines.push(DiffLine {
+                kind: "add".to_string(),
+                content: format!("+++ b/{path}"),
+            });
+        }
+        let mut hunk_header_pending = true;
+        for change in hunk.iter_changes() {
+            if std::mem::take(&mut hunk_header_pending) {
+                lines.push(DiffLine {
+                    kind: "hunk".to_string(),
+                    content: hunk.header().to_string(),
+                });
+            }
+            let (kind, marker) = match change.tag() {
+                ChangeTag::Insert => {
                     additions += 1;
+                    ("add", '+')
                 }
-                "add"
-            }
-            Some('-') => {
-                if !line.starts_with("---") {
+                ChangeTag::Delete => {
                     deletions += 1;
+                    ("del", '-')
                 }
-                "del"
+                ChangeTag::Equal => ("ctx", ' '),
+            };
+            // Each value carries its own line terminator; strip it (and a CRLF's
+            // `\r`, which `str::lines` would also have dropped) so the content is
+            // one rendered row.
+            let value = change.to_string_lossy();
+            let value = value.strip_suffix('\n').unwrap_or(&value);
+            let value = value.strip_suffix('\r').unwrap_or(value);
+            let mut content = String::with_capacity(value.len() + 1);
+            content.push(marker);
+            content.push_str(value);
+            lines.push(DiffLine {
+                kind: kind.to_string(),
+                content,
+            });
+            if text_diff.newline_terminated() && change.missing_newline() {
+                lines.push(DiffLine {
+                    kind: "ctx".to_string(),
+                    content: "\\ No newline at end of file".to_string(),
+                });
             }
-            Some('@') => "hunk",
-            _ => "ctx",
-        };
-        lines.push(DiffLine {
-            kind: lkind.to_string(),
-            content: line.to_string(),
-        });
+        }
     }
 
     (lines, additions, deletions)
@@ -683,6 +718,62 @@ mod tests {
             lines[1].content,
             "Binary files a/blob.bin and b/blob.bin differ"
         );
+    }
+
+    /// `diff_file` emits the unified diff line by line instead of rendering it
+    /// into one string and re-splitting it. That's only safe while the two agree
+    /// exactly, so pin them against each other over the cases where the hand-
+    /// rolled emission could drift: a plain modification, a file with no
+    /// trailing newline on either side, CRLF endings, multiple hunks (the file
+    /// header must appear once, each `@@` header once), an identical pair (no
+    /// hunks at all, so no header), and invalid UTF-8 (lossy decoding).
+    #[test]
+    fn test_diff_file_matches_unified_diff() {
+        let cases: &[(&[u8], &[u8])] = &[
+            (b"alpha\nbeta\n", b"alpha\nbeta changed\n"),
+            (b"alpha\nbeta", b"alpha\nbeta changed"),
+            (b"alpha\nbeta\n", b"alpha\nbeta"),
+            (b"alpha\r\nbeta\r\n", b"alpha\r\nbeta changed\r\n"),
+            (
+                b"1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n",
+                b"1\n2\nx\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\ny\n20\n",
+            ),
+            (b"same\n", b"same\n"),
+            (b"", b"only\n"),
+            (b"caf\xc3\xa9\n", b"caf\xff\n"),
+        ];
+
+        for (old, new) in cases {
+            let (lines, additions, deletions) =
+                diff_file("foo.txt", old.to_vec(), new.to_vec());
+            // The reference rendering, produced the way `diff_file` used to.
+            let text_diff = TextDiffConfig::default().diff_lines(old.to_vec(), new.to_vec());
+            let expected = text_diff
+                .unified_diff()
+                .header("a/foo.txt", "b/foo.txt")
+                .to_string();
+
+            // `lines[0]` is our own `diff --git` header, which `similar` never
+            // emits; the rest must match the reference line for line.
+            let got: Vec<&str> = lines[1..].iter().map(|l| l.content.as_str()).collect();
+            let want: Vec<&str> = expected.lines().collect();
+            assert_eq!(got, want, "line mismatch for {old:?} -> {new:?}");
+
+            // Counts exclude the `---`/`+++` headers, matching git's diffstat.
+            let want_add = want
+                .iter()
+                .filter(|l| l.starts_with('+') && !l.starts_with("+++"))
+                .count();
+            let want_del = want
+                .iter()
+                .filter(|l| l.starts_with('-') && !l.starts_with("---"))
+                .count();
+            assert_eq!(
+                (additions, deletions),
+                (want_add, want_del),
+                "count mismatch for {old:?} -> {new:?}"
+            );
+        }
     }
 
     fn file(path: &str, additions: usize, deletions: usize) -> FileDiff {

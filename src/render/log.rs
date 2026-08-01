@@ -1,9 +1,11 @@
 use crate::{
     cache::CachingRepo,
-    render::{CommitRow, commits_table, decoration_map, walk_commits_streamed},
+    render::{CommitRow, apply_decorations, commits_table, decoration_map, walk_commits_streamed},
     route::log_url,
 };
 use git_async::object::Commit;
+use std::cell::RefCell;
+use std::collections::BTreeMap;
 use yew::prelude::*;
 
 const PAGE_SIZE: usize = 50;
@@ -19,27 +21,42 @@ pub(crate) async fn build_log(
     head: Option<&str>,
     on_partial: impl Fn(LogProps),
 ) -> LogProps {
-    let decorations = decoration_map(repo).await;
     let path_filter = (!path.is_empty()).then_some(path);
     let prev_url = (offset > 0).then(|| log_url(path, offset.saturating_sub(PAGE_SIZE), head));
-    let (commits, has_next) = walk_commits_streamed(
+
+    // Walk and decoration scan run concurrently, as in `build_summary`: peeling
+    // every tag is fetch-bound on a cold cache and awaiting it first would stall
+    // every pagination click before a single row could render. The walk streams
+    // label-less rows into this cell; each partial folds in whatever labels have
+    // landed, so the chips appear as soon as the scan resolves (and the returned
+    // page always carries them).
+    let decorations = RefCell::new(BTreeMap::new());
+    let decorations = &decorations;
+    let scan = async move {
+        let map = decoration_map(repo).await;
+        *decorations.borrow_mut() = map;
+    };
+    let walk = walk_commits_streamed(
         head_commit,
         repo,
         path_filter,
         offset,
         PAGE_SIZE,
-        &decorations,
         |rows| {
+            let mut commits = rows.to_vec();
+            apply_decorations(&mut commits, &decorations.borrow());
             // Hold the nav off the partials: `next` isn't known until the walk
             // finishes, and showing "newer/older" mid-load would be misleading.
             on_partial(LogProps {
-                commits: rows.to_vec(),
+                commits,
                 prev_url: prev_url.clone(),
                 next_url: None,
             });
         },
-    )
-    .await;
+    );
+    let (_, (mut commits, has_next)) = futures::join!(scan, walk);
+
+    apply_decorations(&mut commits, &decorations.borrow());
     LogProps {
         commits,
         prev_url,
