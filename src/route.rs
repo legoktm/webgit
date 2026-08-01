@@ -4,6 +4,7 @@ use crate::render::about::{AboutProps, build_about};
 use crate::render::blob::{BlobProps, build_blob_props};
 use crate::render::commit::{CommitProps, build_commit};
 use crate::render::log::{LogProps, build_log};
+use crate::render::readme::{ReadmeProps, build_readme};
 use crate::render::refs_all::{RefsAllProps, build_refs_all};
 use crate::render::refs_heads::{RefsHeadsProps, build_refs_heads};
 use crate::render::refs_tags::{RefsTagsProps, build_refs_tags};
@@ -60,6 +61,7 @@ pub(crate) enum RefsRoute {
 
 pub(crate) enum Route {
     About,
+    Readme,
     Summary,
     Log {
         offset: usize,
@@ -82,6 +84,9 @@ pub(crate) fn parse_hash(hash: &str) -> Route {
     }
     if hash == "#!/about" {
         return Route::About;
+    }
+    if hash == "#!/readme" {
+        return Route::Readme;
     }
 
     if let Some(rest) = hash.strip_prefix("#!/log") {
@@ -164,6 +169,7 @@ pub(crate) enum RefKind {
 pub(crate) fn active_tab(route: &Route) -> &'static str {
     match route {
         Route::About => "#!/about",
+        Route::Readme => "#!/readme",
         Route::Summary => "#!/summary",
         Route::Log { .. } => "#!/log",
         Route::CommitHead | Route::Commit(_) => "#!/commit",
@@ -213,6 +219,7 @@ pub(crate) async fn resolve_display_head(
 /// handled separately by `RouteView`/`NavBar` in `lib.rs`.
 pub(crate) enum LoadedView {
     About(AboutProps),
+    Readme(ReadmeProps),
     Summary(SummaryProps),
     Log(LogProps),
     Commit(CommitProps),
@@ -238,6 +245,8 @@ pub(crate) async fn build_route(
 ) -> anyhow::Result<LoadedView> {
     match parse_hash(hash) {
         Route::About => Ok(LoadedView::About(build_about(repo, clone_url).await)),
+        // The README always comes from HEAD's tree, never a `?h=` ref.
+        Route::Readme => Ok(LoadedView::Readme(build_readme(root_tree, repo).await)),
         Route::Summary => Ok(LoadedView::Summary(
             build_summary(head_commit, repo, clone_url.as_str(), |p| {
                 on_partial(LoadedView::Summary(p))
@@ -332,6 +341,11 @@ mod tests {
     #[test]
     fn test_parse_hash_about() {
         assert!(matches!(parse_hash("#!/about"), Route::About));
+    }
+
+    #[test]
+    fn test_parse_hash_readme() {
+        assert!(matches!(parse_hash("#!/readme"), Route::Readme));
     }
 
     #[test]

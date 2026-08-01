@@ -1,0 +1,5 @@
+---
+source: src/render/readme.rs
+expression: "render(ReadmeProps { file: None })"
+---
+<p class="msg">No README found.</p>

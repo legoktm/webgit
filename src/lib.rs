@@ -18,6 +18,7 @@ use render::blob::BlobView;
 use render::commit::CommitView;
 use render::listing::{ListingProps, ListingView, build_listing_props};
 use render::log::LogView;
+use render::readme::ReadmeView;
 use render::refs_all::RefsAllView;
 use render::refs_heads::RefsHeadsView;
 use render::refs_tags::RefsTagsView;
@@ -333,6 +334,7 @@ fn route_view(props: &RouteViewProps) -> Html {
 fn render_loaded(view: &LoadedView) -> Html {
     match view {
         LoadedView::About(p) => html! { <AboutView ..p.clone() /> },
+        LoadedView::Readme(p) => html! { <ReadmeView ..p.clone() /> },
         LoadedView::Summary(p) => html! { <SummaryView ..p.clone() /> },
         LoadedView::Log(p) => html! { <LogView ..p.clone() /> },
         LoadedView::Commit(p) => html! { <CommitView ..p.clone() /> },
@@ -455,6 +457,7 @@ fn nav_bar(props: &NavBarProps) -> Html {
     };
     html! {
         <nav id="nav">
+            { tab("#!/readme", "#!/readme".to_string(), "readme") }
             { tab("#!/summary", "#!/summary".to_string(), "summary") }
             { tab("#!/refs", "#!/refs".to_string(), "refs") }
             { tab("#!/log", log_href, "log") }

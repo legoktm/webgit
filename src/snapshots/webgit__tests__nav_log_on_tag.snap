@@ -3,6 +3,7 @@ source: src/lib.rs
 expression: "render_nav(\"#!/log?h=v1.0.0\")"
 ---
 <nav id="nav">
+<a href="#!/readme" class="nav-tab">readme</a>
 <a href="#!/summary" class="nav-tab">summary</a>
 <a href="#!/refs" class="nav-tab">refs</a>
 <a href="#!/log?h=v1.0.0" class="nav-tab active">log</a>

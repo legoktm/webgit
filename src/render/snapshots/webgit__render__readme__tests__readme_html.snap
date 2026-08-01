@@ -1,0 +1,8 @@
+---
+source: src/render/readme.rs
+expression: "render(ReadmeProps\n{ text: Some(\"# webgit\\n\\nA client-side Git viewer.\\n\".to_string()), })"
+---
+<pre class="readme"># webgit
+
+A client-side Git viewer.
+</pre>

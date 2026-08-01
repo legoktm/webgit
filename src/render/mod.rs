@@ -11,6 +11,7 @@ pub(crate) mod blob;
 pub(crate) mod commit;
 pub(crate) mod listing;
 pub(crate) mod log;
+pub(crate) mod readme;
 pub(crate) mod refs_all;
 pub(crate) mod refs_heads;
 pub(crate) mod refs_tags;

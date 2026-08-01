@@ -564,3 +564,16 @@ a.ref-label:hover {
     color: var(--text);
     line-height: 1.5;
 }
+
+/* ── Readme ──────────────────────────────────────────────────── */
+/* Plain text, so hard-wrapped prose keeps its line breaks, but long
+   lines wrap rather than forcing the page to scroll sideways. */
+.readme {
+    font-family: var(--mono);
+    font-size: 0.85rem;
+    margin: 0;
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+    color: var(--text);
+    line-height: 1.5;
+}

@@ -3,6 +3,7 @@ source: src/lib.rs
 expression: "render_nav(\"#!/summary\")"
 ---
 <nav id="nav">
+<a href="#!/readme" class="nav-tab">readme</a>
 <a href="#!/summary" class="nav-tab active">summary</a>
 <a href="#!/refs" class="nav-tab">refs</a>
 <a href="#!/log" class="nav-tab">log</a>
