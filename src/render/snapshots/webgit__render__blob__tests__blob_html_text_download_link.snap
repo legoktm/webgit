@@ -1,0 +1,16 @@
+---
+source: src/render/blob.rs
+expression: "render_with_url(\"src/main.rs\", b\"fn main() {}\\n\", \"blob:fake\")"
+---
+<div class="blob-info">blob: e69de29bb2d1d6434b8b29ae775ad8c2e48c5391 · <a href="blob:fake" download="main.rs" class="blob-download">download</a>
+</div>
+<table class="blob-table">
+<tbody>
+<tr id="n1">
+<td class="lno">
+<a href="#n1">1</a>
+</td>
+<td class="code">fn main() {}</td>
+</tr>
+</tbody>
+</table>

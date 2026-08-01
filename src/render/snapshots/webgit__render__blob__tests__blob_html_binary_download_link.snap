@@ -1,0 +1,7 @@
+---
+source: src/render/blob.rs
+expression: "render_with_url(\"payload.bin\", PNG, \"blob:fake\")"
+---
+<div class="blob-info">blob: e69de29bb2d1d6434b8b29ae775ad8c2e48c5391 · <a href="blob:fake" download="payload.bin" class="blob-download">download</a>
+</div>
+<p class="msg">Binary file (16 bytes).</p>

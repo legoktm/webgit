@@ -98,19 +98,15 @@ fn image_format(filename: &str, data: &[u8]) -> Option<ImageFormat> {
 /// [`BlobContent::Text`] and [`BlobContent::Image`] carries the measurement
 /// that rejected it, since that is the only thing the view still has to say
 /// about a file it won't show.
+///
+/// The bytes themselves are not in here: they live on [`BlobProps`], because
+/// the download link needs them whichever way the blob is classified.
 #[derive(PartialEq, Clone)]
 pub(crate) enum BlobContent {
     /// The blob's lines; a line's 1-based number is its index here.
     Text(Vec<String>),
-    /// A blob to render as an image, with the bytes to build the object URL
-    /// from and the file name to use as its alt text. `Rc` so that the props
-    /// clone on every re-render stays a refcount bump rather than a copy of
-    /// the whole image.
-    Image {
-        format: ImageFormat,
-        data: Rc<Vec<u8>>,
-        name: String,
-    },
+    /// A blob to render as an image, in the format its object URL should claim.
+    Image { format: ImageFormat },
     /// A blob git's heuristic calls binary, with its size in bytes.
     Binary { bytes: usize },
     /// A blob over [`MAX_BLOB_BYTES`], with its size in bytes.
@@ -119,21 +115,46 @@ pub(crate) enum BlobContent {
     TooManyLines { lines: usize },
 }
 
-/// The view inputs for a blob: its id and its content. Doubles as the
-/// component's props and the test fixture.
+impl BlobContent {
+    /// The MIME type to give the object URL the view builds over the blob.
+    ///
+    /// `application/octet-stream` for everything that isn't a recognised image:
+    /// the URL's only other consumer is the download link, and the point there
+    /// is to hand the bytes over untouched rather than to invite the browser to
+    /// display them.
+    fn mime(&self) -> &'static str {
+        match self {
+            BlobContent::Image { format } => format.mime(),
+            _ => "application/octet-stream",
+        }
+    }
+}
+
+/// The view inputs for a blob: its id, its bytes and how to display them.
+/// Doubles as the component's props and the test fixture.
 #[derive(Properties, PartialEq, Clone)]
 pub(crate) struct BlobProps {
     pub blob_id: String,
+    /// The blob's file name — the last component of its path. Used as the
+    /// downloaded file's name, and as an image's alt text.
+    pub name: String,
+    /// The blob's bytes, as read from the object. `Rc` so that the props clone
+    /// on every re-render stays a refcount bump rather than a copy of the whole
+    /// file.
+    pub data: Rc<Vec<u8>>,
     pub content: BlobContent,
 }
 
 /// Build the blob view's props. `path` is the blob's full path within the tree;
-/// only its last component is used, to recognise an image by extension.
-pub(crate) fn build_blob_props(blob_id: ObjectId, path: &str, data: &[u8]) -> BlobProps {
+/// only its last component is used, to recognise an image by extension and to
+/// name the download.
+pub(crate) fn build_blob_props(blob_id: ObjectId, path: &str, data: Vec<u8>) -> BlobProps {
     let filename = path.rsplit('/').next().unwrap_or(path);
     BlobProps {
         blob_id: blob_id.to_string(),
-        content: blob_content(filename, data),
+        name: filename.to_string(),
+        content: blob_content(filename, &data),
+        data: Rc::new(data),
     }
 }
 
@@ -153,14 +174,7 @@ pub(crate) fn build_blob_props(blob_id: ObjectId, path: &str, data: &[u8]) -> Bl
 /// more than can be said for the `String`s the text path would allocate.
 fn blob_content(filename: &str, data: &[u8]) -> BlobContent {
     if let Some(format) = image_format(filename, data) {
-        return BlobContent::Image {
-            // The one copy on this path. `walk_to_blob` owns a `Vec` that could
-            // be moved in instead, but threading ownership through for a single
-            // memcpy of an already-in-memory image isn't worth the churn.
-            data: Rc::new(data.to_vec()),
-            format,
-            name: filename.to_string(),
-        };
+        return BlobContent::Image { format };
     }
     if is_binary(data) {
         return BlobContent::Binary { bytes: data.len() };
@@ -196,21 +210,40 @@ fn count_lines(data: &[u8]) -> usize {
     }
 }
 
-/// The Yew component used to mount the blob view into the DOM. The markup lives
-/// in the plain `blob_view` function below so it can be unit-tested without a
-/// renderer.
+/// The Yew component used to mount the blob view into the DOM.
+///
+/// The one thing it does beyond calling `blob_view` is mint the object URL over
+/// the blob's bytes, which is a side effect and so can't live in the markup.
+/// Passing the URL in keeps `blob_view` a plain function of its inputs, which
+/// is what lets the tests render it without a DOM.
 #[function_component(BlobView)]
 pub(crate) fn blob_view_component(props: &BlobProps) -> Html {
-    blob_view(props)
+    let url = use_object_url(props.content.mime(), &props.data);
+    blob_view(props, &url)
 }
 
-pub(crate) fn blob_view(props: &BlobProps) -> Html {
-    let BlobProps { blob_id, content } = props;
+/// The blob view's markup. `url` is an object URL over `props.data`, or empty
+/// if one couldn't be made — under SSR, or if the browser refused. Everything
+/// that needs it is omitted rather than emitted with an empty `src`/`href`,
+/// which browsers resolve to the current page and re-fetch.
+pub(crate) fn blob_view(props: &BlobProps, url: &str) -> Html {
+    let BlobProps {
+        blob_id,
+        name,
+        content,
+        data: _,
+    } = props;
 
     html! {
         <>
             <div class="blob-info">
                 { "blob: " }{ blob_id }
+                if !url.is_empty() {
+                    { " · " }
+                    <a class="blob-download" href={url.to_string()} download={name.clone()}>
+                        { "download" }
+                    </a>
+                }
             </div>
             { match content {
                 BlobContent::Text(lines) => html! {
@@ -220,8 +253,9 @@ pub(crate) fn blob_view(props: &BlobProps) -> Html {
                         </tbody>
                     </table>
                 },
-                BlobContent::Image { format, data, name } => html! {
-                    <BlobImage format={*format} data={data.clone()} name={name.clone()} />
+                BlobContent::Image { .. } if url.is_empty() => html! {},
+                BlobContent::Image { .. } => html! {
+                    <img class="blob-image" src={url.to_string()} alt={name.clone()} />
                 },
                 BlobContent::Binary { bytes } => html! {
                     <p class="msg">{ format!("Binary file ({bytes} bytes).") }</p>
@@ -241,36 +275,29 @@ pub(crate) fn blob_view(props: &BlobProps) -> Html {
     }
 }
 
-#[derive(Properties, PartialEq, Clone)]
-pub(crate) struct BlobImageProps {
-    pub format: ImageFormat,
-    pub data: Rc<Vec<u8>>,
-    pub name: String,
-}
-
-/// An image blob, shown from an object URL over its bytes.
+/// An object URL over the blob's bytes, for the `<img>` and the download link.
 ///
 /// An object URL rather than a `data:` one because the bytes are already in
 /// memory: base64 would add a third again in size and park the whole encoded
-/// image in a DOM attribute, where a `blob:` URL is a short string the browser
-/// resolves back to the buffer we already hold.
+/// file in a DOM attribute, where a `blob:` URL is a short string the browser
+/// resolves back to a buffer. One URL for both consumers, since constructing
+/// the `Blob` copies the bytes and a second one would hold the file twice.
 ///
 /// The URL is created in an effect, not during render, for two reasons: it is a
 /// side effect with a matching teardown (an object URL pins its buffer until
-/// revoked, so navigating between images would otherwise leak one per visit),
+/// revoked, so navigating between blobs would otherwise leak one per visit),
 /// and it keeps `web_sys` off the render path, where the SSR-based tests run
-/// without a DOM. Under SSR the effect never fires and the `<img>` is simply
-/// not emitted — better than emitting one with an empty `src`, which browsers
-/// resolve to the current page and re-fetch.
-#[function_component(BlobImage)]
-fn blob_image(props: &BlobImageProps) -> Html {
+/// without a DOM. Under SSR the effect never fires and the empty string is what
+/// the caller sees.
+#[hook]
+fn use_object_url(mime: &'static str, data: &Rc<Vec<u8>>) -> String {
     let url = use_state(String::new);
     {
         let url = url.clone();
         use_effect_with(
-            (props.format, props.data.clone()),
-            move |(format, data): &(ImageFormat, Rc<Vec<u8>>)| {
-                let created = object_url(*format, data).unwrap_or_default();
+            (mime, data.clone()),
+            move |(mime, data): &(&'static str, Rc<Vec<u8>>)| {
+                let created = object_url(mime, data).unwrap_or_default();
                 url.set(created.clone());
                 move || {
                     if !created.is_empty() {
@@ -280,23 +307,17 @@ fn blob_image(props: &BlobImageProps) -> Html {
             },
         );
     }
-
-    if url.is_empty() {
-        return html! {};
-    }
-    html! {
-        <img class="blob-image" src={(*url).clone()} alt={props.name.clone()} />
-    }
+    (*url).clone()
 }
 
-/// Wrap `data` in a `Blob` of `format`'s MIME type and mint an object URL for
-/// it. `None` if the browser refuses either step, which leaves the view
-/// showing nothing rather than a broken image.
-fn object_url(format: ImageFormat, data: &[u8]) -> Option<String> {
+/// Wrap `data` in a `Blob` of type `mime` and mint an object URL for it. `None`
+/// if the browser refuses either step, which leaves the view showing neither an
+/// image nor a download link rather than broken ones.
+fn object_url(mime: &str, data: &[u8]) -> Option<String> {
     let parts = js_sys::Array::new();
     parts.push(&js_sys::Uint8Array::from(data));
     let options = web_sys::BlobPropertyBag::new();
-    options.set_type(format.mime());
+    options.set_type(mime);
     let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(&parts, &options).ok()?;
     web_sys::Url::create_object_url_with_blob(&blob).ok()
 }
@@ -332,16 +353,48 @@ mod tests {
 
     /// The props are built *inside* the closure rather than passed into it:
     /// `ServerRenderer` requires the closure be `Send`, and `BlobProps` holds an
-    /// `Rc` for image blobs. Moving the inputs in instead (both `Send`) keeps
-    /// the refcount non-atomic, which is what a single-threaded WASM app wants.
+    /// `Rc`. Moving the inputs in instead (both `Send`) keeps the refcount
+    /// non-atomic, which is what a single-threaded WASM app wants.
     fn render_path(path: &str, data: &[u8]) -> String {
         let id = ObjectId::from_hex(b"e69de29bb2d1d6434b8b29ae775ad8c2e48c5391").unwrap();
         let path = path.to_string();
         let data = data.to_vec();
         let html = futures::executor::block_on(
-            yew::ServerRenderer::<BlobView>::with_props(move || build_blob_props(id, &path, &data))
+            yew::ServerRenderer::<BlobView>::with_props(move || build_blob_props(id, &path, data))
                 .hydratable(false)
                 .render(),
+        );
+        html.replace("><", ">\n<")
+    }
+
+    /// A test-only component that renders the markup with an object URL already
+    /// in hand, standing in for the effect that mints one in the browser. The
+    /// URL is the only thing SSR can't produce, so this covers everything that
+    /// depends on it — the download link, and the image.
+    #[derive(Properties, PartialEq, Clone)]
+    struct WithUrlProps {
+        blob: BlobProps,
+        url: String,
+    }
+
+    #[function_component(BlobViewWithUrl)]
+    fn blob_view_with_url(props: &WithUrlProps) -> Html {
+        blob_view(&props.blob, &props.url)
+    }
+
+    /// As [`render_path`], but with `url` standing in for the object URL.
+    fn render_with_url(path: &str, data: &[u8], url: &str) -> String {
+        let id = ObjectId::from_hex(b"e69de29bb2d1d6434b8b29ae775ad8c2e48c5391").unwrap();
+        let path = path.to_string();
+        let data = data.to_vec();
+        let url = url.to_string();
+        let html = futures::executor::block_on(
+            yew::ServerRenderer::<BlobViewWithUrl>::with_props(move || WithUrlProps {
+                blob: build_blob_props(id, &path, data),
+                url,
+            })
+            .hydratable(false)
+            .render(),
         );
         html.replace("><", ">\n<")
     }
@@ -379,10 +432,44 @@ mod tests {
     /// The image view under SSR: the object URL is minted in an effect, which
     /// doesn't run without a DOM, so the `<img>` is deliberately absent and only
     /// the info line remains. Locked in so that emitting an empty `src` instead
-    /// would show up as a diff.
+    /// would show up as a diff. The download link is absent for the same
+    /// reason, and is covered with a URL in hand below.
     #[test]
     fn test_blob_html_image_ssr_omits_img() {
         insta::assert_snapshot!(render_path("logo.png", PNG));
+    }
+
+    /// What the browser actually shows once the URL exists: the download link
+    /// in the info line, named after the file rather than the path it came
+    /// from, and the `<img>` pointing at the same URL.
+    #[test]
+    fn test_blob_html_image_with_url() {
+        insta::assert_snapshot!(render_with_url("docs/logo.png", PNG, "blob:fake-url"));
+    }
+
+    /// Every classification gets the same download link, including the ones
+    /// whose content isn't shown at all — where it is the only thing the view
+    /// still offers.
+    #[test]
+    fn test_blob_html_text_download_link() {
+        insta::assert_snapshot!(render_with_url(
+            "src/main.rs",
+            b"fn main() {}\n",
+            "blob:fake"
+        ));
+    }
+
+    #[test]
+    fn test_blob_html_binary_download_link() {
+        insta::assert_snapshot!(render_with_url("payload.bin", PNG, "blob:fake"));
+    }
+
+    /// A file name with markup in it is escaped in the `download` attribute
+    /// like anywhere else.
+    #[test]
+    fn test_blob_html_download_name_is_escaped() {
+        let html = render_with_url("a\"><script>.txt", b"x\n", "blob:fake");
+        assert!(!html.contains("<script>"), "{html}");
     }
 
     #[test]
@@ -453,25 +540,48 @@ mod tests {
         assert_eq!(format_of("Photo.JPeG", JPEG), Some(ImageFormat::Jpeg));
     }
 
+    /// The bytes reach the props whatever the classification says, since the
+    /// download link needs them either way.
     #[test]
-    fn test_image_carries_bytes_and_alt_text() {
-        let BlobContent::Image { data, name, .. } = blob_content("logo.png", PNG) else {
-            panic!("expected an image");
-        };
-        assert_eq!(data.as_slice(), PNG);
-        assert_eq!(name, "logo.png");
+    fn test_props_carry_bytes_for_every_content() {
+        let id = ObjectId::from_hex(b"e69de29bb2d1d6434b8b29ae775ad8c2e48c5391").unwrap();
+        for (path, data) in [
+            ("logo.png", PNG),
+            ("payload.bin", PNG),
+            ("file.txt", b"hello\n"),
+        ] {
+            let props = build_blob_props(id, path, data.to_vec());
+            assert_eq!(props.data.as_slice(), data, "{path}");
+        }
     }
 
-    /// The name used for alt text is the last path component, not the whole
-    /// path — `build_blob_props` is handed the full path from the route.
+    /// The name used for the download and for alt text is the last path
+    /// component, not the whole path — `build_blob_props` is handed the full
+    /// path from the route.
     #[test]
     fn test_build_blob_props_uses_filename_from_path() {
         let id = ObjectId::from_hex(b"e69de29bb2d1d6434b8b29ae775ad8c2e48c5391").unwrap();
-        let props = build_blob_props(id, "docs/img/logo.png", PNG);
-        let BlobContent::Image { name, .. } = props.content else {
-            panic!("expected an image");
-        };
-        assert_eq!(name, "logo.png");
+        let props = build_blob_props(id, "docs/img/logo.png", PNG.to_vec());
+        assert_eq!(props.name, "logo.png");
+        assert!(matches!(props.content, BlobContent::Image { .. }));
+    }
+
+    /// An image's object URL claims its own type, so the `<img>` decodes;
+    /// everything else is handed over as opaque bytes.
+    #[test]
+    fn test_content_mime() {
+        assert_eq!(
+            BlobContent::Image {
+                format: ImageFormat::Png
+            }
+            .mime(),
+            "image/png"
+        );
+        assert_eq!(BlobContent::Text(vec![]).mime(), "application/octet-stream");
+        assert_eq!(
+            BlobContent::Binary { bytes: 1 }.mime(),
+            "application/octet-stream"
+        );
     }
 
     /// The extension alone doesn't promote a blob out of the text/binary path.

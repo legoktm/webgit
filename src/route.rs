@@ -407,7 +407,7 @@ pub(crate) async fn build_route(
                     head.as_deref(),
                 )))
             } else if let Some((id, data)) = walk_to_blob(tree, &path, repo).await {
-                Ok(LoadedView::Blob(build_blob_props(id, &path, &data)))
+                Ok(LoadedView::Blob(build_blob_props(id, &path, data)))
             } else {
                 Ok(LoadedView::NotFound(path))
             }

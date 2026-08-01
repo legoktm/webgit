@@ -251,6 +251,10 @@ code {
     font-family: var(--mono);
 }
 
+.blob-download {
+    color: var(--link);
+}
+
 /* ── Blob image ──────────────────────────────────────────────── */
 .blob-image {
     /* Never wider than the content column; scale the height with it so the
