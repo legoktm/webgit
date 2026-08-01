@@ -1007,7 +1007,9 @@ mod tests {
         let emitted = RefCell::new(Vec::new());
         let reveal = InOrder::new(len);
         for &i in order {
-            reveal.resolve(i, Some(i * 10), |idx, v| emitted.borrow_mut().push((idx, v)));
+            reveal.resolve(i, Some(i * 10), |idx, v| {
+                emitted.borrow_mut().push((idx, v))
+            });
         }
         emitted.into_inner()
     }
