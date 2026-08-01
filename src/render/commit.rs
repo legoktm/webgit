@@ -4,7 +4,7 @@ use crate::render::{format_datetime, yield_to_browser};
 use futures::stream::{FuturesOrdered, StreamExt};
 use git_async::diff::{DiffEntry, TreeDiff};
 use git_async::error::Error as GitError;
-use git_async::object::{Object, ObjectId};
+use git_async::object::{Object, ObjectId, ObjectIdPrefix, PrefixResolution};
 use similar::TextDiffConfig;
 use yew::prelude::*;
 
@@ -73,8 +73,7 @@ pub(crate) async fn build_commit(
     sha: &str,
     on_partial: impl Fn(CommitProps),
 ) -> anyhow::Result<CommitProps> {
-    let oid =
-        ObjectId::from_hex(sha.as_bytes()).ok_or_else(|| anyhow::anyhow!("invalid SHA: {sha}"))?;
+    let oid = resolve_sha(repo, sha).await?;
     let commit = repo
         .lookup_object(oid)
         .await
@@ -161,8 +160,42 @@ pub(crate) async fn build_commit(
     })
 }
 
+/// Resolve the SHA from a `#!/commit/…` URL to the object it names.
+///
+/// A full 40-character hash decodes directly, with no I/O — the case every
+/// link this app generates itself takes. Anything shorter is one of git's
+/// abbreviated forms, as quoted in commit messages and linkified by
+/// [`linkify_message`], and has to be expanded against the repository. Like
+/// git, we refuse to pick between objects that share an abbreviation rather
+/// than sending the reader to an arbitrary one.
+async fn resolve_sha(repo: &CachingRepo, sha: &str) -> anyhow::Result<ObjectId> {
+    if let Some(oid) = ObjectId::from_hex(sha.as_bytes()) {
+        return Ok(oid);
+    }
+    let prefix = ObjectIdPrefix::from_hex(sha.as_bytes())
+        .ok_or_else(|| anyhow::anyhow!("invalid SHA: {sha}"))?;
+    match repo
+        .resolve_prefix(&prefix)
+        .await
+        .context(format!("resolve {sha}"))?
+    {
+        PrefixResolution::Found(oid) => Ok(oid),
+        PrefixResolution::Ambiguous => Err(anyhow::anyhow!("ambiguous SHA: {sha}")),
+        // Abbreviations of objects that exist only as loose files can't be
+        // expanded (see `Repo::resolve_prefix`), so they land here too.
+        PrefixResolution::NotFound => Err(anyhow::anyhow!("unknown SHA: {sha}")),
+    }
+}
+
 /// A token is treated as a commit reference if it is a run of 7-40 lowercase
 /// hex digits, i.e. a full SHA-1 or one of git's abbreviated forms.
+///
+/// All-digit runs are included, so a date ("20250101") or a bug number
+/// ("1234567") is hex-shaped enough to be linkified. Whether such a link goes
+/// anywhere is left to [`resolve_sha`]: one that names no object reports
+/// "unknown SHA" rather than rendering as a commit. The alternative — requiring
+/// an `a`-`f` — would silence those, but at the cost of the all-digit
+/// abbreviations, which are real references a reader would want to follow.
 fn is_sha1(token: &str) -> bool {
     (7..=40).contains(&token.len())
         && token
@@ -732,6 +765,21 @@ mod tests {
             vec![Text("x0123abcd".to_string())]
         );
         assert_eq!(linkify_message(&"a".repeat(41)), vec![Text("a".repeat(41))]);
+    }
+
+    #[test]
+    fn test_linkify_message_links_all_digit_runs() {
+        use MessageSegment::Sha;
+        // An all-digit run is a valid abbreviation, so it is linkified like any
+        // other. Resolution decides whether it names anything — a date or a bug
+        // number simply reports "unknown SHA" when followed.
+        for token in ["20250101", "1234567", "1234567890", "2025010a"] {
+            assert_eq!(
+                linkify_message(token),
+                vec![Sha(token.to_string())],
+                "{token} should be linkified"
+            );
+        }
     }
 
     #[test]

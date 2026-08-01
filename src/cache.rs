@@ -3,7 +3,9 @@ use git_async::Repo;
 use git_async::commit_graph::bloom::{BloomSettings, path_maybe_changed};
 use git_async::diff::TreeDiff;
 use git_async::error::{Error as GitError, GResult};
-use git_async::object::{Commit, Object, ObjectId, ObjectType, RawObject, Tree};
+use git_async::object::{
+    Commit, Object, ObjectId, ObjectIdPrefix, ObjectType, PrefixResolution, RawObject, Tree,
+};
 use git_async::reference::{Ref, RefEntry, RefName};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -123,6 +125,36 @@ impl CachingRepo {
                 _ => return Ok(None),
             }
         }
+    }
+
+    /// Expand an abbreviated SHA (the kind commit messages quote) into the full
+    /// object ID it names.
+    ///
+    /// Two sources are consulted, cheapest first:
+    ///
+    /// 1. The in-memory commit-graph map, which is sorted by OID, so a range
+    ///    scan resolves an abbreviation with no I/O at all. It only holds
+    ///    commits — exactly what a message reference names — and only once a
+    ///    history view has loaded it, so a miss here is not authoritative. We
+    ///    deliberately do *not* force [`ensure_graph_loaded`](Self::ensure_graph_loaded):
+    ///    bulk-fetching the whole commit-graph would be a far heavier price
+    ///    than the handful of ranged reads the pack indexes cost.
+    /// 2. The pack indexes, via a binary search per pack.
+    ///
+    /// A hit in the graph wins even though some *other* object (a blob, or a
+    /// commit newer than the commit-graph) might share the abbreviation: the
+    /// only thing the caller can do with the answer is render a commit, so
+    /// resolving to the commit is both what the author meant and the only
+    /// useful outcome. Ambiguity *between commits* is still reported.
+    pub(crate) async fn resolve_prefix(
+        &self,
+        prefix: &ObjectIdPrefix,
+    ) -> GResult<PrefixResolution> {
+        match resolve_prefix_in_map(&self.graph.borrow(), prefix) {
+            PrefixResolution::NotFound => {}
+            resolved => return Ok(resolved),
+        }
+        self.inner.resolve_prefix(prefix).await
     }
 
     // --- Commit-graph accelerators ------------------------------------------
@@ -519,6 +551,22 @@ impl CachingRepo {
     }
 }
 
+/// Resolve an abbreviated SHA against a map keyed by object ID. Sorted keys
+/// mean the abbreviation covers one contiguous range, so the answer is the
+/// first two entries of that range: none, exactly one, or more than one.
+/// Free-standing and I/O-free so it can be unit-tested off the browser.
+fn resolve_prefix_in_map<T>(
+    map: &BTreeMap<ObjectId, T>,
+    prefix: &ObjectIdPrefix,
+) -> PrefixResolution {
+    let mut matches = map.range(prefix.first()..=prefix.last()).map(|(id, _)| *id);
+    match (matches.next(), matches.next()) {
+        (None, _) => PrefixResolution::NotFound,
+        (Some(id), None) => PrefixResolution::Found(id),
+        (Some(_), Some(_)) => PrefixResolution::Ambiguous,
+    }
+}
+
 /// A numeric fingerprint of the Bloom settings, stored beside each filter so a
 /// settings change invalidates only the filters (not the metadata).
 fn settings_tag(s: BloomSettings) -> f64 {
@@ -717,4 +765,79 @@ async fn await_request(req: &IdbRequest) -> Result<JsValue, JsValue> {
         }
     });
     JsFuture::from(promise).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An object ID written as a short hex string, right-padded with zeroes.
+    fn oid(hex: &str) -> ObjectId {
+        let mut padded = hex.as_bytes().to_vec();
+        padded.resize(40, b'0');
+        ObjectId::from_hex(&padded).unwrap()
+    }
+
+    fn prefix(hex: &str) -> ObjectIdPrefix {
+        ObjectIdPrefix::from_hex(hex.as_bytes()).unwrap()
+    }
+
+    /// Stands in for the commit-graph map; only its keys matter here.
+    fn map(ids: &[ObjectId]) -> BTreeMap<ObjectId, ()> {
+        ids.iter().map(|id| (*id, ())).collect()
+    }
+
+    #[test]
+    fn resolve_prefix_in_map_unique() {
+        let map = map(&[oid("00"), oid("12ab34"), oid("12ff"), oid("ff")]);
+        assert_eq!(
+            resolve_prefix_in_map(&map, &prefix("12ab34")),
+            PrefixResolution::Found(oid("12ab34"))
+        );
+        // An odd-length abbreviation covers half a byte's worth of IDs.
+        assert_eq!(
+            resolve_prefix_in_map(&map, &prefix("12ab3")),
+            PrefixResolution::Found(oid("12ab34"))
+        );
+        // The first and last keys of the map.
+        assert_eq!(
+            resolve_prefix_in_map(&map, &prefix("0000")),
+            PrefixResolution::Found(oid("00"))
+        );
+        assert_eq!(
+            resolve_prefix_in_map(&map, &prefix("ff00")),
+            PrefixResolution::Found(oid("ff"))
+        );
+    }
+
+    #[test]
+    fn resolve_prefix_in_map_not_found() {
+        let map = map(&[oid("00"), oid("12ab34"), oid("ff")]);
+        assert_eq!(
+            resolve_prefix_in_map(&map, &prefix("12ac")),
+            PrefixResolution::NotFound
+        );
+        assert_eq!(
+            resolve_prefix_in_map(&map, &prefix("9999")),
+            PrefixResolution::NotFound
+        );
+        assert_eq!(
+            resolve_prefix_in_map(&BTreeMap::<ObjectId, ()>::new(), &prefix("12ab34")),
+            PrefixResolution::NotFound
+        );
+    }
+
+    #[test]
+    fn resolve_prefix_in_map_ambiguous() {
+        let map = map(&[oid("12ab34"), oid("12ab35"), oid("13")]);
+        assert_eq!(
+            resolve_prefix_in_map(&map, &prefix("12ab3")),
+            PrefixResolution::Ambiguous
+        );
+        // The neighbouring `13…` key is outside the range and must not count.
+        assert_eq!(
+            resolve_prefix_in_map(&map, &prefix("12ab35")),
+            PrefixResolution::Found(oid("12ab35"))
+        );
+    }
 }

@@ -4,7 +4,7 @@ use crate::{
     file_system::{
         DirEntry, Directory, FileSystem, FileSystemError, read_file_if_exists, search_for_files,
     },
-    object::{Object, ObjectId},
+    object::{Object, ObjectId, ObjectIdPrefix, PrefixResolution},
     object_store::{RawObject, cache::IndexCache, lookup::PackName},
     reference::{
         Ref, RefEntry, RefName, RefTarget, lookup_loose_ref, parse_info_refs, parse_packed_refs,
@@ -266,6 +266,15 @@ impl<F: FileSystem> Repo<F> {
     /// into memory.
     pub async fn lookup_object(&self, id: ObjectId) -> GResult<Object> {
         Object::lookup(self, id).await
+    }
+
+    /// Expand an abbreviated object ID (see [`ObjectIdPrefix`]) into the full
+    /// [`ObjectId`] of the object it names.
+    ///
+    /// Only packed objects are searched; see [`PrefixResolution`] for how an
+    /// abbreviation shared by several objects is reported.
+    pub async fn resolve_prefix(&self, prefix: &ObjectIdPrefix) -> GResult<PrefixResolution> {
+        crate::object_store::lookup::resolve_prefix(self, prefix).await
     }
 
     /// Look up the raw (unparsed) bytes and type of an object.

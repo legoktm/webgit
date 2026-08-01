@@ -1,11 +1,13 @@
 use crate::{
     error::{GResult, annotate_with_object_id},
     file_system::{Directory, FileSystem, Offset},
-    object::ObjectId,
+    object::{ObjectId, ObjectIdPrefix, PrefixResolution},
     object_store::{
         RawObject,
         cache::IndexCache,
-        index::{FanoutTable, ShortOffsetTable, find_object_in_pack_index},
+        index::{
+            FanoutTable, ShortOffsetTable, find_object_in_pack_index, find_prefix_in_pack_index,
+        },
         loose::read_loose_object,
         pack::{form_deltified_chain, reconstruct_deltified_object_from_chain},
         page_read::CachingPageReader,
@@ -73,6 +75,33 @@ pub(crate) async fn lookup<F: FileSystem>(
         return Ok(Some(RawObject { object_type, body }));
     }
     read_loose_object(repo, id).await
+}
+
+/// Expand an abbreviated object ID by searching every pack index.
+///
+/// Loose objects are not considered: finding one would mean knowing its full
+/// ID already (they are stored at `objects/ab/cdef…`, and a directory listing
+/// is not available over dumb HTTP — the transport this library exists to
+/// serve). Packed objects are the overwhelming majority in any repository that
+/// has been gc'd, and are the ones a published repository serves.
+pub(crate) async fn resolve_prefix<F: FileSystem>(
+    repo: &Repo<F>,
+    prefix: &ObjectIdPrefix,
+) -> GResult<PrefixResolution> {
+    let mut resolution = PrefixResolution::NotFound;
+    for pack in &repo.index_cache.indexes {
+        let idx_file = repo.pack_dir.open_file(&pack.name.index_filename).await?;
+        // Share the pack's persistent index page cache, as object lookups do:
+        // the binary search walks the same pages they do.
+        let mut idx_file = CachingPageReader::with_cache(idx_file, pack.idx_pages.clone());
+        resolution =
+            resolution.merge(find_prefix_in_pack_index(&pack.fanout, &mut idx_file, prefix).await?);
+        if resolution == PrefixResolution::Ambiguous {
+            // No later pack can un-ambiguate it, so stop reading.
+            break;
+        }
+    }
+    Ok(resolution)
 }
 
 pub(crate) async fn find_packed_object<'p, F: FileSystem>(
