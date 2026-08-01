@@ -1,8 +1,11 @@
 use crate::cache::CachingRepo;
 use crate::render::collect_refs;
 use git_async::reference::{RefName, RefTarget};
+use git_version::git_version;
 use std::rc::Rc;
 use yew::prelude::*;
+
+const COMMIT: &str = git_version!();
 
 /// The view inputs for the about page. The `on_clear` callback is wired to the
 /// "(clear)" button so the cache can be flushed and the page re-rendered; it's
@@ -16,6 +19,7 @@ pub(crate) struct AboutProps {
     pub idb_available: bool,
     pub objects: usize,
     pub size_mb: String,
+    pub commit: String,
     pub on_clear: Callback<MouseEvent>,
 }
 
@@ -33,6 +37,7 @@ pub(crate) fn about_view(props: &AboutProps) -> Html {
         idb_available,
         objects,
         size_mb,
+        commit,
         on_clear,
     } = props;
 
@@ -86,7 +91,7 @@ pub(crate) fn about_view(props: &AboutProps) -> Html {
                 <br />
                 { "The " }
                 <a href="https://git.legoktm.com/public/webgit.git/">{ "source code" }</a>
-                { " is available." }
+                { " is available (" }<code>{ commit }</code>{ ")." }
             </p>
             <table class="tag-table">
                 <tbody>
@@ -155,6 +160,7 @@ pub(crate) async fn build_about(repo: &Rc<CachingRepo>, clone_url: &Rc<String>) 
         idb_available,
         objects,
         size_mb,
+        commit: COMMIT.to_string(),
         on_clear,
     }
 }
@@ -187,6 +193,7 @@ mod tests {
             idb_available,
             objects: 5678,
             size_mb: "56.78".to_string(),
+            commit: "0123abcd".to_string(),
             on_clear: Callback::from(|_| ()),
         }
     }
