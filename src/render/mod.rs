@@ -1,6 +1,7 @@
 use crate::cache::CachingRepo;
 use git_async::object::{Commit, ObjectId, TreeEntryType};
 use git_async::reference::{RefEntry, RefName, RefTarget};
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
 use std::rc::Rc;
 use yew::{Html, html};
@@ -20,10 +21,30 @@ pub(crate) mod tree;
 #[derive(PartialEq, Clone)]
 pub(crate) struct RefRow {
     name: String,
-    short_hash: String,
+    /// The ref's commit metadata; `None` while the commit is still being
+    /// fetched. The summary lists the (name-sorted) ref names immediately and
+    /// backfills these columns as each section's commits resolve.
+    meta: Option<RefMeta>,
+}
+
+#[derive(PartialEq, Clone)]
+struct RefMeta {
     message: String,
     author: String,
     age: Age,
+}
+
+impl RefRow {
+    /// A name-only row whose commit metadata hasn't loaded yet.
+    pub(crate) fn pending(name: String) -> Self {
+        RefRow { name, meta: None }
+    }
+
+    /// Recency sort key (used by the age-sorted refs pages, which never hold
+    /// pending rows); a pending row sorts as most-recent.
+    pub(crate) fn age_secs(&self) -> u64 {
+        self.meta.as_ref().map_or(0, |m| m.age.secs())
+    }
 }
 
 /// The "Branches" section (the old `refs_heads.html`): a heading plus a table
@@ -85,13 +106,26 @@ fn refs_table(first_col: &'static str, rows: Html) -> Html {
     }
 }
 
+/// A minimalist, CSS-animated loading ellipsis shown in place of a value that
+/// is still being fetched. The dots cycle via the `.loading-dots` stylesheet
+/// rule, so no inline style or script is needed (CSP-safe).
+pub(crate) fn loading_dots() -> Html {
+    html! { <span class="loading-dots" aria-label="Loading"></span> }
+}
+
 fn refs_table_row(href: String, r: &RefRow) -> Html {
     html! {
         <tr key={r.name.clone()}>
             <td class="name"><a href={href}>{ r.name.clone() }</a></td>
-            <td class="msg">{ r.message.clone() }</td>
-            <td class="author">{ r.author.clone() }</td>
-            <td class="age">{ r.age.display() }</td>
+            if let Some(m) = &r.meta {
+                <td class="msg">{ m.message.clone() }</td>
+                <td class="author">{ m.author.clone() }</td>
+                <td class="age">{ m.age.display() }</td>
+            } else {
+                <td class="msg">{ loading_dots() }</td>
+                <td class="author"></td>
+                <td class="age"></td>
+            }
         </tr>
     }
 }
@@ -302,6 +336,80 @@ pub(crate) async fn fetch_ref_rows(refs: &[(String, RefEntry)], repo: &CachingRe
     .collect()
 }
 
+/// Releases indexed values in index order no matter what order they resolve in.
+///
+/// Concurrent fetches complete scrambled relative to their list — an
+/// already-cached object resolves in a microtask while its neighbour waits on
+/// the network, an annotated tag costs an extra round trip to peel, and over
+/// HTTP/1.1 the browser's per-origin connection cap completes requests in waves
+/// — and a table filling in scattered order reads as glitchy. Parking each
+/// value as it lands and emitting only the contiguous resolved prefix makes the
+/// table fill top-down while leaving the fetches fully concurrent: nothing waits
+/// on anything, the reveal is merely sequenced.
+struct InOrder<T> {
+    /// `None` = not resolved yet; `Some(None)` = resolved with nothing to emit.
+    slots: RefCell<Vec<Option<Option<T>>>>,
+    /// Index of the next value to release; everything below it has been emitted.
+    next: Cell<usize>,
+}
+
+impl<T> InOrder<T> {
+    fn new(len: usize) -> Self {
+        InOrder {
+            slots: RefCell::new((0..len).map(|_| None).collect()),
+            next: Cell::new(0),
+        }
+    }
+
+    /// Record slot `i` as resolved, then emit however much of the prefix that
+    /// unblocked — nothing at all unless `i` was itself the next one due. A
+    /// `None` value consumes its slot without being emitted, so a value that
+    /// fails to resolve can't stall the ones after it.
+    fn resolve(&self, i: usize, value: Option<T>, emit: impl Fn(usize, T)) {
+        self.slots.borrow_mut()[i] = Some(value);
+        loop {
+            let idx = self.next.get();
+            // Scoped so the borrow is released before `emit` runs.
+            let value = {
+                let mut slots = self.slots.borrow_mut();
+                match slots.get_mut(idx) {
+                    Some(slot) if slot.is_some() => slot.take().flatten(),
+                    _ => break,
+                }
+            };
+            self.next.set(idx + 1);
+            if let Some(value) = value {
+                emit(idx, value);
+            }
+        }
+    }
+}
+
+/// Resolve `refs` concurrently, calling `on_row(index, RefRow)` — `index` being
+/// the ref's position in `refs` — to backfill a name-only skeleton row by row
+/// instead of waiting for the whole list. Fetching is fully concurrent, but the
+/// callbacks are delivered strictly in index order, so the table fills top-down
+/// (see [`InOrder`]).
+pub(crate) async fn fetch_ref_rows_each(
+    refs: &[(String, RefEntry)],
+    repo: &CachingRepo,
+    on_row: impl Fn(usize, RefRow),
+) {
+    let reveal = InOrder::new(refs.len());
+    let (reveal, on_row) = (&reveal, &on_row);
+
+    futures::future::join_all(refs.iter().enumerate().map(|(i, (short, entry))| {
+        let short = short.clone();
+        async move {
+            let row = commit_for_entry(entry, repo)
+                .await
+                .map(|commit| ref_row(short, &commit));
+            reveal.resolve(i, row, on_row);
+        }
+    }))
+    .await;
+}
+
 /// Map each decorated commit to its branch/tag labels, for cgit-style
 /// decorations in commit lists.
 pub(crate) async fn decoration_map(repo: &CachingRepo) -> BTreeMap<ObjectId, Vec<RefLabel>> {
@@ -413,7 +521,7 @@ async fn path_differs(a: ObjectId, b: ObjectId, components: &[&str], repo: &Cach
     entry_id(&ta, last) != entry_id(&tb, last)
 }
 
-/// Counters for one [`walk_commits`] call, logged to the console so it's
+/// Counters for one [`walk_commits_streamed`] call, logged to the console so it's
 /// visible whether the commit-graph (and its Bloom filters) is actually doing
 /// the work: graph hits should dominate fallbacks, and on a filtered log most
 /// commits should be Bloom-skipped rather than tree-diffed.
@@ -528,21 +636,7 @@ const CONFIRM_BATCH: usize = 64;
 /// large enough to keep the round-trips well overlapped.
 const STREAM_BATCH: usize = 10;
 
-/// Non-streaming convenience wrapper: walk and return the whole page at once.
-/// Used by the summary's bounded recent-commits list, which has nothing to
-/// stream.
-pub(crate) async fn walk_commits(
-    head_commit: &Commit,
-    repo: &CachingRepo,
-    path: Option<&str>,
-    skip: usize,
-    limit: usize,
-    decorations: &BTreeMap<ObjectId, Vec<RefLabel>>,
-) -> (Vec<CommitRow>, bool) {
-    walk_commits_streamed(head_commit, repo, path, skip, limit, decorations, |_| {}).await
-}
-
-/// Walk history like [`walk_commits`], but call `on_batch` with the rows
+/// Walk history a page at a time, calling `on_batch` with the rows
 /// gathered so far after each chunk of commit objects is fetched, so the log
 /// can render progressively instead of waiting for the whole page. The return
 /// value is still the complete page plus whether a further page exists.
@@ -715,20 +809,109 @@ pub(crate) async fn walk_commits_streamed(
     (commits, has_more)
 }
 
+/// Walk the most recent `limit` commits reachable from `head_commit` by fetching
+/// commit objects directly, deliberately bypassing the commit-graph. For a small
+/// bounded preview (the summary) this avoids the whole-file bulk load that
+/// [`walk_commits_streamed`] triggers on its first `graph_record` call — a handful of
+/// cheap object reads (the same path the ref rows use) instead of downloading
+/// and persisting every commit's metadata just to show a teaser. History is
+/// unfiltered, so there is no path/Bloom work; `on_batch` is called with the
+/// rows so far as each commit object resolves, so they stream in newest-first.
+///
+/// Rows are emitted with no ref decorations (`refs` empty): the caller computes
+/// the decoration map concurrently and folds it in with [`apply_decorations`],
+/// so the (sometimes fetch-bound) ref scan never holds up the commit rows.
+pub(crate) async fn recent_commits(
+    head_commit: &Commit,
+    repo: &CachingRepo,
+    limit: usize,
+    on_batch: impl Fn(&[CommitRow]),
+) -> Vec<CommitRow> {
+    // Same frontier discipline as `walk_commits_streamed`'s unfiltered arm — a heap
+    // ordered by commit time (newest first), tie-broken by id — but we hold the
+    // resolved `Commit` for each frontier entry so popping a node both emits its
+    // row and yields its parents to fetch, with no commit-graph in the loop.
+    let mut heap: BinaryHeap<(i64, ObjectId)> = BinaryHeap::new();
+    let mut visited: BTreeSet<ObjectId> = BTreeSet::new();
+    let mut frontier: BTreeMap<ObjectId, Commit> = BTreeMap::new();
+
+    let head_id = head_commit.id();
+    heap.push((head_commit.commit_date().timestamp(), head_id));
+    visited.insert(head_id);
+    frontier.insert(head_id, head_commit.clone());
+
+    let mut commits: Vec<CommitRow> = Vec::with_capacity(limit);
+    while let Some((_, id)) = heap.pop() {
+        let commit = frontier.remove(&id).expect("frontier holds every heap id");
+        let hash = format!("{id}");
+        commits.push(CommitRow {
+            short_hash: hash[..8].to_string(),
+            hash,
+            message: commit_first_line(commit.message()),
+            author: String::from_utf8_lossy(commit.author_name()).into_owned(),
+            age: Age::new(&commit.author_date()),
+            refs: Vec::new(),
+        });
+        on_batch(&commits);
+        if commits.len() == limit {
+            break;
+        }
+        // Enqueue not-yet-seen parents, fetching their objects concurrently.
+        let parents: Vec<ObjectId> = commit
+            .parents()
+            .iter()
+            .copied()
+            .filter(|p| visited.insert(*p))
+            .collect();
+        let objects =
+            futures::future::join_all(parents.iter().map(|p| repo.lookup_object(*p))).await;
+        for (pid, object) in parents.iter().zip(objects) {
+            if let Some(parent) = object.ok().and_then(|o| o.commit().ok()) {
+                heap.push((parent.commit_date().timestamp(), *pid));
+                frontier.insert(*pid, parent);
+            }
+        }
+    }
+
+    commits
+}
+
+/// Fold a decoration map into already-built commit rows, matching on hash, so
+/// the summary can stream label-less rows from [`recent_commits`] and add the
+/// branch/tag chips once its (separately, concurrently fetched) decoration map
+/// resolves. A no-op when there is nothing to decorate.
+pub(crate) fn apply_decorations(
+    rows: &mut [CommitRow],
+    decorations: &BTreeMap<ObjectId, Vec<RefLabel>>,
+) {
+    if decorations.is_empty() {
+        return;
+    }
+    let by_hash: BTreeMap<String, &Vec<RefLabel>> = decorations
+        .iter()
+        .map(|(id, labels)| (format!("{id}"), labels))
+        .collect();
+    for row in rows.iter_mut() {
+        if let Some(labels) = by_hash.get(&row.hash) {
+            row.refs = (*labels).clone();
+        }
+    }
+}
+
 fn ref_row(name: String, c: &Commit) -> RefRow {
-    let hash = format!("{}", c.id());
     RefRow {
         name,
-        short_hash: hash[..8].to_string(),
-        message: commit_first_line(c.message()),
-        author: String::from_utf8_lossy(c.author_name()).into_owned(),
-        age: Age::new(&c.author_date()),
+        meta: Some(RefMeta {
+            message: commit_first_line(c.message()),
+            author: String::from_utf8_lossy(c.author_name()).into_owned(),
+            age: Age::new(&c.author_date()),
+        }),
     }
 }
 
 #[cfg(test)]
 pub(crate) mod fixtures {
-    use super::{Age, CommitRow, RefLabel, RefLabelKind, RefRow};
+    use super::{Age, CommitRow, RefLabel, RefLabelKind, RefMeta, RefRow};
 
     /// An [`Age`] that renders as a relative bucket; `secs` must be under the
     /// two-week cutoff for the (placeholder) date to stay hidden.
@@ -762,10 +945,11 @@ pub(crate) mod fixtures {
     pub(crate) fn ref_row(name: &str, message: &str, author: &str, age: Age) -> RefRow {
         RefRow {
             name: name.to_string(),
-            short_hash: "0123abcd".to_string(),
-            message: message.to_string(),
-            author: author.to_string(),
-            age,
+            meta: Some(RefMeta {
+                message: message.to_string(),
+                author: author.to_string(),
+                age,
+            }),
         }
     }
 
@@ -815,6 +999,58 @@ mod tests {
             .unwrap()
             .with_ymd_and_hms(2001, 2, 3, 4, 5, 6)
             .unwrap()
+    }
+
+    /// Resolve `order` (a permutation of slot indices) and collect what was
+    /// emitted, as `(index, value)` pairs in emission order.
+    fn reveal_sequence(len: usize, order: &[usize]) -> Vec<(usize, usize)> {
+        let emitted = RefCell::new(Vec::new());
+        let reveal = InOrder::new(len);
+        for &i in order {
+            reveal.resolve(i, Some(i * 10), |idx, v| emitted.borrow_mut().push((idx, v)));
+        }
+        emitted.into_inner()
+    }
+
+    #[test]
+    fn in_order_emits_in_index_order_however_it_resolves() {
+        // Reverse, then a scrambled order: emission is by index either way.
+        let expected: Vec<(usize, usize)> = (0..4).map(|i| (i, i * 10)).collect();
+        assert_eq!(reveal_sequence(4, &[3, 2, 1, 0]), expected);
+        assert_eq!(reveal_sequence(4, &[1, 3, 0, 2]), expected);
+        assert_eq!(reveal_sequence(4, &[0, 1, 2, 3]), expected);
+    }
+
+    #[test]
+    fn in_order_holds_values_behind_an_unresolved_slot() {
+        // Slot 0 outstanding: nothing may be emitted, however many land after it.
+        let emitted = RefCell::new(Vec::new());
+        let reveal = InOrder::new(3);
+        let push = |idx, v| emitted.borrow_mut().push((idx, v));
+
+        reveal.resolve(2, Some(20), push);
+        reveal.resolve(1, Some(10), push);
+        assert!(emitted.borrow().is_empty(), "nothing precedes slot 0");
+
+        // Slot 0 landing releases the whole run at once.
+        reveal.resolve(0, Some(0), push);
+        assert_eq!(emitted.into_inner(), vec![(0, 0), (1, 10), (2, 20)]);
+    }
+
+    #[test]
+    fn in_order_skips_unresolvable_values_without_stalling() {
+        // A ref whose commit doesn't resolve consumes its slot silently; the
+        // rows after it must still come through.
+        let emitted = RefCell::new(Vec::new());
+        let reveal = InOrder::new(3);
+        let push = |idx, v| emitted.borrow_mut().push((idx, v));
+
+        reveal.resolve(1, Some(10), push);
+        reveal.resolve(0, None, push);
+        assert_eq!(*emitted.borrow(), vec![(1, 10)]);
+
+        reveal.resolve(2, Some(20), push);
+        assert_eq!(emitted.into_inner(), vec![(1, 10), (2, 20)]);
     }
 
     #[test]

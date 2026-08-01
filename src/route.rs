@@ -239,7 +239,10 @@ pub(crate) async fn build_route(
     match parse_hash(hash) {
         Route::About => Ok(LoadedView::About(build_about(repo, clone_url).await)),
         Route::Summary => Ok(LoadedView::Summary(
-            build_summary(head_commit, repo, clone_url.as_str()).await,
+            build_summary(head_commit, repo, clone_url.as_str(), |p| {
+                on_partial(LoadedView::Summary(p))
+            })
+            .await,
         )),
         Route::Log { offset, head, path } => {
             let resolved;

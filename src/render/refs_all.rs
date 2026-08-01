@@ -11,8 +11,8 @@ pub(crate) async fn build_refs_all(repo: &CachingRepo) -> RefsAllProps {
         fetch_ref_rows(&branch_refs, repo),
         fetch_ref_rows(&tag_refs, repo),
     );
-    branches.sort_by_key(|b| b.age.secs());
-    tags.sort_by_key(|t| t.age.secs());
+    branches.sort_by_key(|b| b.age_secs());
+    tags.sort_by_key(|t| t.age_secs());
 
     RefsAllProps {
         branches,

@@ -488,7 +488,7 @@ fn diffstat_row(f: &FileDiff) -> Html {
         return html! {
             <tr key={f.path.clone()}>
                 <td class="diffstat-name">{ f.path.clone() }</td>
-                <td class="diffstat-count"></td>
+                <td class="diffstat-count">{ crate::render::loading_dots() }</td>
                 <td class="diffstat-bar-cell"></td>
                 <td class="diffstat-pm"></td>
             </tr>

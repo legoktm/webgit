@@ -243,7 +243,7 @@ fn app() -> Html {
             <div id="content">
                 {
                     match &*content {
-                        Content::Loading => html! { <p class="msg">{ "Loading\u{2026}" }</p> },
+                        Content::Loading => html! { <p class="msg">{ render::loading_dots() }</p> },
                         Content::Repo(b) => {
                             html! { <RouteView bundle={b.clone()} hash={(*hash).clone()} /> }
                         }
@@ -322,7 +322,7 @@ fn route_view(props: &RouteViewProps) -> Html {
     }
 
     match &*loaded {
-        None => html! { <p class="msg">{ "Loading\u{2026}" }</p> },
+        None => html! { <p class="msg">{ render::loading_dots() }</p> },
         Some(Err(e)) => html! { <p class="msg error">{ e.clone() }</p> },
         Some(Ok(view)) => render_loaded(view),
     }

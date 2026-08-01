@@ -7,7 +7,7 @@ use yew::prelude::*;
 pub(crate) async fn build_refs_tags(repo: &CachingRepo) -> RefsTagsProps {
     let (_, tags) = collect_refs(repo).await;
     let mut tags = fetch_ref_rows(&tags, repo).await;
-    tags.sort_by_key(|t| t.age.secs());
+    tags.sort_by_key(|t| t.age_secs());
     RefsTagsProps {
         tags,
         // This page lists every tag, so there is never a "more" link.

@@ -36,6 +36,8 @@ See <a href="#!/commit/0123abcd">0123abcd</a> for context.</pre><div class="diff
 <tr>
 <td class="diffstat-name">src/main.rs</td>
 <td class="diffstat-count">
+<span aria-label="Loading" class="loading-dots">
+</span>
 </td>
 <td class="diffstat-bar-cell">
 </td>
@@ -45,6 +47,8 @@ See <a href="#!/commit/0123abcd">0123abcd</a> for context.</pre><div class="diff
 <tr>
 <td class="diffstat-name">README</td>
 <td class="diffstat-count">
+<span aria-label="Loading" class="loading-dots">
+</span>
 </td>
 <td class="diffstat-bar-cell">
 </td>
