@@ -151,7 +151,13 @@ fn tree_url(dest: &str) -> String {
     if segments.is_empty() {
         "#!/tree".to_string()
     } else {
-        format!("#!/tree/{}", segments.join("/"))
+        // Encoded per segment: a README can link to a file whose name contains
+        // '?' or '#', which would otherwise cut the route short.
+        let encoded: Vec<String> = segments
+            .iter()
+            .map(|s| crate::route::encode_component(s))
+            .collect();
+        format!("#!/tree/{}", encoded.join("/"))
     }
 }
 

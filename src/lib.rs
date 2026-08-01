@@ -27,7 +27,8 @@ use render::summary::SummaryView;
 use render::tag::TagView;
 use render::tree::TreeView;
 use route::{
-    LoadedView, RefKind, Route, active_tab, build_route, log_url, parse_hash, resolve_display_head,
+    LoadedView, RefKind, Route, active_tab, build_route, encode_component, log_url, parse_hash,
+    resolve_display_head,
 };
 use stats::format_stats;
 use std::cell::{Cell, RefCell};
@@ -184,15 +185,24 @@ fn app() -> Html {
         let path_bar = path_bar.clone();
         let repo_loaded = matches!(&*content, Content::Repo(_));
         use_effect_with(((*hash).clone(), repo_loaded), move |(hash, _)| {
+            // Same staleness guard as `RouteView`: the ref lookup is async, so
+            // navigating again before it lands must not let the old route's
+            // path bar overwrite the new one. The cleanup closure runs on the
+            // next hash change, flipping the flag the resolution checks.
+            let cancelled = Rc::new(Cell::new(false));
             if let Content::Repo(b) = &*content {
                 let repo = Rc::clone(&b.repo);
                 let hash = hash.clone();
                 let path_bar = path_bar.clone();
+                let cancelled = cancelled.clone();
                 wasm_bindgen_futures::spawn_local(async move {
-                    path_bar.set(compute_path_bar(&hash, &repo).await);
+                    let model = compute_path_bar(&hash, &repo).await;
+                    if !cancelled.get() {
+                        path_bar.set(model);
+                    }
                 });
             }
-            || ()
+            move || cancelled.set(true)
         });
     }
 
@@ -445,7 +455,7 @@ fn nav_bar(props: &NavBarProps) -> Html {
     let active = active_tab(&route);
     let log_href = log_url(nav_path, 0, head);
     let tree_href = match head {
-        Some(h) => format!("#!/tree?h={h}"),
+        Some(h) => format!("#!/tree?h={}", encode_component(h)),
         None => "#!/tree".to_string(),
     };
     let tab = |base: &'static str, href: String, label: &'static str| -> Html {
@@ -531,7 +541,9 @@ fn render_path_bar(model: &PathBar) -> Html {
             path,
             head,
         } => {
-            let head_suffix = head.as_deref().map_or(String::new(), |h| format!("?h={h}"));
+            let head_suffix = head
+                .as_deref()
+                .map_or(String::new(), |h| format!("?h={}", encode_component(h)));
             let root_href = format!("#!/tree{head_suffix}");
             html! {
                 <div id="path-bar">
@@ -548,7 +560,8 @@ fn render_path_bar(model: &PathBar) -> Html {
 }
 
 /// The `" / <segment>"` breadcrumb links after the root, each linking to the
-/// cumulative tree path (with the same `?h=` suffix).
+/// cumulative tree path (with the same `?h=` suffix). The link text is the
+/// component as it really is; only the href is encoded.
 fn crumb_links(path: &str, head_suffix: &str) -> Vec<Html> {
     let mut cumulative = String::new();
     let mut out = Vec::new();
@@ -556,7 +569,7 @@ fn crumb_links(path: &str, head_suffix: &str) -> Vec<Html> {
         if !cumulative.is_empty() {
             cumulative.push('/');
         }
-        cumulative.push_str(component);
+        cumulative.push_str(&encode_component(component));
         let href = format!("#!/tree/{cumulative}{head_suffix}");
         out.push(html! { <>{ " / " }<a href={href}>{ component.to_string() }</a></> });
     }

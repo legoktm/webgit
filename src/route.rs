@@ -84,6 +84,99 @@ pub(crate) enum Route {
     },
 }
 
+// ---------------------------------------------------------------------------
+// Percent-encoding
+// ---------------------------------------------------------------------------
+//
+// Ref names and path components are repository data, not identifiers we choose:
+// git allows `?`, `#`, `%` and `&` in both, and a branch called `foo?bar` built
+// straight into `#!/tree?h=foo?bar` is parsed back as the ref `foo` — the link
+// silently goes somewhere else. So every value interpolated into a route is
+// encoded on the way out and decoded on the way back in.
+//
+// Not `js_sys::encode_uri_component`: it only exists in the browser, and the
+// whole routing grammar is covered by native tests.
+
+/// Percent-encode one route component: a ref name, or a single path segment.
+///
+/// Only what would otherwise read as route syntax is escaped — `%` (the escape
+/// itself, so that encoding round-trips), `#` and `?` (which would end the
+/// fragment or open a query), `&` (which separates query parameters), `/` (the
+/// path separator) and space plus control characters, which a browser would
+/// rewrite in the address bar regardless. Everything else, non-ASCII included,
+/// stays legible: [`decode_component`] accepts whatever additional escaping the
+/// browser applies on its own.
+pub(crate) fn encode_component(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if matches!(c, '%' | '#' | '?' | '&' | '/' | ' ') || c.is_control() {
+            let mut buf = [0u8; 4];
+            for byte in c.encode_utf8(&mut buf).as_bytes() {
+                out.push_str(&format!("%{byte:02X}"));
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Decode a percent-encoded route component.
+///
+/// Escapes are resolved to bytes and the result decoded as UTF-8, so a
+/// multi-byte character split across several `%XX` (how a browser encodes
+/// non-ASCII in `location.hash`) is reassembled. A `%` that doesn't begin a
+/// valid escape is passed through as itself rather than rejected — the hash is
+/// user-editable, and a literal `%` in it should still name the obvious thing.
+pub(crate) fn decode_component(s: &str) -> String {
+    if !s.contains('%') {
+        return s.to_string();
+    }
+    let bytes = s.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let (Some(hi), Some(lo)) = (hex_nibble(bytes[i + 1]), hex_nibble(bytes[i + 2]))
+        {
+            out.push((hi << 4) | lo);
+            i += 3;
+            continue;
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn hex_nibble(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
+/// Encode a slash-separated path, one component at a time, so the separators
+/// survive as separators while anything inside a component that looks like one
+/// is escaped.
+pub(crate) fn encode_path(path: &str) -> String {
+    path.split('/')
+        .map(encode_component)
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// Reverse of [`encode_path`].
+fn decode_path(path: &str) -> String {
+    path.split('/')
+        .map(decode_component)
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 pub(crate) fn parse_hash(hash: &str) -> Route {
     // most likely scenario
     if hash == "#!/summary" || hash.is_empty() || hash == "#" {
@@ -102,7 +195,7 @@ pub(crate) fn parse_hash(hash: &str) -> Route {
             Some(i) => (&rest[..i], &rest[i + 1..]),
             None => (rest, ""),
         };
-        let path = path_part.trim_start_matches('/').to_string();
+        let path = decode_path(path_part.trim_start_matches('/'));
         let (offset, head) = parse_log_query(query_string);
         return Route::Log { offset, head, path };
     }
@@ -125,7 +218,9 @@ pub(crate) fn parse_hash(hash: &str) -> Route {
         } else if hash == "#!/refs/heads" {
             RefsRoute::Heads
         } else if let Some(tag) = hash.strip_prefix("#!/refs/tags/") {
-            RefsRoute::Tag(tag.to_string())
+            // A tag name may contain '/', so the whole remainder is the name;
+            // it's decoded as one component, not split into path segments.
+            RefsRoute::Tag(decode_component(tag))
         } else {
             RefsRoute::All
         };
@@ -146,9 +241,9 @@ fn parse_tree_rest(rest: &str) -> (String, Option<String>) {
         qs.split('&')
             .find_map(|part| part.strip_prefix("h="))
             .filter(|v| !v.is_empty())
-            .map(|v| v.to_string())
+            .map(decode_component)
     });
-    (path_part.to_string(), head)
+    (decode_path(path_part), head)
 }
 
 fn parse_log_query(query_string: &str) -> (usize, Option<String>) {
@@ -160,7 +255,7 @@ fn parse_log_query(query_string: &str) -> (usize, Option<String>) {
         } else if let Some(v) = part.strip_prefix("h=")
             && !v.is_empty()
         {
-            head = Some(v.to_string());
+            head = Some(decode_component(v));
         }
     }
     (offset, head)
@@ -320,12 +415,16 @@ pub(crate) async fn build_route(
     }
 }
 
+/// The URL for a log view. `path` and `head` are the decoded values (a real
+/// path, a real ref name); both are encoded here, so callers pass what they
+/// have rather than remembering to escape it.
 pub(crate) fn log_url(path: &str, offset: usize, head: Option<&str>) -> String {
     let base = if path.is_empty() {
         "#!/log".to_string()
     } else {
-        format!("#!/log/{path}")
+        format!("#!/log/{}", encode_path(path))
     };
+    let head = head.map(encode_component);
     match (offset, head) {
         (0, None) => base,
         (n, None) => format!("{base}?offset={n}"),
@@ -522,5 +621,97 @@ mod tests {
             log_url("src", 50, Some("main")),
             "#!/log/src?h=main&offset=50"
         );
+    }
+
+    // --- Percent-encoding ---------------------------------------------------
+
+    #[test]
+    fn test_encode_component_escapes_only_route_syntax() {
+        // Ordinary names are left exactly as they are, so URLs stay readable.
+        assert_eq!(encode_component("main"), "main");
+        assert_eq!(encode_component("v1.0.0"), "v1.0.0");
+        assert_eq!(encode_component("foo(1)+bar,baz=qux"), "foo(1)+bar,baz=qux");
+        // The characters that carry meaning in the route grammar.
+        assert_eq!(encode_component("a%b"), "a%25b");
+        assert_eq!(encode_component("a#b"), "a%23b");
+        assert_eq!(encode_component("a?b"), "a%3Fb");
+        assert_eq!(encode_component("a&b"), "a%26b");
+        assert_eq!(encode_component("a/b"), "a%2Fb");
+        assert_eq!(encode_component("a b"), "a%20b");
+        assert_eq!(encode_component("a\tb"), "a%09b");
+        // Non-ASCII stays legible; the browser escapes it if it needs to, and
+        // the decoder accepts either form.
+        assert_eq!(encode_component("café"), "café");
+    }
+
+    #[test]
+    fn test_decode_component() {
+        assert_eq!(decode_component("main"), "main");
+        assert_eq!(decode_component("a%2Fb"), "a/b");
+        assert_eq!(decode_component("a%3fb"), "a?b", "lowercase hex too");
+        // Multi-byte UTF-8 split across escapes, as a browser writes it.
+        assert_eq!(decode_component("caf%C3%A9"), "café");
+        // A '%' that doesn't begin a valid escape is itself, not an error.
+        assert_eq!(decode_component("100%"), "100%");
+        assert_eq!(decode_component("50%off"), "50%off");
+        assert_eq!(decode_component("%zz"), "%zz");
+        assert_eq!(decode_component("%2"), "%2");
+    }
+
+    #[test]
+    fn test_encode_path_keeps_separators() {
+        // Separators survive; a '/' *inside* a component would not.
+        assert_eq!(encode_path("src/render/mod.rs"), "src/render/mod.rs");
+        assert_eq!(encode_path("docs/a?b.md"), "docs/a%3Fb.md");
+        assert_eq!(decode_path("docs/a%3Fb.md"), "docs/a?b.md");
+        assert_eq!(encode_path(""), "");
+    }
+
+    #[test]
+    fn test_encoding_round_trips_through_the_router() {
+        // The point of the exercise: a ref or path containing route syntax has
+        // to come back out of `parse_hash` as the name it went in as.
+        for name in ["feature/x", "foo?bar", "a&b", "100%", "release #2", "café"] {
+            let url = log_url("", 0, Some(name));
+            match parse_hash(&url) {
+                Route::Log { head: Some(h), .. } => assert_eq!(h, name, "via {url}"),
+                _ => panic!("expected a log route with a head from {url}"),
+            }
+        }
+        for path in ["src/a?b.rs", "docs/50%off.md", "a&b/c#d"] {
+            let url = log_url(path, 0, None);
+            match parse_hash(&url) {
+                Route::Log { path: p, .. } => assert_eq!(p, path, "via {url}"),
+                _ => panic!("expected a log route from {url}"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_tree_and_tag_routes_decode() {
+        // `?h=` on a tree route, and a tag name that itself contains a slash
+        // (encoded, so it stays one name rather than becoming path segments).
+        assert_eq!(
+            parse_tree_rest("/src/a%3Fb.rs?h=foo%26bar"),
+            ("src/a?b.rs".into(), Some("foo&bar".into()))
+        );
+        match parse_hash("#!/refs/tags/release%2F2.0") {
+            Route::Refs(RefsRoute::Tag(name)) => assert_eq!(name, "release/2.0"),
+            _ => panic!("expected a tag route"),
+        }
+    }
+
+    #[test]
+    fn test_offset_is_not_confused_by_an_encoded_ref() {
+        // A ref named "x&offset=999" must not be able to inject a second
+        // parameter: encoding hides the '&' from the query splitter.
+        let url = log_url("", 10, Some("x&offset=999"));
+        match parse_hash(&url) {
+            Route::Log { offset, head, .. } => {
+                assert_eq!(offset, 10);
+                assert_eq!(head.as_deref(), Some("x&offset=999"));
+            }
+            _ => panic!("expected a log route"),
+        }
     }
 }

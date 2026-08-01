@@ -1,4 +1,5 @@
 use crate::cache::CachingRepo;
+use crate::route::encode_component;
 use git_async::object::{Commit, ObjectId, TreeEntryType};
 use git_async::reference::{RefEntry, RefName, RefTarget};
 use std::cell::{Cell, RefCell};
@@ -57,7 +58,7 @@ pub(crate) fn branches_section(branches: &[RefRow], more: bool) -> Html {
             <h3 class="summary-heading">{ "Branches" }</h3>
             { refs_table("Branch", html! {
                 <>
-                    { for branches.iter().map(|b| refs_table_row(format!("#!/tree?h={}", b.name), b)) }
+                    { for branches.iter().map(|b| refs_table_row(format!("#!/tree?h={}", encode_component(&b.name)), b)) }
                     if more {
                         <tr><td>{ "[" }<a href="#!/refs/heads">{ "..." }</a>{ "]" }</td></tr>
                     }
@@ -78,7 +79,7 @@ pub(crate) fn tags_section(tags: &[RefRow], more: bool) -> Html {
             } else {
                 { refs_table("Tag", html! {
                     <>
-                        { for tags.iter().map(|t| refs_table_row(format!("#!/refs/tags/{}", t.name), t)) }
+                        { for tags.iter().map(|t| refs_table_row(format!("#!/refs/tags/{}", encode_component(&t.name)), t)) }
                         if more {
                             <tr><td>{ "[" }<a href="#!/refs/tags">{ "..." }</a>{ "]" }</td></tr>
                         }
@@ -192,11 +193,11 @@ fn commit_table_row(c: &CommitRow) -> Html {
 fn ref_label(r: &RefLabel) -> Html {
     match r.kind {
         RefLabelKind::Tag => {
-            let href = format!("#!/refs/tags/{}", r.name);
+            let href = format!("#!/refs/tags/{}", encode_component(&r.name));
             html! { <>{ " " }<a class="ref-label tag" href={href}>{ r.name.clone() }</a></> }
         }
         RefLabelKind::Branch => {
-            let href = format!("#!/log?h={}", r.name);
+            let href = format!("#!/log?h={}", encode_component(&r.name));
             html! { <>{ " " }<a class="ref-label branch" href={href}>{ r.name.clone() }</a></> }
         }
     }

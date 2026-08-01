@@ -1,3 +1,4 @@
+use crate::route::{encode_component, encode_path};
 use git_async::object::{Tree, TreeEntryType};
 use yew::prelude::*;
 
@@ -51,7 +52,7 @@ pub(crate) struct TreeProps {
 pub(crate) fn build_tree_props(tree: &Tree, prefix: &str, head: Option<&str>) -> TreeProps {
     TreeProps {
         entries: tree_rows(tree, prefix),
-        head_suffix: head.map_or(String::new(), |h| format!("?h={h}")),
+        head_suffix: head.map_or(String::new(), |h| format!("?h={}", encode_component(h))),
     }
 }
 
@@ -85,7 +86,7 @@ pub(crate) fn tree_view(props: &TreeProps) -> Html {
 }
 
 fn tree_row(entry: &TreeEntryRow, head_suffix: &str) -> Html {
-    let href = format!("#!/tree/{}{}", entry.path, head_suffix);
+    let href = format!("#!/tree/{}{}", encode_path(&entry.path), head_suffix);
     html! {
         <tr key={entry.path.clone()}>
             <td class="mode">{ &entry.mode }</td>

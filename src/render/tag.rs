@@ -82,8 +82,9 @@ pub(crate) fn tag_view(props: &TagProps) -> Html {
     } = props;
 
     let commit_href = format!("#!/commit/{commit}");
-    let tree_href = format!("#!/tree?h={name}");
-    let log_href = format!("#!/log?h={name}");
+    let encoded = crate::route::encode_component(name);
+    let tree_href = format!("#!/tree?h={encoded}");
+    let log_href = format!("#!/log?h={encoded}");
 
     html! {
         <>
