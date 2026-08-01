@@ -40,6 +40,8 @@ web-sys = { version = "0.3", features = [
     "SupportedType",
     "Event",
     "EventTarget",
+    "ReadableStream",
+    "ReadableStreamDefaultReader",
     "Request",
     "RequestCache",
     "RequestInit",

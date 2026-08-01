@@ -1,9 +1,11 @@
 use git_async::file_system::FileSystemError;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use wasm_bindgen::JsCast;
+use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
-use web_sys::{Headers, Request, RequestCache, RequestInit, RequestMode, Response};
+use web_sys::{
+    Headers, ReadableStreamDefaultReader, Request, RequestCache, RequestInit, RequestMode, Response,
+};
 
 // ---------------------------------------------------------------------------
 // Per-load stats + progress hook
@@ -236,6 +238,76 @@ async fn read_body(resp: &Response) -> Result<Vec<u8>, FileSystemError> {
     Ok(js_sys::Uint8Array::new(&array_buffer).to_vec())
 }
 
+/// How many bytes must accumulate before a partial read is reported.
+///
+/// A stream hands us whatever the network gave it, which can be a few hundred
+/// bytes at a time; reporting each one would re-render the stats line (and
+/// re-arm its settle timer) far more often than a reader can see. 32 KiB keeps
+/// a multi-megabyte download ticking smoothly while leaving the common case —
+/// a small file that arrives in one chunk — at exactly one report, as before.
+const PROGRESS_CHUNK_BYTES: u64 = 32 * 1024;
+
+/// Read a response body, reporting bytes as they arrive rather than only once
+/// the whole thing has landed.
+///
+/// This is what keeps the stats line moving during a single large download.
+/// The commit-graph bulk load in particular reads the entire file in one
+/// request (see `CommitGraph::all_records`), so without streaming the byte
+/// counter sits at its previous total for the whole transfer and then jumps by
+/// several megabytes at once.
+///
+/// Falls back to a whole-body read when the response has no stream to read
+/// (an empty body, or a `Response` synthesised without one).
+async fn read_body_streaming(resp: &Response) -> Result<Vec<u8>, FileSystemError> {
+    let Some(body) = resp.body() else {
+        let bytes = read_body(resp).await?;
+        fire_progress(0, bytes.len() as u64);
+        return Ok(bytes);
+    };
+    // Unchecked: argument-less `getReader()` returns a default reader by
+    // definition, and once it has been called the stream is locked — an
+    // `instanceof` that somehow disagreed would leave us unable to fall back to
+    // `array_buffer()` (which throws on a locked body), so there is nothing to
+    // gain from checking.
+    let reader: ReadableStreamDefaultReader = body.get_reader().unchecked_into();
+
+    let mut out: Vec<u8> = Vec::new();
+    // Bytes read but not yet handed to the progress callback.
+    let mut unreported = 0u64;
+    loop {
+        let result = JsFuture::from(reader.read())
+            .await
+            .map_err(|e| FileSystemError::Other(Box::new(e.as_string().unwrap_or_default())))?;
+        // `{ done, value }`: `value` is absent on the final `done` read.
+        let done = js_sys::Reflect::get(&result, &JsValue::from_str("done"))
+            .ok()
+            .and_then(|done| done.as_bool())
+            .unwrap_or(false);
+        if done {
+            break;
+        }
+        let chunk = js_sys::Reflect::get(&result, &JsValue::from_str("value"))
+            .map_err(|e| FileSystemError::Other(Box::new(e.as_string().unwrap_or_default())))?
+            .dyn_into::<js_sys::Uint8Array>()
+            .map_err(|_| {
+                FileSystemError::Other(Box::new("stream chunk is not bytes".to_string()))
+            })?;
+        let start = out.len();
+        out.resize(start + chunk.length() as usize, 0);
+        chunk.copy_to(&mut out[start..]);
+        unreported += u64::from(chunk.length());
+        if unreported >= PROGRESS_CHUNK_BYTES {
+            fire_progress(0, unreported);
+            unreported = 0;
+        }
+    }
+    // The tail below the reporting threshold, so the total always ends exact.
+    if unreported > 0 {
+        fire_progress(0, unreported);
+    }
+    Ok(out)
+}
+
 pub(crate) async fn fetch_bytes(
     url: &str,
     range: Option<String>,
@@ -255,21 +327,20 @@ pub(crate) async fn fetch_bytes(
 
     let resp = send(url, &headers).await?;
     let status = resp.status();
-    // Every branch below counts one request: the round trip happened and cost
-    // latency whether or not it yielded usable bytes. Only the byte total is
-    // conditional, and it always reflects what actually came over the wire.
+    // Count the request as soon as the response head arrives, whatever it says:
+    // the round trip happened and cost latency whether or not it yielded usable
+    // bytes. Bytes are reported separately as the body streams in, so a lone
+    // large download still moves the counter while it is in flight.
+    fire_progress(1, 0);
     let action = classify(status, range.is_some());
     match action {
         ResponseAction::NotFound => {
-            fire_progress(1, 0);
             return Err(FileSystemError::NotFound(Box::new(url.to_string())));
         }
         ResponseAction::Eof => {
-            fire_progress(1, 0);
             return Ok(Vec::new());
         }
         ResponseAction::HttpError => {
-            fire_progress(1, 0);
             return Err(FileSystemError::Other(Box::new(format!(
                 "HTTP {status} for {url}"
             ))));
@@ -277,8 +348,7 @@ pub(crate) async fn fetch_bytes(
         ResponseAction::Body | ResponseAction::SliceRange => {}
     }
 
-    let bytes = read_body(&resp).await?;
-    fire_progress(1, bytes.len() as u64);
+    let bytes = read_body_streaming(&resp).await?;
 
     if action == ResponseAction::SliceRange {
         let range = range.as_deref().unwrap_or_default();
