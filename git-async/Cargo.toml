@@ -13,18 +13,18 @@ categories = ["development-tools", "no-std"]
 all-features = true
 
 [dependencies]
-accessory = "2.1.0"
-hex = { version = "0.4.3", default-features = false, features = [] }
-jiff = { version = "0.2.35", default-features = false }
-miniz_oxide = "0.9.1"
-nom = { version = "8.0.0", default-features = false, features = ["alloc"] }
+accessory.workspace = true
+hex.workspace = true
+jiff.workspace = true
+miniz_oxide.workspace = true
+nom.workspace = true
 
 [dev-dependencies]
-futures = "0.3.32"
-hex-literal = "1.1.0"
-rand_core = "0.10.0"
-rand_pcg = "0.10.1"
-tempfile = "3.27.0"
+futures = { workspace = true, features = ["async-await", "executor"] }
+hex-literal.workspace = true
+rand_core.workspace = true
+rand_pcg.workspace = true
+tempfile.workspace = true
 
 [features]
 default = []

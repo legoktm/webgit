@@ -3,21 +3,29 @@ members = ["git-async"]
 # Make bare `cargo test`/`build` in the root cover git-async too.
 default-members = [".", "git-async"]
 
-[package]
-name = "webgit"
-version = "0.1.0"
-edition = "2024"
-
-[lib]
-crate-type = ["cdylib"]
-
-[dependencies]
+[workspace.dependencies]
+accessory = "2.1.0"
 anyhow = "1"
-futures = { version = "0.3", default-features = false, features = ["alloc", "async-await"] }
-git-async = { path = "./git-async", features = ["diff"] }
+comrak = { version = "0.54.0", default-features = false }
+console_error_panic_hook = "0.1"
+futures = { version = "0.3.32", default-features = false }
+git-async = { path = "git-async" }
+git-version = "0.3.9"
+hex = { version = "0.4.3", default-features = false, features = [] }
+hex-literal = "1.1.0"
+insta = "1"
+jiff = { version = "0.2.35", default-features = false }
+js-sys = "0.3"
+miniz_oxide = "0.9.1"
+nom = { version = "8.0.0", default-features = false, features = ["alloc"] }
+rand_core = "0.10.0"
+rand_pcg = "0.10.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+similar = { version = "3.1.1", features = ["bytes"] }
+tempfile = "3.27.0"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
-js-sys = "0.3"
 web-sys = { version = "0.3", features = [
     "Window",
     "Location",
@@ -48,19 +56,37 @@ web-sys = { version = "0.3", features = [
     "IdbTransactionMode",
     "IdbVersionChangeEvent",
 ] }
-console_error_panic_hook = "0.1"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-similar = { version = "3.1.1", features = ["bytes"] }
-yew = { version = "0.23", features = ["csr"] }
-git-version = "0.3.9"
-comrak = { version = "0.54.0", default-features = false }
-jiff = { version = "0.2.35", default-features = false }
+yew = "0.23"
+
+[package]
+name = "webgit"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+anyhow.workspace = true
+futures = { workspace = true, features = ["alloc", "async-await"] }
+git-async = { workspace = true, features = ["diff"] }
+wasm-bindgen.workspace = true
+wasm-bindgen-futures.workspace = true
+js-sys.workspace = true
+web-sys.workspace = true
+console_error_panic_hook.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+similar.workspace = true
+yew = { workspace = true, features = ["csr"] }
+git-version.workspace = true
+comrak.workspace = true
+jiff.workspace = true
 
 [dev-dependencies]
-insta = "1"
-futures = { version = "0.3", features = ["executor"] }
-yew = { version = "0.23", features = ["ssr"] }
+insta.workspace = true
+futures = { workspace = true, features = ["async-await", "executor"] }
+yew = { workspace = true, features = ["ssr"] }
 
 # optimize for download bundle size
 [profile.release]
