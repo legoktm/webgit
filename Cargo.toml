@@ -61,3 +61,14 @@ comrak = { version = "0.54.0", default-features = false }
 insta = "1"
 futures = { version = "0.3", features = ["executor"] }
 yew = { version = "0.23", features = ["ssr"] }
+
+# optimize for download bundle size
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+strip = true
+
+# except this is on the hot path, optimize for performance.
+[profile.release.package.miniz_oxide]
+opt-level = 3
