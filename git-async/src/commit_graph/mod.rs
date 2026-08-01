@@ -515,7 +515,7 @@ mod tests {
             assert_eq!(entry.parents, commit.parents().to_vec(), "parents of {id}");
             assert_eq!(
                 entry.commit_time,
-                commit.commit_date().timestamp(),
+                commit.commit_date().timestamp().as_second(),
                 "time of {id}"
             );
         }

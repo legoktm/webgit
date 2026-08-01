@@ -12,8 +12,8 @@ use crate::{
 };
 use accessory::Accessors;
 use alloc::vec::Vec;
-use chrono::{DateTime, FixedOffset};
 use core::ops::Range;
+use jiff::Zoned;
 use nom::{Parser, combinator::all_consuming};
 
 /// A commit object
@@ -42,13 +42,13 @@ pub struct Commit {
     message: Range<usize>,
 
     /// The author date of the commit
-    #[access(get(cp))]
-    author_date: DateTime<FixedOffset>,
+    #[access(get)]
+    author_date: Zoned,
 
     /// The commit date of the commit
     #[expect(clippy::struct_field_names)]
-    #[access(get(cp))]
-    commit_date: DateTime<FixedOffset>,
+    #[access(get)]
+    commit_date: Zoned,
 
     additional_headers: Vec<RangeObjectHeader>,
 }
@@ -121,10 +121,10 @@ impl Commit {
         let mut parents: Vec<ObjectId> = Vec::new();
         let mut author_name: Option<&[u8]> = None;
         let mut author_email: Option<&[u8]> = None;
-        let mut author_date: Option<DateTime<FixedOffset>> = None;
+        let mut author_date: Option<Zoned> = None;
         let mut committer_name: Option<&[u8]> = None;
         let mut committer_email: Option<&[u8]> = None;
-        let mut commit_date: Option<DateTime<FixedOffset>> = None;
+        let mut commit_date: Option<Zoned> = None;
         let mut additional_headers: Vec<RangeObjectHeader> = Vec::new();
         for (range_header, header) in headers
             .iter()
@@ -203,7 +203,9 @@ a commit
         );
         assert_eq!(
             commit.author_date,
-            DateTime::parse_from_rfc3339("2026-03-29T03:26:58+05:30").unwrap()
+            "2026-03-29T03:26:58+05:30[+05:30]"
+                .parse::<Zoned>()
+                .unwrap()
         );
         assert_eq!(
             str::from_utf8(commit.committer_name()).unwrap(),
@@ -215,7 +217,9 @@ a commit
         );
         assert_eq!(
             commit.commit_date,
-            DateTime::parse_from_rfc3339("2026-03-28T13:56:59-08:00").unwrap()
+            "2026-03-28T13:56:59-08:00[-08:00]"
+                .parse::<Zoned>()
+                .unwrap()
         );
         assert_eq!(str::from_utf8(commit.message()).unwrap(), "a commit\n");
     }

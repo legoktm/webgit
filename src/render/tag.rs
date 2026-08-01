@@ -1,5 +1,6 @@
 use crate::cache::CachingRepo;
 use crate::error::GitContext;
+use crate::render::format_datetime;
 use git_async::reference::RefName;
 use yew::prelude::*;
 
@@ -25,10 +26,11 @@ pub(crate) async fn build_tag(repo: &CachingRepo, tag: String) -> anyhow::Result
     match object.tag() {
         Ok(tag_obj) => Ok(TagProps {
             name: tag.clone(),
-            date: tag_obj
-                .date()
-                .ok_or_else(|| anyhow::anyhow!("no date on tag {tag}"))?
-                .to_string(),
+            date: format_datetime(
+                tag_obj
+                    .date()
+                    .ok_or_else(|| anyhow::anyhow!("no date on tag {tag}"))?,
+            ),
             tagger_name: Some(
                 String::from_utf8_lossy(
                     tag_obj
@@ -42,7 +44,7 @@ pub(crate) async fn build_tag(repo: &CachingRepo, tag: String) -> anyhow::Result
         }),
         Err(_) => Ok(TagProps {
             name: tag,
-            date: commit.author_date().to_string(),
+            date: format_datetime(commit.author_date()),
             tagger_name: None,
             commit: commit.id().to_string(),
             contents: None,

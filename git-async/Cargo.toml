@@ -14,8 +14,8 @@ all-features = true
 
 [dependencies]
 accessory = "2.1.0"
-chrono = { version = "0.4.44", default-features = false, features = ["alloc"] }
 hex = { version = "0.4.3", default-features = false, features = [] }
+jiff = { version = "0.2.35", default-features = false }
 miniz_oxide = "0.9.1"
 nom = { version = "8.0.0", default-features = false, features = ["alloc"] }
 

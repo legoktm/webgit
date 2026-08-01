@@ -9,8 +9,8 @@ use crate::{
 };
 use accessory::Accessors;
 use alloc::vec::Vec;
-use chrono::{DateTime, FixedOffset};
 use core::ops::Range;
+use jiff::Zoned;
 use nom::{Parser, combinator::all_consuming};
 
 /// A tag object
@@ -41,8 +41,8 @@ pub struct Tag {
     message: Range<usize>,
 
     /// The tag date, if it exists
-    #[access(get(cp))]
-    date: Option<DateTime<FixedOffset>>,
+    #[access(get(as_ref, ty(Option<&Zoned>)))]
+    date: Option<Zoned>,
 
     additional_headers: Vec<RangeObjectHeader>,
 }
@@ -106,7 +106,7 @@ impl Tag {
         let mut tag: Option<&[u8]> = None;
         let mut tagger_name: Option<&[u8]> = None;
         let mut tagger_email: Option<&[u8]> = None;
-        let mut tag_date: Option<DateTime<FixedOffset>> = None;
+        let mut tag_date: Option<Zoned> = None;
         let mut additional_headers = Vec::new();
         for (range_header, header) in raw_headers
             .iter()
@@ -181,7 +181,11 @@ a message
         assert_eq!(tag.tagger_email(), Some(b"an-email-address".as_slice()));
         assert_eq!(
             tag.date,
-            Some(DateTime::parse_from_rfc3339("2026-03-29T23:21:35+01:00").unwrap())
+            Some(
+                "2026-03-29T23:21:35+01:00[+01:00]"
+                    .parse::<Zoned>()
+                    .unwrap()
+            )
         );
         assert_eq!(&tag.message(), b"a message\n");
     }

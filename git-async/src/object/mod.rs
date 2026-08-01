@@ -13,7 +13,10 @@ use crate::{
 };
 use accessory::Accessors;
 use alloc::format;
-use chrono::{DateTime, FixedOffset};
+use jiff::{
+    Timestamp, Zoned,
+    tz::{Offset, TimeZone},
+};
 use nom::{
     Parser,
     branch::alt,
@@ -259,9 +262,7 @@ impl Object {
 }
 
 #[allow(clippy::type_complexity)]
-fn parse_author_committer_tagger(
-    input: &[u8],
-) -> ParseResult<&[u8], (&[u8], &[u8], DateTime<FixedOffset>)> {
+fn parse_author_committer_tagger(input: &[u8]) -> ParseResult<&[u8], (&[u8], &[u8], Zoned)> {
     (
         terminated(take_until(" <"), tag(" <")),
         terminated(take_until("> "), tag("> ")),
@@ -272,9 +273,10 @@ fn parse_author_committer_tagger(
             take(2usize).and_then(all_consuming(i32)),
         )
             .map_opt(|(timestamp, tz_sign, tz_hour, tz_minute)| {
-                let date = DateTime::from_timestamp(timestamp, 0)?;
-                let offset = FixedOffset::east_opt(tz_sign * (3600 * tz_hour + 60 * tz_minute))?;
-                let author_date = date.with_timezone(&offset);
+                let date = Timestamp::from_second(timestamp).ok()?;
+                let offset =
+                    Offset::from_seconds(tz_sign * (3600 * tz_hour + 60 * tz_minute)).ok()?;
+                let author_date = date.to_zoned(TimeZone::fixed(offset));
                 Some(author_date)
             }),
     )

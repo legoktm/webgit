@@ -1,6 +1,6 @@
 use crate::cache::CachingRepo;
 use crate::error::GitContext;
-use crate::render::yield_to_browser;
+use crate::render::{format_datetime, yield_to_browser};
 use futures::stream::{FuturesOrdered, StreamExt};
 use git_async::diff::{DiffEntry, TreeDiff};
 use git_async::error::Error as GitError;
@@ -110,10 +110,10 @@ pub(crate) async fn build_commit(
         hash: format!("{}", commit.id()),
         author_name: String::from_utf8_lossy(commit.author_name()).into_owned(),
         author_email: String::from_utf8_lossy(commit.author_email()).into_owned(),
-        author_date: commit.author_date().to_string(),
+        author_date: format_datetime(commit.author_date()),
         committer_name: String::from_utf8_lossy(commit.committer_name()).into_owned(),
         committer_email: String::from_utf8_lossy(commit.committer_email()).into_owned(),
-        committer_date: commit.commit_date().to_string(),
+        committer_date: format_datetime(commit.commit_date()),
         parents,
         tree_hash: format!("{}", commit.tree()),
         message: linkify_message(&String::from_utf8_lossy(commit.message())),
