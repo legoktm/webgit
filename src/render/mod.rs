@@ -162,7 +162,8 @@ fn snapshot_cell(repo_name: &str, tag: &str) -> Html {
 
 #[derive(PartialEq, Clone)]
 pub(crate) struct CommitRow {
-    hash: String,
+    /// The full commit id, kept in its 20-byte form rather than as hex.
+    id: ObjectId,
     short_hash: String,
     message: String,
     author: String,
@@ -205,15 +206,21 @@ pub(crate) fn commits_table(commits: &[CommitRow]) -> Html {
 }
 
 fn commit_table_row(c: &CommitRow) -> Html {
-    let href = format!("#!/commit/{}", c.hash);
+    let href = format!("#!/commit/{}", c.id);
     html! {
-        <tr key={c.hash.clone()}>
+        <tr key={c.id.to_string()}>
             <td class="age">{ c.age.display() }</td>
             <td class="name"><a href={href}>{ c.short_hash.clone() }</a></td>
             <td class="msg">{ c.message.clone() }{ for c.refs.iter().map(ref_label) }</td>
             <td class="author">{ c.author.clone() }</td>
         </tr>
     }
+}
+
+/// The 8-character abbreviation of `id` displayed in commit tables. Rendered
+/// once when the row is built, so the full hex form is never retained.
+fn short_hash(id: ObjectId) -> String {
+    format!("{id}")[..8].to_string()
 }
 
 /// A single decoration after the commit message. Each is preceded by a literal
@@ -849,10 +856,9 @@ pub(crate) async fn walk_commits_streamed(
             let Some(commit) = object.ok().and_then(|o| o.commit().ok()) else {
                 continue;
             };
-            let hash = format!("{id}");
             commits.push(CommitRow {
-                short_hash: hash[..8].to_string(),
-                hash,
+                id: *id,
+                short_hash: short_hash(*id),
                 message: commit_first_line(commit.message()),
                 author: String::from_utf8_lossy(commit.author_name()).into_owned(),
                 age: Age::new(commit.author_date()),
@@ -899,10 +905,9 @@ pub(crate) async fn recent_commits(
     let mut commits: Vec<CommitRow> = Vec::with_capacity(limit);
     while let Some((_, id)) = heap.pop() {
         let commit = frontier.remove(&id).expect("frontier holds every heap id");
-        let hash = format!("{id}");
         commits.push(CommitRow {
-            short_hash: hash[..8].to_string(),
-            hash,
+            id,
+            short_hash: short_hash(id),
             message: commit_first_line(commit.message()),
             author: String::from_utf8_lossy(commit.author_name()).into_owned(),
             age: Age::new(commit.author_date()),
@@ -932,10 +937,14 @@ pub(crate) async fn recent_commits(
     commits
 }
 
-/// Fold a decoration map into already-built commit rows, matching on hash, so
-/// the summary can stream label-less rows from [`recent_commits`] and add the
+/// Fold a decoration map into already-built commit rows, matching on commit id,
+/// so the summary can stream label-less rows from [`recent_commits`] and add the
 /// branch/tag chips once its (separately, concurrently fetched) decoration map
 /// resolves. A no-op when there is nothing to decorate.
+///
+/// The log calls this once per streamed partial as well as once for the finished
+/// page, so it stays allocation-free: rows carry their [`ObjectId`], which is
+/// looked up in `decorations` directly rather than via a hex-keyed side map.
 pub(crate) fn apply_decorations(
     rows: &mut [CommitRow],
     decorations: &BTreeMap<ObjectId, Vec<RefLabel>>,
@@ -943,13 +952,9 @@ pub(crate) fn apply_decorations(
     if decorations.is_empty() {
         return;
     }
-    let by_hash: BTreeMap<String, &Vec<RefLabel>> = decorations
-        .iter()
-        .map(|(id, labels)| (format!("{id}"), labels))
-        .collect();
     for row in rows.iter_mut() {
-        if let Some(labels) = by_hash.get(&row.hash) {
-            row.refs = (*labels).clone();
+        if let Some(labels) = decorations.get(&row.id) {
+            row.refs = labels.clone();
         }
     }
 }
@@ -1039,7 +1044,7 @@ fn ref_row(name: String, c: &Commit) -> RefRow {
 
 #[cfg(test)]
 pub(crate) mod fixtures {
-    use super::{Age, CommitRow, RefLabel, RefLabelKind, RefMeta, RefRow};
+    use super::{Age, CommitRow, ObjectId, RefLabel, RefLabelKind, RefMeta, RefRow};
 
     /// An [`Age`] that renders as a relative bucket; `secs` must be under the
     /// two-week cutoff for the (placeholder) date to stay hidden.
@@ -1074,8 +1079,11 @@ pub(crate) mod fixtures {
     }
 
     pub(crate) fn commit_row(short_hash: &str, message: &str, author: &str, age: Age) -> CommitRow {
+        // Zero-pad the abbreviation out to a full id, so the row's link renders
+        // the same 40 hex characters a real walk would produce.
+        let hex = format!("{short_hash}{}", "0".repeat(40 - short_hash.len()));
         CommitRow {
-            hash: format!("{short_hash}{}", "0".repeat(40 - short_hash.len())),
+            id: ObjectId::from_hex(hex.as_bytes()).expect("fixture id must be 40 hex characters"),
             short_hash: short_hash.to_string(),
             message: message.to_string(),
             author: author.to_string(),
