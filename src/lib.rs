@@ -1,5 +1,6 @@
 #![deny(clippy::all)]
 
+mod archive;
 mod assets;
 mod cache;
 mod error;
@@ -23,6 +24,7 @@ use render::readme::ReadmeView;
 use render::refs_all::RefsAllView;
 use render::refs_heads::RefsHeadsView;
 use render::refs_tags::RefsTagsView;
+use render::snapshot::SnapshotView;
 use render::summary::SummaryView;
 use render::tag::TagView;
 use render::tree::TreeView;
@@ -355,6 +357,7 @@ fn render_loaded(view: &LoadedView) -> Html {
         LoadedView::Tag(p) => html! { <TagView ..p.clone() /> },
         LoadedView::Tree(p) => html! { <TreeView ..p.clone() /> },
         LoadedView::Blob(p) => html! { <BlobView ..p.clone() /> },
+        LoadedView::Snapshot(p) => html! { <SnapshotView ..p.clone() /> },
         LoadedView::NotFound(path) => html! {
             <p class="msg error">{ "Not found: " }<code>{ path.clone() }</code></p>
         },

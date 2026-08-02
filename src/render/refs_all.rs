@@ -4,7 +4,7 @@ use crate::{
 };
 use yew::prelude::*;
 
-pub(crate) async fn build_refs_all(repo: &CachingRepo) -> RefsAllProps {
+pub(crate) async fn build_refs_all(repo: &CachingRepo, clone_url: &str) -> RefsAllProps {
     let (branch_refs, tag_refs) = collect_refs(repo).await;
 
     let (mut branches, mut tags) = futures::join!(
@@ -20,6 +20,7 @@ pub(crate) async fn build_refs_all(repo: &CachingRepo) -> RefsAllProps {
         // This page lists every ref, so there are never "more" links.
         more_branches: false,
         more_tags: false,
+        clone_url: clone_url.to_string(),
     }
 }
 
@@ -32,6 +33,8 @@ pub(crate) struct RefsAllProps {
     tags: Vec<RefRow>,
     more_branches: bool,
     more_tags: bool,
+    /// The repository's URL, for naming the snapshot each tag links to.
+    clone_url: String,
 }
 
 /// The Yew component used to mount the all-refs view into the DOM. The markup
@@ -48,12 +51,13 @@ pub(crate) fn refs_all_view(props: &RefsAllProps) -> Html {
         tags,
         more_branches,
         more_tags,
+        clone_url,
     } = props;
 
     html! {
         <>
             { branches_section(branches, *more_branches) }
-            { tags_section(tags, *more_tags) }
+            { tags_section(tags, *more_tags, clone_url) }
         </>
     }
 }
@@ -91,6 +95,7 @@ mod tests {
             )],
             more_branches: false,
             more_tags: false,
+            clone_url: "https://example.org/webgit.git".to_string(),
         }));
     }
 }

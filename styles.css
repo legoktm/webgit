@@ -605,3 +605,55 @@ a.ref-label:hover {
 
 /* The rendered markdown inside the frame is styled by `markdown.css`, which
    the frame links instead of this file. */
+
+/* ── Snapshots ───────────────────────────────────────────────── */
+/* The archive link on tag rows (summary and refs/*) and on the tag page. */
+.snapshot-link {
+    color: var(--link);
+}
+
+.summary-table td.snapshot {
+    font-family: var(--mono);
+    white-space: nowrap;
+}
+
+/* The snapshot page itself: what was built, above the fallback link. */
+.snapshot-info {
+    font-size: 0.85rem;
+    font-family: var(--mono);
+    color: var(--text-dim);
+    margin-bottom: 0.5rem;
+}
+
+.snapshot-download {
+    color: var(--link);
+}
+
+/* The bar shown while the archive is still being fetched. The total it fills
+   towards climbs as the tree is walked, so it can jump backwards — it reports
+   the work found so far, not a countdown to a known end.
+
+   `appearance: none` is what lets the two pseudo-elements below take over the
+   fill colour; without it the browser's own bar shows through. Each engine
+   names its own, and neither understands the other's, so both are set. */
+.snapshot-progress {
+    display: block;
+    width: 100%;
+    max-width: 36rem;
+    height: 0.75rem;
+    appearance: none;
+    border: 1px solid var(--border);
+    background: var(--bg-alt);
+}
+
+.snapshot-progress::-webkit-progress-bar {
+    background: var(--bg-alt);
+}
+
+.snapshot-progress::-webkit-progress-value {
+    background: var(--accent);
+}
+
+.snapshot-progress::-moz-progress-bar {
+    background: var(--accent);
+}

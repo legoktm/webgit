@@ -4,7 +4,7 @@ use crate::{
 };
 use yew::prelude::*;
 
-pub(crate) async fn build_refs_tags(repo: &CachingRepo) -> RefsTagsProps {
+pub(crate) async fn build_refs_tags(repo: &CachingRepo, clone_url: &str) -> RefsTagsProps {
     let (_, tags) = collect_refs(repo).await;
     let mut tags = fetch_ref_rows(&tags, repo).await;
     tags.sort_by_key(|t| t.age_secs());
@@ -12,6 +12,7 @@ pub(crate) async fn build_refs_tags(repo: &CachingRepo) -> RefsTagsProps {
         tags,
         // This page lists every tag, so there is never a "more" link.
         more_tags: false,
+        clone_url: clone_url.to_string(),
     }
 }
 
@@ -21,6 +22,8 @@ pub(crate) async fn build_refs_tags(repo: &CachingRepo) -> RefsTagsProps {
 pub(crate) struct RefsTagsProps {
     tags: Vec<RefRow>,
     more_tags: bool,
+    /// The repository's URL, for naming the snapshot each tag links to.
+    clone_url: String,
 }
 
 /// The Yew component used to mount the tag list into the DOM. The markup lives
@@ -32,8 +35,12 @@ pub(crate) fn refs_tags_view_component(props: &RefsTagsProps) -> Html {
 }
 
 pub(crate) fn refs_tags_view(props: &RefsTagsProps) -> Html {
-    let RefsTagsProps { tags, more_tags } = props;
-    tags_section(tags, *more_tags)
+    let RefsTagsProps {
+        tags,
+        more_tags,
+        clone_url,
+    } = props;
+    tags_section(tags, *more_tags, clone_url)
 }
 
 #[cfg(test)]
@@ -70,6 +77,7 @@ mod tests {
                 ),
             ],
             more_tags: false,
+            clone_url: "https://example.org/webgit.git".to_string(),
         }));
     }
 
@@ -78,6 +86,7 @@ mod tests {
         insta::assert_snapshot!(render(RefsTagsProps {
             tags: vec![],
             more_tags: false,
+            clone_url: "https://example.org/webgit.git".to_string(),
         }));
     }
 }

@@ -1,6 +1,6 @@
 ---
 source: src/render/refs_all.rs
-expression: "render(RefsAllProps\n{\n    branches:\n    vec![fixtures::ref_row(\"main\", \"Fix non-annotated tags\", \"Kunal Mehta\",\n    fixtures::relative_age(3600),)], tags:\n    vec![fixtures::ref_row(\"v1.0.0\", \"Release 1.0.0\", \"Kunal Mehta\",\n    fixtures::date_age(\"2000-03-15\"),)], more_branches: false, more_tags:\n    false,\n})"
+expression: "render(RefsAllProps\n{\n    branches:\n    vec![fixtures::ref_row(\"main\", \"Fix non-annotated tags\", \"Kunal Mehta\",\n    fixtures::relative_age(3600),)], tags:\n    vec![fixtures::ref_row(\"v1.0.0\", \"Release 1.0.0\", \"Kunal Mehta\",\n    fixtures::date_age(\"2000-03-15\"),)], more_branches: false, more_tags:\n    false, clone_url: \"https://example.org/webgit.git\".to_string(),\n})"
 ---
 <h3 class="summary-heading">Branches</h3>
 <table class="summary-table">
@@ -29,6 +29,7 @@ expression: "render(RefsAllProps\n{\n    branches:\n    vec![fixtures::ref_row(\
 <tr>
 <th>Tag</th>
 <th>Commit message</th>
+<th>Download</th>
 <th>Author</th>
 <th>Age</th>
 </tr>
@@ -39,6 +40,9 @@ expression: "render(RefsAllProps\n{\n    branches:\n    vec![fixtures::ref_row(\
 <a href="#!/refs/tags/v1.0.0">v1.0.0</a>
 </td>
 <td class="msg">Release 1.0.0</td>
+<td class="snapshot">
+<a href="#!/snapshot?h=v1.0.0" class="snapshot-link">webgit-v1.0.0.tar.gz</a>
+</td>
 <td class="author">Kunal Mehta</td>
 <td class="age">2000-03-15</td>
 </tr>

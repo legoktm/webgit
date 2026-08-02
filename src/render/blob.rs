@@ -1,4 +1,4 @@
-use crate::render::is_binary;
+use crate::render::{is_binary, use_object_url};
 use git_async::object::ObjectId;
 use std::rc::Rc;
 use yew::prelude::*;
@@ -273,53 +273,6 @@ pub(crate) fn blob_view(props: &BlobProps, url: &str) -> Html {
             } }
         </>
     }
-}
-
-/// An object URL over the blob's bytes, for the `<img>` and the download link.
-///
-/// An object URL rather than a `data:` one because the bytes are already in
-/// memory: base64 would add a third again in size and park the whole encoded
-/// file in a DOM attribute, where a `blob:` URL is a short string the browser
-/// resolves back to a buffer. One URL for both consumers, since constructing
-/// the `Blob` copies the bytes and a second one would hold the file twice.
-///
-/// The URL is created in an effect, not during render, for two reasons: it is a
-/// side effect with a matching teardown (an object URL pins its buffer until
-/// revoked, so navigating between blobs would otherwise leak one per visit),
-/// and it keeps `web_sys` off the render path, where the SSR-based tests run
-/// without a DOM. Under SSR the effect never fires and the empty string is what
-/// the caller sees.
-#[hook]
-fn use_object_url(mime: &'static str, data: &Rc<Vec<u8>>) -> String {
-    let url = use_state(String::new);
-    {
-        let url = url.clone();
-        use_effect_with(
-            (mime, data.clone()),
-            move |(mime, data): &(&'static str, Rc<Vec<u8>>)| {
-                let created = object_url(mime, data).unwrap_or_default();
-                url.set(created.clone());
-                move || {
-                    if !created.is_empty() {
-                        let _ = web_sys::Url::revoke_object_url(&created);
-                    }
-                }
-            },
-        );
-    }
-    (*url).clone()
-}
-
-/// Wrap `data` in a `Blob` of type `mime` and mint an object URL for it. `None`
-/// if the browser refuses either step, which leaves the view showing neither an
-/// image nor a download link rather than broken ones.
-fn object_url(mime: &str, data: &[u8]) -> Option<String> {
-    let parts = js_sys::Array::new();
-    parts.push(&js_sys::Uint8Array::from(data));
-    let options = web_sys::BlobPropertyBag::new();
-    options.set_type(mime);
-    let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(&parts, &options).ok()?;
-    web_sys::Url::create_object_url_with_blob(&blob).ok()
 }
 
 fn blob_row(n: usize, line: &str) -> Html {

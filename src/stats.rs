@@ -1,4 +1,7 @@
-fn format_bytes(b: u64) -> String {
+/// A byte count in the units the fetch line uses. Shared with the snapshot
+/// view, so an archive's size reads the same way as the bytes fetched to build
+/// it.
+pub(crate) fn format_bytes(b: u64) -> String {
     if b < 1_024 {
         format!("{} B", b)
     } else if b < 1_024 * 1_024 {

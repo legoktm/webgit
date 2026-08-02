@@ -1,6 +1,6 @@
 ---
 source: src/render/summary.rs
-expression: "render(SummaryProps\n{\n    branches:\n    vec![fixtures::ref_row(\"main\", \"Fix non-annotated tags\", \"Kunal Mehta\",\n    fixtures::relative_age(3600),),\n    fixtures::ref_row(\"develop\", \"WIP: new parser\", \"Someone Else\",\n    fixtures::date_age(\"2001-01-05\"),),], more_branches: true, tags:\n    vec![fixtures::ref_row(\"v1.0.0\", \"Release 1.0.0\", \"Kunal Mehta\",\n    fixtures::date_age(\"2000-03-15\"),)], more_tags: true, commits:\n    vec![fixtures::commit_row(\"0123abcd\", \"Fix non-annotated tags\",\n    \"Kunal Mehta\", fixtures::relative_age(3600),),\n    fixtures::commit_row(\"89abcdef\", \"Add README\", \"Kunal Mehta\",\n    fixtures::relative_age(86400 * 3),),], clone_url:\n    \"https://example.org/repo.git\".to_string(),\n})"
+expression: "render(SummaryProps\n{\n    branches:\n    vec![fixtures::ref_row(\"main\", \"Fix non-annotated tags\", \"Kunal Mehta\",\n    fixtures::relative_age(3600),),\n    fixtures::ref_row(\"develop\", \"WIP: new parser\", \"Someone Else\",\n    fixtures::date_age(\"2001-01-05\"),),], more_branches: true, tags:\n    vec![fixtures::ref_row(\"v1.0.0\", \"Release 1.0.0\", \"Kunal Mehta\",\n    fixtures::date_age(\"2000-03-15\"),)], more_tags: true, commits:\n    Some(vec![fixtures::commit_row(\"0123abcd\", \"Fix non-annotated tags\",\n    \"Kunal Mehta\", fixtures::relative_age(3600),),\n    fixtures::commit_row(\"89abcdef\", \"Add README\", \"Kunal Mehta\",\n    fixtures::relative_age(86400 * 3),),]), clone_url:\n    \"https://example.org/repo.git\".to_string(),\n})"
 ---
 <h3 class="summary-heading">Clone</h3>
 <div class="clone-url">git clone https://example.org/repo.git</div>
@@ -42,6 +42,7 @@ expression: "render(SummaryProps\n{\n    branches:\n    vec![fixtures::ref_row(\
 <tr>
 <th>Tag</th>
 <th>Commit message</th>
+<th>Download</th>
 <th>Author</th>
 <th>Age</th>
 </tr>
@@ -52,6 +53,9 @@ expression: "render(SummaryProps\n{\n    branches:\n    vec![fixtures::ref_row(\
 <a href="#!/refs/tags/v1.0.0">v1.0.0</a>
 </td>
 <td class="msg">Release 1.0.0</td>
+<td class="snapshot">
+<a href="#!/snapshot?h=v1.0.0" class="snapshot-link">repo-v1.0.0.tar.gz</a>
+</td>
 <td class="author">Kunal Mehta</td>
 <td class="age">2000-03-15</td>
 </tr>

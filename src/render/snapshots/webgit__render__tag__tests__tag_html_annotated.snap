@@ -1,6 +1,6 @@
 ---
 source: src/render/tag.rs
-expression: "render(TagProps\n{\n    name: \"v1.0.0\".to_string(), date:\n    \"2026-01-15 12:34:56 +00:00\".to_string(), tagger_name:\n    Some(\"Kunal Mehta\".to_string()), commit:\n    \"0123abcd0123abcd0123abcd0123abcd0123abcd\".to_string(), contents:\n    Some(\"Release 1.0.0\\n\\nSigned-off-by: Kunal Mehta\".to_string()),\n})"
+expression: "render(TagProps\n{\n    name: \"v1.0.0\".to_string(), snapshot_name:\n    \"webgit-v1.0.0.tar.gz\".to_string(), date:\n    \"2026-01-15 12:34:56 +00:00\".to_string(), tagger_name:\n    Some(\"Kunal Mehta\".to_string()), commit:\n    \"0123abcd0123abcd0123abcd0123abcd0123abcd\".to_string(), contents:\n    Some(\"Release 1.0.0\\n\\nSigned-off-by: Kunal Mehta\".to_string()),\n})"
 ---
 <table class="tag-table">
 <tbody>
@@ -26,6 +26,12 @@ expression: "render(TagProps\n{\n    name: \"v1.0.0\".to_string(), date:\n    \"
 <td class="label">browse</td>
 <td>
 <a href="#!/tree?h=v1.0.0">tree</a> | <a href="#!/log?h=v1.0.0">log</a>
+</td>
+</tr>
+<tr>
+<td class="label">download</td>
+<td>
+<a href="#!/snapshot?h=v1.0.0" class="snapshot-link">webgit-v1.0.0.tar.gz</a>
 </td>
 </tr>
 </tbody>

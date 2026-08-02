@@ -1,0 +1,8 @@
+---
+source: src/render/snapshot.rs
+expression: "render_building(37, 120)"
+---
+<div class="snapshot">
+<p class="snapshot-info">webgit-main.tar.gz — fetching objects… 37/120</p>
+<progress max="120" value="37" class="snapshot-progress">37/120</progress>
+</div>

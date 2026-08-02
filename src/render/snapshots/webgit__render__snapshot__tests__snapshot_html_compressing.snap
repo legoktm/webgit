@@ -1,0 +1,8 @@
+---
+source: src/render/snapshot.rs
+expression: "render_state(|| SnapshotState::Compressing { written: 4096, total: 13658, })"
+---
+<div class="snapshot">
+<p class="snapshot-info">webgit-main.tar.gz — compressing… 4096/13658</p>
+<progress max="13658" value="4096" class="snapshot-progress">4096/13658</progress>
+</div>

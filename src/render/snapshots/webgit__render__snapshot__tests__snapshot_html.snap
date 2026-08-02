@@ -1,0 +1,8 @@
+---
+source: src/render/snapshot.rs
+expression: "render(\"webgit-main.tar.gz\", 4096, 12, \"blob:fake\")"
+---
+<div class="snapshot">
+<p class="snapshot-info">webgit-main.tar.gz — 12 files, 4 KB</p>
+<p class="msg">The download should have started. If it didn't, <a href="blob:fake" download="webgit-main.tar.gz" class="snapshot-download">save it here</a>.</p>
+</div>

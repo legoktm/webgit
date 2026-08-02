@@ -8,6 +8,7 @@ use crate::render::readme::{ReadmeProps, build_readme};
 use crate::render::refs_all::{RefsAllProps, build_refs_all};
 use crate::render::refs_heads::{RefsHeadsProps, build_refs_heads};
 use crate::render::refs_tags::{RefsTagsProps, build_refs_tags};
+use crate::render::snapshot::{SnapshotProps, build_snapshot};
 use crate::render::summary::{SummaryProps, build_summary};
 use crate::render::tag::{TagProps, build_tag};
 use crate::render::tree::{TreeProps, build_tree_props};
@@ -80,6 +81,14 @@ pub(crate) enum Route {
     Refs(RefsRoute),
     Tree {
         path: String,
+        head: Option<String>,
+    },
+    /// A `.tar.gz` of a ref's tree (HEAD's, when there is no `?h=`), built on
+    /// arrival. A route rather than a button because building one is exactly
+    /// what every other route does — an async walk over the repo that resolves
+    /// into props — and this way it gets the loading, error and cancel-on-
+    /// navigate handling already wired up around [`build_route`].
+    Snapshot {
         head: Option<String>,
     },
 }
@@ -212,6 +221,13 @@ pub(crate) fn parse_hash(hash: &str) -> Route {
         return Route::Tree { path, head };
     }
 
+    if let Some(rest) = hash.strip_prefix("#!/snapshot") {
+        // Only the ref matters here: a snapshot is always of a whole tree, so
+        // anything in the path position is ignored rather than 404'd.
+        let (_, head) = parse_tree_rest(rest);
+        return Route::Snapshot { head };
+    }
+
     if hash.starts_with("#!/refs") {
         let subroute = if hash == "#!/refs/tags" {
             RefsRoute::Tags
@@ -276,7 +292,9 @@ pub(crate) fn active_tab(route: &Route) -> &'static str {
         Route::Log { .. } => "#!/log",
         Route::CommitHead | Route::Commit(_) => "#!/commit",
         Route::Refs(_) => "#!/refs",
-        Route::Tree { .. } => "#!/tree",
+        // A snapshot is an action on the tree being browsed, so the tree tab
+        // stays lit while one is being built.
+        Route::Tree { .. } | Route::Snapshot { .. } => "#!/tree",
     }
 }
 
@@ -331,6 +349,7 @@ pub(crate) enum LoadedView {
     Tag(TagProps),
     Tree(TreeProps),
     Blob(BlobProps),
+    Snapshot(SnapshotProps),
     /// A tree path that resolved to neither a subtree nor a blob.
     NotFound(String),
 }
@@ -381,9 +400,15 @@ pub(crate) async fn build_route(
             build_commit(repo, &sha, |p| on_partial(LoadedView::Commit(p))).await?,
         )),
         Route::Refs(RefsRoute::Heads) => Ok(LoadedView::RefsHeads(build_refs_heads(repo).await)),
-        Route::Refs(RefsRoute::Tags) => Ok(LoadedView::RefsTags(build_refs_tags(repo).await)),
-        Route::Refs(RefsRoute::All) => Ok(LoadedView::RefsAll(build_refs_all(repo).await)),
-        Route::Refs(RefsRoute::Tag(tag)) => Ok(LoadedView::Tag(build_tag(repo, tag).await?)),
+        Route::Refs(RefsRoute::Tags) => {
+            Ok(LoadedView::RefsTags(build_refs_tags(repo, clone_url).await))
+        }
+        Route::Refs(RefsRoute::All) => {
+            Ok(LoadedView::RefsAll(build_refs_all(repo, clone_url).await))
+        }
+        Route::Refs(RefsRoute::Tag(tag)) => {
+            Ok(LoadedView::Tag(build_tag(repo, tag, clone_url).await?))
+        }
         Route::Tree { path, head } => {
             let resolved_tree;
             let tree: &Tree = if let Some(ref ref_name) = head {
@@ -412,7 +437,55 @@ pub(crate) async fn build_route(
                 Ok(LoadedView::NotFound(path))
             }
         }
+        Route::Snapshot { head } => {
+            // Both the commit and its tree, where the tree route needs only the
+            // tree: the commit's id and date go into the archive itself.
+            let resolved_commit;
+            let commit: &git_async::object::Commit = match &head {
+                Some(name) => {
+                    resolved_commit = resolve_ref_to_commit(repo, name).await?.0;
+                    &resolved_commit
+                }
+                None => head_commit,
+            };
+            let resolved_tree;
+            let tree: &Tree = if head.is_some() {
+                resolved_tree = repo
+                    .lookup_object(commit.tree())
+                    .await
+                    .context("lookup tree to archive")?
+                    .tree()
+                    .map_err(git_async::error::Error::from)
+                    .context("expected a tree to archive")?;
+                &resolved_tree
+            } else {
+                root_tree
+            };
+
+            // What the archive is named after: the ref asked for, the branch
+            // HEAD is on, or — if HEAD is detached — the commit itself.
+            let ref_label = match &head {
+                Some(name) => name.clone(),
+                None => match head_branch_name(repo).await {
+                    Some(name) => name,
+                    None => commit.id().to_string()[..8].to_string(),
+                },
+            };
+            Ok(LoadedView::Snapshot(
+                build_snapshot(repo, tree, commit, &ref_label, clone_url, &|p| {
+                    on_partial(LoadedView::Snapshot(p))
+                })
+                .await?,
+            ))
+        }
     }
+}
+
+/// The URL of a ref's `.tar.gz` — the link on the tag rows and the tag page.
+/// Like [`log_url`], the ref name passed in is the real (decoded) one; the
+/// encoding happens here.
+pub(crate) fn snapshot_url(head: &str) -> String {
+    format!("#!/snapshot?h={}", encode_component(head))
 }
 
 /// The URL for a log view. `path` and `head` are the decoded values (a real
@@ -576,6 +649,33 @@ mod tests {
             parse_hash("#!/tree/src/main.rs"),
             Route::Tree { path, head: None } if path == "src/main.rs"
         ));
+    }
+
+    #[test]
+    fn test_parse_hash_snapshot() {
+        assert!(matches!(
+            parse_hash("#!/snapshot"),
+            Route::Snapshot { head: None }
+        ));
+        assert!(matches!(
+            parse_hash("#!/snapshot?h=v1.0.0"),
+            Route::Snapshot { head: Some(head) } if head == "v1.0.0"
+        ));
+        // A ref with a '/' in it survives the round trip through the link.
+        assert!(matches!(
+            parse_hash(&snapshot_url("release/2.0")),
+            Route::Snapshot { head: Some(head) } if head == "release/2.0"
+        ));
+    }
+
+    #[test]
+    fn test_snapshot_url() {
+        assert_eq!(snapshot_url("v1.0.0"), "#!/snapshot?h=v1.0.0");
+        assert_eq!(
+            snapshot_url("release/2.0"),
+            "#!/snapshot?h=release%2F2.0",
+            "a slash in a ref name is encoded, not left to split the route"
+        );
     }
 
     #[test]

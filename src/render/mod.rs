@@ -16,6 +16,7 @@ pub(crate) mod readme;
 pub(crate) mod refs_all;
 pub(crate) mod refs_heads;
 pub(crate) mod refs_tags;
+pub(crate) mod snapshot;
 pub(crate) mod summary;
 pub(crate) mod tag;
 pub(crate) mod tree;
@@ -56,9 +57,9 @@ pub(crate) fn branches_section(branches: &[RefRow], more: bool) -> Html {
     html! {
         <>
             <h3 class="summary-heading">{ "Branches" }</h3>
-            { refs_table("Branch", html! {
+            { refs_table("Branch", None, html! {
                 <>
-                    { for branches.iter().map(|b| refs_table_row(format!("#!/tree?h={}", encode_component(&b.name)), b)) }
+                    { for branches.iter().map(|b| refs_table_row(format!("#!/tree?h={}", encode_component(&b.name)), b, None)) }
                     if more {
                         <tr><td>{ "[" }<a href="#!/refs/heads">{ "..." }</a>{ "]" }</td></tr>
                     }
@@ -70,16 +71,20 @@ pub(crate) fn branches_section(branches: &[RefRow], more: bool) -> Html {
 
 /// The "Tags" section (the old `refs_tags.html`): a heading plus either a table
 /// of tag rows (with an optional "more" link) or a "No tags." note.
-pub(crate) fn tags_section(tags: &[RefRow], more: bool) -> Html {
+pub(crate) fn tags_section(tags: &[RefRow], more: bool, clone_url: &str) -> Html {
     html! {
         <>
             <h3 class="summary-heading">{ "Tags" }</h3>
             if tags.is_empty() {
                 <p class="msg">{ "No tags." }</p>
             } else {
-                { refs_table("Tag", html! {
+                { refs_table("Tag", Some("Download"), html! {
                     <>
-                        { for tags.iter().map(|t| refs_table_row(format!("#!/refs/tags/{}", encode_component(&t.name)), t)) }
+                        { for tags.iter().map(|t| refs_table_row(
+                            format!("#!/refs/tags/{}", encode_component(&t.name)),
+                            t,
+                            Some(snapshot_cell(clone_url, &t.name)),
+                        )) }
                         if more {
                             <tr><td>{ "[" }<a href="#!/refs/tags">{ "..." }</a>{ "]" }</td></tr>
                         }
@@ -91,14 +96,19 @@ pub(crate) fn tags_section(tags: &[RefRow], more: bool) -> Html {
 }
 
 /// The shared ref-table shell; `first_col` is the leading column header
-/// ("Branch" or "Tag") and `rows` is the already-rendered `<tbody>` contents.
-fn refs_table(first_col: &'static str, rows: Html) -> Html {
+/// ("Branch" or "Tag"), `extra_col` an optional header sitting just right of the
+/// commit message (the tag tables' snapshot links), and `rows` the
+/// already-rendered `<tbody>`.
+fn refs_table(first_col: &'static str, extra_col: Option<&'static str>, rows: Html) -> Html {
     html! {
         <table class="summary-table">
             <thead>
                 <tr>
                     <th>{ first_col }</th>
                     <th>{ "Commit message" }</th>
+                    if let Some(extra) = extra_col {
+                        <th>{ extra }</th>
+                    }
                     <th>{ "Author" }</th>
                     <th>{ "Age" }</th>
                 </tr>
@@ -115,20 +125,38 @@ pub(crate) fn loading_dots() -> Html {
     html! { <span class="loading-dots" aria-label="Loading"></span> }
 }
 
-fn refs_table_row(href: String, r: &RefRow) -> Html {
+/// One ref row. The snapshot cell sits between the message and the author, and
+/// is rendered whether or not the commit metadata has arrived — the archive
+/// link depends only on the ref name, so there is nothing to wait for.
+fn refs_table_row(href: String, r: &RefRow, extra: Option<Html>) -> Html {
     html! {
         <tr key={r.name.clone()}>
             <td class="name"><a href={href}>{ r.name.clone() }</a></td>
-            if let Some(m) = &r.meta {
-                <td class="msg">{ m.message.clone() }</td>
-                <td class="author">{ m.author.clone() }</td>
-                <td class="age">{ m.age.display() }</td>
-            } else {
-                <td class="msg">{ loading_dots() }</td>
-                <td class="author"></td>
-                <td class="age"></td>
+            <td class="msg">
+                { match &r.meta {
+                    Some(m) => html! { m.message.clone() },
+                    None => loading_dots(),
+                } }
+            </td>
+            if let Some(extra) = extra {
+                <td class="snapshot">{ extra }</td>
             }
+            <td class="author">
+                { r.meta.as_ref().map(|m| m.author.clone()).unwrap_or_default() }
+            </td>
+            <td class="age">
+                { r.meta.as_ref().map(|m| m.age.display()).unwrap_or_default() }
+            </td>
         </tr>
+    }
+}
+
+/// The archive link for a tag, labelled with the file it downloads.
+fn snapshot_cell(clone_url: &str, tag: &str) -> Html {
+    html! {
+        <a class="snapshot-link" href={crate::route::snapshot_url(tag)}>
+            { crate::render::snapshot::snapshot_file_name(clone_url, tag) }
+        </a>
     }
 }
 
@@ -924,6 +952,78 @@ pub(crate) fn apply_decorations(
             row.refs = (*labels).clone();
         }
     }
+}
+
+/// An object URL over `data`, for whatever needs to hand bytes to the browser:
+/// a blob's `<img>` and download link, a snapshot's download link.
+///
+/// An object URL rather than a `data:` one because the bytes are already in
+/// memory: base64 would add a third again in size and park the whole encoded
+/// file in a DOM attribute, where a `blob:` URL is a short string the browser
+/// resolves back to a buffer. One URL per set of bytes, since constructing the
+/// `Blob` copies them and a second one would hold the file twice.
+///
+/// The URL is created in an effect, not during render, for two reasons: it is a
+/// side effect with a matching teardown (an object URL pins its buffer until
+/// revoked, so navigating between blobs would otherwise leak one per visit),
+/// and it keeps `web_sys` off the render path, where the SSR-based tests run
+/// without a DOM. Under SSR the effect never fires and the empty string is what
+/// the caller sees.
+#[yew::hook]
+pub(crate) fn use_object_url(mime: &'static str, data: &Rc<Vec<u8>>) -> String {
+    let url = yew::use_state(String::new);
+    {
+        let url = url.clone();
+        yew::use_effect_with(
+            (mime, data.clone()),
+            move |(mime, data): &(&'static str, Rc<Vec<u8>>)| {
+                let created = object_url(mime, data).unwrap_or_default();
+                url.set(created.clone());
+                move || {
+                    if !created.is_empty() {
+                        let _ = web_sys::Url::revoke_object_url(&created);
+                    }
+                }
+            },
+        );
+    }
+    (*url).clone()
+}
+
+/// As [`use_object_url`], for a `Blob` the caller already has.
+///
+/// The snapshot view's archive arrives this way — the browser assembled it from
+/// the gzip stream, so its bytes were never in our memory and there is nothing
+/// to wrap. Blob equality is JS identity, so the effect re-runs when the archive
+/// is genuinely a different one and not merely re-rendered.
+#[yew::hook]
+pub(crate) fn use_blob_url(blob: &web_sys::Blob) -> String {
+    let url = yew::use_state(String::new);
+    {
+        let url = url.clone();
+        yew::use_effect_with(blob.clone(), move |blob: &web_sys::Blob| {
+            let created = web_sys::Url::create_object_url_with_blob(blob).unwrap_or_default();
+            url.set(created.clone());
+            move || {
+                if !created.is_empty() {
+                    let _ = web_sys::Url::revoke_object_url(&created);
+                }
+            }
+        });
+    }
+    (*url).clone()
+}
+
+/// Wrap `data` in a `Blob` of type `mime` and mint an object URL for it. `None`
+/// if the browser refuses either step, which leaves the view showing neither an
+/// image nor a download link rather than broken ones.
+fn object_url(mime: &str, data: &[u8]) -> Option<String> {
+    let parts = js_sys::Array::new();
+    parts.push(&js_sys::Uint8Array::from(data));
+    let options = web_sys::BlobPropertyBag::new();
+    options.set_type(mime);
+    let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(&parts, &options).ok()?;
+    web_sys::Url::create_object_url_with_blob(&blob).ok()
 }
 
 fn ref_row(name: String, c: &Commit) -> RefRow {

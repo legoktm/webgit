@@ -167,7 +167,7 @@ pub(crate) fn summary_view(props: &SummaryProps) -> Html {
             <h3 class="summary-heading">{ "Clone" }</h3>
             <div class="clone-url">{ format!("git clone {clone_url}") }</div>
             { branches_section(branches, *more_branches) }
-            { tags_section(tags, *more_tags) }
+            { tags_section(tags, *more_tags, clone_url) }
             <h3 class="summary-heading">{ "Recent commits" }</h3>
             { match commits {
                 Some(c) => commits_table(c),
