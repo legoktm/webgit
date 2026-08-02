@@ -742,27 +742,51 @@ fn migrate_objects_drop_prefix(store: web_sys::IdbObjectStore) {
 // Async wrapper for IdbRequest
 // ---------------------------------------------------------------------------
 
+/// Slot holding an in-flight request's `onsuccess`/`onerror` closures, cleared
+/// by whichever one fires. Same self-referential trick as [`CursorCallbackSlot`].
+type RequestCallbackSlot = Rc<RefCell<Option<(Closure<dyn FnMut()>, Closure<dyn FnMut()>)>>>;
+
+/// Detach both handlers from a settled request and drop them. Clearing the slot
+/// breaks the cycle that kept the closures alive; unregistering first means the
+/// request never holds a reference to a freed closure. Dropping the closure that
+/// is currently running is fine — wasm-bindgen defers the actual free until the
+/// call returns.
+fn finish_request(req: &IdbRequest, slot: &RequestCallbackSlot) {
+    req.set_onsuccess(None);
+    req.set_onerror(None);
+    slot.borrow_mut().take();
+}
+
 async fn await_request(req: &IdbRequest) -> Result<JsValue, JsValue> {
     let req = req.clone();
     let promise = js_sys::Promise::new(&mut |resolve, reject| {
-        {
-            let req2 = req.clone();
-            let resolve = resolve.clone();
-            let cb = Closure::<dyn FnMut()>::new(move || {
-                let val = req2.result().unwrap_or(JsValue::UNDEFINED);
-                resolve.call1(&JsValue::UNDEFINED, &val).ok();
-            });
-            req.set_onsuccess(Some(cb.as_ref().unchecked_ref()));
-            cb.forget();
-        }
-        {
+        // A request fires exactly one of onsuccess/onerror, so the handler that
+        // runs can tear down both. Park them in a cell that both closures also
+        // hold (through clones), forming a cycle that keeps them alive while the
+        // request is in flight; whichever fires clears the cell, freeing both.
+        // Anything less leaks two closures per request, and there is one request
+        // per object lookup.
+        let slot: RequestCallbackSlot = Rc::new(RefCell::new(None));
+        let on_success = {
             let req = req.clone();
-            let cb = Closure::<dyn FnMut()>::new(move || {
+            let slot = Rc::clone(&slot);
+            Closure::<dyn FnMut()>::new(move || {
+                let val = req.result().unwrap_or(JsValue::UNDEFINED);
+                resolve.call1(&JsValue::UNDEFINED, &val).ok();
+                finish_request(&req, &slot);
+            })
+        };
+        let on_error = {
+            let req = req.clone();
+            let slot = Rc::clone(&slot);
+            Closure::<dyn FnMut()>::new(move || {
                 reject.call0(&JsValue::UNDEFINED).ok();
-            });
-            req.set_onerror(Some(cb.as_ref().unchecked_ref()));
-            cb.forget();
-        }
+                finish_request(&req, &slot);
+            })
+        };
+        req.set_onsuccess(Some(on_success.as_ref().unchecked_ref()));
+        req.set_onerror(Some(on_error.as_ref().unchecked_ref()));
+        *slot.borrow_mut() = Some((on_success, on_error));
     });
     JsFuture::from(promise).await
 }
