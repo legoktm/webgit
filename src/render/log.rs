@@ -36,24 +36,17 @@ pub(crate) async fn build_log(
         let map = decoration_map(repo).await;
         *decorations.borrow_mut() = map;
     };
-    let walk = walk_commits_streamed(
-        head_commit,
-        repo,
-        path_filter,
-        offset,
-        PAGE_SIZE,
-        |rows| {
-            let mut commits = rows.to_vec();
-            apply_decorations(&mut commits, &decorations.borrow());
-            // Hold the nav off the partials: `next` isn't known until the walk
-            // finishes, and showing "newer/older" mid-load would be misleading.
-            on_partial(LogProps {
-                commits,
-                prev_url: prev_url.clone(),
-                next_url: None,
-            });
-        },
-    );
+    let walk = walk_commits_streamed(head_commit, repo, path_filter, offset, PAGE_SIZE, |rows| {
+        let mut commits = rows.to_vec();
+        apply_decorations(&mut commits, &decorations.borrow());
+        // Hold the nav off the partials: `next` isn't known until the walk
+        // finishes, and showing "newer/older" mid-load would be misleading.
+        on_partial(LogProps {
+            commits,
+            prev_url: prev_url.clone(),
+            next_url: None,
+        });
+    });
     let (_, (mut commits, has_next)) = futures::join!(scan, walk);
 
     apply_decorations(&mut commits, &decorations.borrow());

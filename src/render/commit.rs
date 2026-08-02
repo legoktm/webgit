@@ -744,8 +744,7 @@ mod tests {
         ];
 
         for (old, new) in cases {
-            let (lines, additions, deletions) =
-                diff_file("foo.txt", old.to_vec(), new.to_vec());
+            let (lines, additions, deletions) = diff_file("foo.txt", old.to_vec(), new.to_vec());
             // The reference rendering, produced the way `diff_file` used to.
             let text_diff = TextDiffConfig::default().diff_lines(old.to_vec(), new.to_vec());
             let expected = text_diff
