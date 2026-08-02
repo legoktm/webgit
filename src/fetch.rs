@@ -32,12 +32,20 @@ fn is_session_cacheable(url: &str) -> bool {
 /// that no longer exists, and a stale loose `refs/heads/<branch>` resolves HEAD
 /// to a superseded commit. They are tiny, so revalidating them on every load (a
 /// conditional request answered with 304 when unchanged) is cheap.
+///
+/// `listing.json` belongs here for a different reason: it isn't part of any
+/// repository, it's the app's index of the repositories the host serves. It is
+/// rewritten whenever a repo is added or removed, so a stale copy hides newly
+/// added repos from the listing page entirely.
 fn is_volatile_metadata(url: &str) -> bool {
     let url = url.split(['?', '#']).next().unwrap_or(url);
     url.ends_with("/HEAD")
         || url.ends_with("/packed-refs")
         || url.ends_with("/info/refs")
         || url.ends_with("/objects/info/packs")
+        // Not a git file: the app's own index of hosted repositories, rewritten
+        // whenever a repo is added or removed from the host.
+        || url.ends_with("/listing.json")
         // Loose ref files (refs/heads/*, refs/tags/*, …) move on every push.
         || url.contains("/refs/")
 }
@@ -490,6 +498,8 @@ mod tests {
         assert!(is_volatile_metadata(&format!(
             "{base}/info/refs?service=git-upload-pack"
         )));
+        // The repo index lives at the origin root, not under a repository.
+        assert!(is_volatile_metadata("https://host/listing.json"));
     }
 
     #[test]
