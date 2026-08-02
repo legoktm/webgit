@@ -407,9 +407,11 @@ impl CachingRepo {
 
     // --- Commit-graph store helpers ------------------------------------------
 
-    /// Load every persisted graph record for this repo (one `getAll`). Records
-    /// whose Bloom-settings tag no longer matches keep their (immutable)
-    /// metadata but drop the filter, so a settings change can't mislead.
+    /// Load every persisted graph record for this repo (one `getAll`), asking
+    /// IndexedDB for only this repo's key range so the records of every *other*
+    /// cached repo are never deserialized into JS. Records whose Bloom-settings
+    /// tag no longer matches keep their (immutable) metadata but drop the
+    /// filter, so a settings change can't mislead.
     async fn idb_get_all_graph(&self) -> Vec<(ObjectId, GraphRecord)> {
         let mut out = Vec::new();
         let Some(db) = self.db.as_ref() else {
@@ -421,14 +423,19 @@ impl CachingRepo {
         let Ok(store) = tx.object_store(STORE_GRAPH) else {
             return out;
         };
-        let Ok(req) = store.get_all() else {
+        let (prefix, upper) = graph_key_bounds(&self.repo_url);
+        let Ok(range) =
+            web_sys::IdbKeyRange::bound(&JsValue::from_str(&prefix), &JsValue::from_str(&upper))
+        else {
+            return out;
+        };
+        let Ok(req) = store.get_all_with_key(&range) else {
             return out;
         };
         let Ok(result) = await_request(&req).await else {
             return out;
         };
         let arr = js_sys::Array::from(&result);
-        let prefix = format!("{}::", self.repo_url);
         for i in 0..arr.length() {
             let record = arr.get(i);
             let Some(key) = js_sys::Reflect::get(&record, &"id".into())
@@ -437,6 +444,9 @@ impl CachingRepo {
             else {
                 continue;
             };
+            // The range is a *prefix* range, so it still admits a repo whose URL
+            // begins with ours followed by "::"; re-checking the prefix and the
+            // hex parse below keeps such a neighbour's records out.
             let Some(hex) = key.strip_prefix(&prefix) else {
                 continue;
             };
@@ -565,6 +575,18 @@ fn resolve_prefix_in_map<T>(
         (Some(id), None) => PrefixResolution::Found(id),
         (Some(_), Some(_)) => PrefixResolution::Ambiguous,
     }
+}
+
+/// Inclusive key bounds selecting one repo's records in the graph store, whose
+/// keys are `"{repo_url}::{oid}"`. The lower bound is the bare prefix; the upper
+/// appends U+FFFF, which sorts above every character a hex OID can contain, so
+/// the range covers exactly the keys that continue the prefix. IndexedDB compares
+/// strings by code point, so this needs no knowledge of the OID length.
+/// Free-standing and I/O-free so it can be unit-tested off the browser.
+fn graph_key_bounds(repo_url: &str) -> (String, String) {
+    let prefix = format!("{repo_url}::");
+    let upper = format!("{prefix}\u{ffff}");
+    (prefix, upper)
 }
 
 /// A numeric fingerprint of the Bloom settings, stored beside each filter so a
@@ -863,5 +885,17 @@ mod tests {
             resolve_prefix_in_map(&map, &prefix("12ab35")),
             PrefixResolution::Found(oid("12ab35"))
         );
+    }
+
+    #[test]
+    fn graph_key_bounds_cover_one_repo() {
+        let (lower, upper) = graph_key_bounds("https://example.org/a.git");
+        let key = |repo: &str| format!("{repo}::{}", oid("12ab34"));
+        let in_range = |k: &String| *k >= lower && *k <= upper;
+
+        assert!(in_range(&key("https://example.org/a.git")));
+        // A different repo, and one whose URL merely extends ours, are both out.
+        assert!(!in_range(&key("https://example.org/b.git")));
+        assert!(!in_range(&key("https://example.org/a.github")));
     }
 }
