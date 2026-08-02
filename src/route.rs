@@ -362,6 +362,7 @@ pub(crate) async fn build_route(
     root_tree: &Tree,
     repo: &Rc<CachingRepo>,
     clone_url: &Rc<String>,
+    repo_name: &Rc<String>,
     on_partial: &dyn Fn(LoadedView),
 ) -> anyhow::Result<LoadedView> {
     match parse_hash(hash) {
@@ -369,7 +370,7 @@ pub(crate) async fn build_route(
         // The README always comes from HEAD's tree, never a `?h=` ref.
         Route::Readme => Ok(LoadedView::Readme(build_readme(root_tree, repo).await)),
         Route::Summary => Ok(LoadedView::Summary(
-            build_summary(head_commit, repo, clone_url.as_str(), |p| {
+            build_summary(head_commit, repo, clone_url, repo_name, |p| {
                 on_partial(LoadedView::Summary(p))
             })
             .await,
@@ -401,13 +402,13 @@ pub(crate) async fn build_route(
         )),
         Route::Refs(RefsRoute::Heads) => Ok(LoadedView::RefsHeads(build_refs_heads(repo).await)),
         Route::Refs(RefsRoute::Tags) => {
-            Ok(LoadedView::RefsTags(build_refs_tags(repo, clone_url).await))
+            Ok(LoadedView::RefsTags(build_refs_tags(repo, repo_name).await))
         }
         Route::Refs(RefsRoute::All) => {
-            Ok(LoadedView::RefsAll(build_refs_all(repo, clone_url).await))
+            Ok(LoadedView::RefsAll(build_refs_all(repo, repo_name).await))
         }
         Route::Refs(RefsRoute::Tag(tag)) => {
-            Ok(LoadedView::Tag(build_tag(repo, tag, clone_url).await?))
+            Ok(LoadedView::Tag(build_tag(repo, tag, repo_name).await?))
         }
         Route::Tree { path, head } => {
             let resolved_tree;
@@ -472,7 +473,7 @@ pub(crate) async fn build_route(
                 },
             };
             Ok(LoadedView::Snapshot(
-                build_snapshot(repo, tree, commit, &ref_label, clone_url, &|p| {
+                build_snapshot(repo, tree, commit, &ref_label, repo_name, &|p| {
                     on_partial(LoadedView::Snapshot(p))
                 })
                 .await?,

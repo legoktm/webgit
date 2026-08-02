@@ -29,6 +29,7 @@ pub(crate) async fn build_summary(
     head_commit: &Commit,
     repo: &CachingRepo,
     clone_url: &str,
+    repo_name: &str,
     on_partial: impl Fn(SummaryProps),
 ) -> SummaryProps {
     let head_branch: Option<String> = head_branch_name(repo).await;
@@ -76,6 +77,7 @@ pub(crate) async fn build_summary(
         more_tags,
         commits: None,
         clone_url: clone_url.to_string(),
+        repo_name: repo_name.to_string(),
     }));
     on_partial(acc.borrow().clone());
 
@@ -141,7 +143,10 @@ pub(crate) struct SummaryProps {
     /// Recent commits have no up-front list, so the section shows the loading
     /// ellipsis (`None`) until the first row arrives, then streams in newest-first.
     commits: Option<Vec<CommitRow>>,
+    /// Shown verbatim in the `git clone` line — the one place a URL is wanted.
     clone_url: String,
+    /// The repository's name, for naming the snapshot each tag links to.
+    repo_name: String,
 }
 
 /// The Yew component used to mount the summary view into the DOM. The markup
@@ -160,6 +165,7 @@ pub(crate) fn summary_view(props: &SummaryProps) -> Html {
         more_tags,
         commits,
         clone_url,
+        repo_name,
     } = props;
 
     html! {
@@ -167,7 +173,7 @@ pub(crate) fn summary_view(props: &SummaryProps) -> Html {
             <h3 class="summary-heading">{ "Clone" }</h3>
             <div class="clone-url">{ format!("git clone {clone_url}") }</div>
             { branches_section(branches, *more_branches) }
-            { tags_section(tags, *more_tags, clone_url) }
+            { tags_section(tags, *more_tags, repo_name) }
             <h3 class="summary-heading">{ "Recent commits" }</h3>
             { match commits {
                 Some(c) => commits_table(c),
@@ -233,6 +239,7 @@ mod tests {
                 ),
             ]),
             clone_url: "https://example.org/repo.git".to_string(),
+            repo_name: "repo".to_string(),
         }));
     }
 
@@ -251,6 +258,7 @@ mod tests {
             more_tags: false,
             commits: None,
             clone_url: "https://example.org/repo.git".to_string(),
+            repo_name: "repo".to_string(),
         }));
     }
 }

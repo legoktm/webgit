@@ -70,10 +70,10 @@ pub(crate) async fn build_snapshot(
     tree: &Tree,
     commit: &Commit,
     ref_label: &str,
-    clone_url: &str,
+    repo_name: &str,
     on_partial: &dyn Fn(SnapshotProps),
 ) -> anyhow::Result<SnapshotProps> {
-    let stem = snapshot_stem(clone_url, ref_label);
+    let stem = snapshot_stem(repo_name, ref_label);
     let name = format!("{stem}.tar.gz");
     let building = |fetched, total| SnapshotProps {
         name: name.clone(),
@@ -153,27 +153,15 @@ fn count_files(entries: &[ArchiveEntry]) -> usize {
         .count()
 }
 
-/// The repository's own name, from its URL: the last path component, without
-/// the `.git` suffix — `…/public/webgit.git/` becomes `webgit`.
-fn repo_stem(clone_url: &str) -> String {
-    let trimmed = clone_url.trim_end_matches('/');
-    let last = trimmed.rsplit('/').next().unwrap_or(trimmed);
-    let name = last.strip_suffix(".git").unwrap_or(last);
-    if name.is_empty() {
-        "repository".to_string()
-    } else {
-        name.to_string()
-    }
-}
-
 /// The archive's name and its top-level directory (they are the same string):
-/// `<repo>-<ref>`, as cgit names its snapshots.
+/// `<repo>-<ref>`, as cgit names its snapshots. `repo` is the repository's name,
+/// resolved once when it is opened — see [`crate::repo_name`].
 ///
 /// Both halves are flattened to a plain file name, since a ref may contain `/`
 /// (`release/2.0`), which can't appear in something the browser is about to
 /// save to disk.
-pub(crate) fn snapshot_stem(clone_url: &str, ref_label: &str) -> String {
-    format!("{}-{}", flatten(&repo_stem(clone_url)), flatten(ref_label))
+pub(crate) fn snapshot_stem(repo: &str, ref_label: &str) -> String {
+    format!("{}-{}", flatten(repo), flatten(ref_label))
 }
 
 /// What the browser will save a snapshot of `ref_label` as.
@@ -181,8 +169,8 @@ pub(crate) fn snapshot_stem(clone_url: &str, ref_label: &str) -> String {
 /// Shared with the download links in the ref tables, which show the file name
 /// rather than a bare "tar.gz" — so what the link says and what lands in the
 /// downloads folder are the same string by construction.
-pub(crate) fn snapshot_file_name(clone_url: &str, ref_label: &str) -> String {
-    format!("{}.tar.gz", snapshot_stem(clone_url, ref_label))
+pub(crate) fn snapshot_file_name(repo: &str, ref_label: &str) -> String {
+    format!("{}.tar.gz", snapshot_stem(repo, ref_label))
 }
 
 fn flatten(s: &str) -> String {
@@ -338,32 +326,17 @@ mod tests {
     use crate::archive::EntryKind;
 
     #[test]
-    fn test_repo_stem() {
-        assert_eq!(repo_stem("https://example.org/public/webgit.git"), "webgit");
-        assert_eq!(
-            repo_stem("https://example.org/public/webgit.git/"),
-            "webgit"
-        );
-        assert_eq!(repo_stem("https://example.org/public/webgit"), "webgit");
-        assert_eq!(repo_stem("webgit.git"), "webgit");
-        // Nothing left to name it after.
-        assert_eq!(repo_stem("https://example.org/"), "example.org");
-        assert_eq!(repo_stem(""), "repository");
-    }
-
-    #[test]
     fn test_snapshot_stem() {
-        let url = "https://example.org/public/webgit.git";
-        assert_eq!(snapshot_stem(url, "v1.0.0"), "webgit-v1.0.0");
+        assert_eq!(snapshot_stem("webgit", "v1.0.0"), "webgit-v1.0.0");
         // A ref name with a slash in it is still one file name.
-        assert_eq!(snapshot_stem(url, "release/2.0"), "webgit-release-2.0");
+        assert_eq!(snapshot_stem("webgit", "release/2.0"), "webgit-release-2.0");
     }
 
     /// The link text in the ref tables, and what the browser saves.
     #[test]
     fn test_snapshot_file_name() {
         assert_eq!(
-            snapshot_file_name("https://example.org/public/webgit.git", "v1.0.0"),
+            snapshot_file_name("webgit", "v1.0.0"),
             "webgit-v1.0.0.tar.gz"
         );
     }

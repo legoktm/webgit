@@ -61,6 +61,9 @@ struct RepoBundle {
     head_commit: Rc<Commit>,
     root_tree: Rc<Tree>,
     clone_url: Rc<String>,
+    /// The repository's name, resolved once from the URL — what snapshots are
+    /// named after. See [`repo_name`].
+    repo_name: Rc<String>,
 }
 
 /// A bundle is created once per repository load and never mutated, so identity
@@ -72,6 +75,7 @@ impl PartialEq for RepoBundle {
             && Rc::ptr_eq(&self.head_commit, &other.head_commit)
             && Rc::ptr_eq(&self.root_tree, &other.root_tree)
             && Rc::ptr_eq(&self.clone_url, &other.clone_url)
+            && Rc::ptr_eq(&self.repo_name, &other.repo_name)
     }
 }
 
@@ -122,6 +126,7 @@ async fn load_repo_bundle(url: String) -> anyhow::Result<RepoBundle> {
         repo: Rc::new(repo),
         head_commit: Rc::new(commit),
         root_tree: Rc::new(root_tree),
+        repo_name: Rc::new(repo_name(&url)),
         clone_url: Rc::new(url),
     })
 }
@@ -321,6 +326,7 @@ fn route_view(props: &RouteViewProps) -> Html {
                             &bundle.root_tree,
                             &bundle.repo,
                             &bundle.clone_url,
+                            &bundle.repo_name,
                             &emit,
                         )
                         .await
@@ -602,6 +608,25 @@ async fn load_listing() -> anyhow::Result<ListingProps> {
 // URL resolution
 // ---------------------------------------------------------------------------
 
+/// The repository's own name, from its URL: the last path component, without
+/// the `.git` suffix — `…/public/webgit.git/` becomes `webgit`.
+///
+/// Resolved once when the repository is opened and carried on [`RepoBundle`],
+/// since it is a property of the repository rather than of any one view. The
+/// snapshot links and the archives they build are named from it; the full URL
+/// stays reserved for the two places that actually show a URL, the summary's
+/// `git clone` line and the about page.
+fn repo_name(url: &str) -> String {
+    let trimmed = url.trim_end_matches('/');
+    let last = trimmed.rsplit('/').next().unwrap_or(trimmed);
+    let name = last.strip_suffix(".git").unwrap_or(last);
+    if name.is_empty() {
+        "repository".to_string()
+    } else {
+        name.to_string()
+    }
+}
+
 /// The path portion of the repository URL, used as its display name —
 /// e.g. `https://git.example.com/public/webgit.git/` becomes
 /// `public/webgit.git`.
@@ -672,6 +697,20 @@ mod tests {
         // No host component: the whole string is the path.
         assert_eq!(repo_path("bar.git"), "bar.git");
         assert_eq!(repo_path(""), "");
+    }
+
+    #[test]
+    fn test_repo_name() {
+        assert_eq!(repo_name("https://example.org/public/webgit.git"), "webgit");
+        assert_eq!(
+            repo_name("https://example.org/public/webgit.git/"),
+            "webgit"
+        );
+        assert_eq!(repo_name("https://example.org/public/webgit"), "webgit");
+        assert_eq!(repo_name("webgit.git"), "webgit");
+        // Nothing left to name it after.
+        assert_eq!(repo_name("https://example.org/"), "example.org");
+        assert_eq!(repo_name(""), "repository");
     }
 
     // --- Reactive chrome snapshots (see `render::tag` for the SSR approach) ---

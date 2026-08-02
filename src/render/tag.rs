@@ -7,7 +7,7 @@ use yew::prelude::*;
 pub(crate) async fn build_tag(
     repo: &CachingRepo,
     tag: String,
-    clone_url: &str,
+    repo_name: &str,
 ) -> anyhow::Result<TagProps> {
     let ref_name = RefName::Ref(format!("tags/{tag}").into_bytes());
     let refs = repo.all_refs().await.context("list refs")?;
@@ -29,7 +29,7 @@ pub(crate) async fn build_tag(
     // have no metadata of their own, so fall back to the commit's details.
     match object.tag() {
         Ok(tag_obj) => Ok(TagProps {
-            snapshot_name: crate::render::snapshot::snapshot_file_name(clone_url, &tag),
+            snapshot_name: crate::render::snapshot::snapshot_file_name(repo_name, &tag),
             name: tag.clone(),
             date: format_datetime(
                 tag_obj
@@ -48,7 +48,7 @@ pub(crate) async fn build_tag(
             contents: Some(String::from_utf8_lossy(tag_obj.message()).into_owned()),
         }),
         Err(_) => Ok(TagProps {
-            snapshot_name: crate::render::snapshot::snapshot_file_name(clone_url, &tag),
+            snapshot_name: crate::render::snapshot::snapshot_file_name(repo_name, &tag),
             name: tag,
             date: format_datetime(commit.author_date()),
             tagger_name: None,

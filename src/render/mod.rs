@@ -71,7 +71,7 @@ pub(crate) fn branches_section(branches: &[RefRow], more: bool) -> Html {
 
 /// The "Tags" section (the old `refs_tags.html`): a heading plus either a table
 /// of tag rows (with an optional "more" link) or a "No tags." note.
-pub(crate) fn tags_section(tags: &[RefRow], more: bool, clone_url: &str) -> Html {
+pub(crate) fn tags_section(tags: &[RefRow], more: bool, repo_name: &str) -> Html {
     html! {
         <>
             <h3 class="summary-heading">{ "Tags" }</h3>
@@ -83,7 +83,7 @@ pub(crate) fn tags_section(tags: &[RefRow], more: bool, clone_url: &str) -> Html
                         { for tags.iter().map(|t| refs_table_row(
                             format!("#!/refs/tags/{}", encode_component(&t.name)),
                             t,
-                            Some(snapshot_cell(clone_url, &t.name)),
+                            Some(snapshot_cell(repo_name, &t.name)),
                         )) }
                         if more {
                             <tr><td>{ "[" }<a href="#!/refs/tags">{ "..." }</a>{ "]" }</td></tr>
@@ -152,10 +152,10 @@ fn refs_table_row(href: String, r: &RefRow, extra: Option<Html>) -> Html {
 }
 
 /// The archive link for a tag, labelled with the file it downloads.
-fn snapshot_cell(clone_url: &str, tag: &str) -> Html {
+fn snapshot_cell(repo_name: &str, tag: &str) -> Html {
     html! {
         <a class="snapshot-link" href={crate::route::snapshot_url(tag)}>
-            { crate::render::snapshot::snapshot_file_name(clone_url, tag) }
+            { crate::render::snapshot::snapshot_file_name(repo_name, tag) }
         </a>
     }
 }
