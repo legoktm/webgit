@@ -18,7 +18,7 @@ pub use gib_object::{
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test::open_test_repo;
+    use crate::{prelude::*, test::open_test_repo};
     use futures::executor::block_on;
     use gib_testkit::{make_basic_repo, make_similar_commits};
 

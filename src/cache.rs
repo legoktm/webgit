@@ -6,6 +6,7 @@ use git_async::error::{Error as GitError, GResult};
 use git_async::object::{
     Commit, Object, ObjectId, ObjectIdPrefix, ObjectType, PrefixResolution, RawObject, Tree,
 };
+use git_async::prelude::*;
 use git_async::reference::{Ref, RefEntry, RefName};
 use std::cell::RefCell;
 use std::collections::BTreeMap;

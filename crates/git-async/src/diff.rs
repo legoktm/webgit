@@ -306,7 +306,7 @@ impl TreeDiff {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Repo, reference::RefName, test::open_test_repo};
+    use crate::{Repo, prelude::*, reference::RefName, test::open_test_repo};
     use futures::executor::block_on;
     use gib_testkit::{TestFileSystem, make_basic_repo, make_file};
     use std::{

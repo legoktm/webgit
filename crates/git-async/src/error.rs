@@ -4,6 +4,7 @@ use crate::{file_system::FileSystemError, object::ObjectId, reference::RefName};
 use alloc::vec::Vec;
 use gib_object::ObjectError;
 use gib_parse::ParseError;
+use gib_ref::RefError;
 use miniz_oxide::inflate::TINFLStatus;
 
 pub use gib_object::UnexpectedObjectType;
@@ -73,6 +74,15 @@ impl From<FileSystemError> for Error {
 impl From<hex::FromHexError> for Error {
     fn from(value: hex::FromHexError) -> Self {
         Self::FromHexError(value)
+    }
+}
+
+impl From<RefError> for Error {
+    fn from(value: RefError) -> Self {
+        match value {
+            RefError::MalformedPackedRefs => Self::MalformedPackedRefs,
+            RefError::MalformedInfoRefs => Self::MalformedInfoRefs,
+        }
     }
 }
 

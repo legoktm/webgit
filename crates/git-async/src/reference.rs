@@ -2,243 +2,74 @@
 //!
 //! A git ref is a file which points to an object or to another ref.
 //!
-//! To look up a ref, first construct a [`RefName`] and then use the
-//! [`Repo::lookup_ref`] method. A list of all refs in the repository can also
-//! be accessed using the [`Repo::ref_names`] method.
+//! The ref types and their parsers live in the `gib-ref` crate and are
+//! re-exported here. Resolving a ref against a repository needs a filesystem,
+//! so that lives here: [`Repo::lookup_ref`] reads a ref by name, and the
+//! peeling methods are in [`crate::prelude`].
 
 use crate::{
     error::{Error, GResult},
     file_system::{Directory, File, FileSystem, FileSystemError, read_file_if_exists},
-    object::{Commit, ObjectId, Tree},
-    prelude::ObjectExt,
     repo::Repo,
 };
-use accessory::Accessors;
-use alloc::vec::Vec;
-use gib_parse::ParseResult;
-use nom::{
-    Parser,
-    branch::alt,
-    bytes::complete::{tag, take_till},
-    character::complete::{char, newline, not_line_ending, space0},
-    combinator::{all_consuming, opt},
-    multi::many0,
-    sequence::{delimited, preceded, terminated},
-};
 
-/// The name of a git ref
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
-pub enum RefName {
-    /// The head of a repo, which is called `HEAD` by git.
-    Head,
-    /// A non-HEAD ref such as `v1.7.0` or `origin/main`.
-    Ref(Vec<u8>),
-}
+pub use gib_ref::{Ref, RefEntry, RefName, RefTarget};
+pub(crate) use gib_ref::{parse_info_refs, parse_packed_refs};
 
-impl RefName {
-    pub(crate) async fn open_loose_ref<F: FileSystem>(
-        &self,
-        repo: &Repo<F>,
-    ) -> GResult<Option<F::File>> {
-        use RefName::*;
-        let sub_path = match self {
-            Head => {
-                return Ok(Some(repo.git_dir.open_file(b"HEAD").await?));
-            }
-            Ref(path) => path,
+/// Open the loose ref file backing `name`, if the repository has one.
+///
+/// `HEAD` lives at the top of the git dir; everything else is a path under
+/// `refs/`. Returns `None` when any component of that path is missing.
+pub(crate) async fn open_loose_ref<F: FileSystem>(
+    name: &RefName,
+    repo: &Repo<F>,
+) -> GResult<Option<F::File>> {
+    let sub_path = match name {
+        RefName::Head => {
+            return Ok(Some(repo.git_dir.open_file(b"HEAD").await?));
+        }
+        RefName::Ref(path) => path,
+    };
+    let mut dir = repo.git_dir.open_subdir(b"refs").await?;
+    let mut components = sub_path.split(|b| *b == b'/');
+    let file_name = components
+        .next_back()
+        .ok_or_else(|| Error::RefNotFound(name.clone()))?;
+    for component in components {
+        dir = match dir.open_subdir(component).await {
+            Err(FileSystemError::NotFound(_)) => return Ok(None),
+            Err(e) => return Err(e.into()),
+            Ok(dir) => dir,
         };
-        let mut dir = repo.git_dir.open_subdir(b"refs").await?;
-        let mut components = sub_path.split(|b| *b == b'/');
-        let file_name = components
-            .next_back()
-            .ok_or_else(|| Error::RefNotFound(self.clone()))?;
-        for component in components {
-            dir = match dir.open_subdir(component).await {
-                Err(FileSystemError::NotFound(_)) => return Ok(None),
-                Err(e) => return Err(e.into()),
-                Ok(dir) => dir,
-            };
-        }
-        match dir.open_file(file_name).await {
-            Err(FileSystemError::NotFound(_)) => Ok(None),
-            Err(e) => Err(e.into()),
-            Ok(file) => Ok(Some(file)),
-        }
+    }
+    match dir.open_file(file_name).await {
+        Err(FileSystemError::NotFound(_)) => Ok(None),
+        Err(e) => Err(e.into()),
+        Ok(file) => Ok(Some(file)),
     }
 }
 
-/// A ref resolved during bulk listing, as returned by [`Repo::all_refs`]
+/// Resolve a single ref by name.
 ///
-/// [`Repo::all_refs`]: crate::repo::Repo::all_refs
-#[derive(Accessors, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RefEntry {
-    /// The object the ref points to directly
-    #[access(get(cp))]
-    pub(crate) target: ObjectId,
-
-    /// For annotated tags, the commit the tag object points to, when the
-    /// source (`info/refs` or `packed-refs`) recorded a peeled entry
-    #[access(get(cp))]
-    pub(crate) peeled: Option<ObjectId>,
-}
-
-impl RefEntry {
-    /// The object ID to use when treating this ref as a commit: the peeled
-    /// target if one was recorded, otherwise the direct target.
-    pub fn commit_target(&self) -> ObjectId {
-        self.peeled.unwrap_or(self.target)
-    }
-}
-
-/// The contents of a git ref
-#[derive(Accessors, Clone)]
-pub struct Ref {
-    /// The name of the ref
-    #[access(get)]
-    name: RefName,
-
-    /// The target of the ref
-    ///
-    /// Refs can be either direct (pointing to an object) or symbolic (pointing
-    /// to another ref).
-    #[access(get)]
-    target: RefTarget,
-}
-
-/// The target of a git ref
-///
-/// Refs can be either direct (pointing to an object) or symbolic (pointing to
-/// another ref).
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub enum RefTarget {
-    /// A direct ref, pointing to an object
-    Direct(ObjectId),
-    /// A symbolic ref, pointing to another ref
-    Symbolic(RefName),
-}
-
-impl Ref {
-    pub(crate) async fn lookup<F: FileSystem>(repo: &Repo<F>, name: &RefName) -> GResult<Ref> {
-        // Consult the freshest direct sources first — a loose ref file, then
-        // packed-refs — and only then fall back to the info/refs snapshot.
-        // The fallback keeps single-ref resolution consistent with
-        // [`Repo::all_refs`], which reads info/refs on hosts prepared with
-        // `update-server-info`: without it, a ref recorded only in info/refs
-        // (e.g. a packed branch on a server that doesn't serve individual loose
-        // ref files) would be listed by `all_refs` yet fail to resolve when
-        // peeling HEAD.
-        let target = if let Some(target) = lookup_loose_ref(repo, name).await? {
-            target
-        } else if let Some(target) = lookup_packed_ref(repo, name).await? {
-            target
-        } else if let Some(target) = lookup_info_ref(repo, name).await? {
-            target
-        } else {
-            return Err(Error::RefNotFound(name.clone()));
-        };
-        Ok(Self {
-            name: name.clone(),
-            target,
-        })
-    }
-
-    /// Follow a chain of refs until a direct ref is obtained, and return the
-    /// object ID that it points to.
-    pub async fn resolve_object_id<F: FileSystem>(&self, repo: &Repo<F>) -> GResult<ObjectId> {
-        let mut target: Ref = self.clone();
-        while let RefTarget::Symbolic(name) = target.target {
-            target = repo.lookup_ref(&name).await?;
-        }
-        match target.target {
-            RefTarget::Symbolic(_) => unreachable!(),
-            RefTarget::Direct(oid) => Ok(oid),
-        }
-    }
-
-    /// Peel the ref to a commit object.
-    ///
-    /// Returns `None` if the ref does not point to a commit object.
-    pub async fn peel_to_commit<F: FileSystem>(&self, repo: &Repo<F>) -> GResult<Option<Commit>> {
-        let oid = self.resolve_object_id(repo).await?;
-        let object = repo.lookup_object(oid).await?;
-        object.peel_to_commit(repo).await
-    }
-
-    /// Peel the ref to a tree object.
-    ///
-    /// Returns `None` if the ref does not point to a commit or a tree object.
-    pub async fn peel_to_tree<F: FileSystem>(&self, repo: &Repo<F>) -> GResult<Option<Tree>> {
-        let oid = self.resolve_object_id(repo).await?;
-        let object = repo.lookup_object(oid).await?;
-        object.peel_to_tree(repo).await
-    }
-}
-
-impl RefTarget {
-    pub(crate) fn parse_loose_ref(content: &[u8]) -> ParseResult<&[u8], Self> {
-        all_consuming(terminated(not_line_ending, newline))
-            .and_then(alt((
-                ObjectId::parse.map(RefTarget::Direct),
-                preceded(
-                    tag("ref: refs/"),
-                    take_till(|_| false)
-                        .map(|name: &[u8]| RefTarget::Symbolic(RefName::Ref(name.to_vec()))),
-                ),
-            )))
-            .parse(content)
-    }
-}
-
-pub(crate) fn parse_packed_refs(packed_refs_data: &[u8]) -> GResult<Vec<(RefName, RefEntry)>> {
-    let parse_one_ref = (
-        terminated(ObjectId::parse, char(' ')),
-        delimited(
-            tag("refs/"),
-            not_line_ending.map(|name: &[u8]| RefName::Ref(name.to_vec())),
-            newline,
-        ),
-        // A `^<oid>` line records the commit an annotated tag peels to.
-        opt(delimited(char('^'), ObjectId::parse, newline)),
-    )
-        .map(|(target, name, peeled)| Some((name, RefEntry { target, peeled })));
-    let parse_comment = (space0, char('#'), not_line_ending, opt(newline)).map(|_| None);
-    let mut parser = all_consuming(many0(alt((parse_one_ref, parse_comment))));
-    let (_, refs) = parser
-        .parse(packed_refs_data)
-        .map_err(|_| Error::MalformedPackedRefs)?;
-    Ok(refs.into_iter().flatten().collect())
-}
-
-/// Parse the `info/refs` file written by `git update-server-info`.
-///
-/// Each line is `<oid>\t<refname>`; a `<refname>^{}` line records the commit
-/// the preceding annotated tag peels to.
-pub(crate) fn parse_info_refs(data: &[u8]) -> GResult<Vec<(RefName, RefEntry)>> {
-    let parse_one_line = (
-        terminated(ObjectId::parse, char('\t')),
-        delimited(tag("refs/"), not_line_ending, newline),
-    );
-    let mut parser = all_consuming(many0(parse_one_line));
-    let (_, lines) = parser.parse(data).map_err(|_| Error::MalformedInfoRefs)?;
-    let mut refs: Vec<(RefName, RefEntry)> = Vec::new();
-    for (oid, name) in lines {
-        if let Some(base) = name.strip_suffix(b"^{}") {
-            if let Some((last_name, last_entry)) = refs.last_mut()
-                && *last_name == RefName::Ref(base.to_vec())
-            {
-                last_entry.peeled = Some(oid);
-            }
-            continue;
-        }
-        refs.push((
-            RefName::Ref(name.to_vec()),
-            RefEntry {
-                target: oid,
-                peeled: None,
-            },
-        ));
-    }
-    Ok(refs)
+/// Consult the freshest direct sources first — a loose ref file, then
+/// packed-refs — and only then fall back to the info/refs snapshot.
+/// The fallback keeps single-ref resolution consistent with
+/// [`Repo::all_refs`], which reads info/refs on hosts prepared with
+/// `update-server-info`: without it, a ref recorded only in info/refs
+/// (e.g. a packed branch on a server that doesn't serve individual loose
+/// ref files) would be listed by `all_refs` yet fail to resolve when
+/// peeling HEAD.
+pub(crate) async fn lookup_ref<F: FileSystem>(repo: &Repo<F>, name: &RefName) -> GResult<Ref> {
+    let target = if let Some(target) = lookup_loose_ref(repo, name).await? {
+        target
+    } else if let Some(target) = lookup_packed_ref(repo, name).await? {
+        target
+    } else if let Some(target) = lookup_info_ref(repo, name).await? {
+        target
+    } else {
+        return Err(Error::RefNotFound(name.clone()));
+    };
+    Ok(Ref::new(name.clone(), target))
 }
 
 /// Look up a single ref in `packed-refs`, returning `None` when the file is
@@ -281,7 +112,7 @@ pub(crate) async fn lookup_loose_ref<F: FileSystem>(
     repo: &Repo<F>,
     name: &RefName,
 ) -> GResult<Option<RefTarget>> {
-    let Some(mut ref_file) = name.open_loose_ref(repo).await? else {
+    let Some(mut ref_file) = open_loose_ref(name, repo).await? else {
         return Ok(None);
     };
     let ref_content = match ref_file.read_all().await {
@@ -298,49 +129,26 @@ pub(crate) async fn lookup_loose_ref<F: FileSystem>(
 #[cfg(test)]
 mod test {
     use crate::{
-        object::{Object, ObjectId},
+        object::Object,
+        prelude::*,
+        reference::{RefName, RefTarget},
         test::open_test_repo,
     };
     use core::matches;
     use futures::executor::block_on;
     use gib_testkit::{make_basic_repo, make_packfile_repo};
-    use hex_literal::hex;
-
-    use super::*;
 
     #[test]
     fn resolve_head() {
         let test_repo = make_basic_repo().unwrap();
         let repo = open_test_repo(&test_repo);
         let head = block_on(repo.head()).unwrap();
-        let head_target = match head.target {
+        let head_target = match head.target() {
             RefTarget::Direct(_) => panic!(),
-            RefTarget::Symbolic(name) => name,
+            RefTarget::Symbolic(name) => name.clone(),
         };
-        let head_target = block_on(Ref::lookup(&repo, &head_target)).unwrap();
-        assert!(matches!(head_target.target, RefTarget::Direct(_)));
-    }
-
-    #[test]
-    fn parse_direct_ref() {
-        let content = b"6121d0b97779278fcc32cc8a02754e7c588d9c18\n";
-        let (_, parsed) = RefTarget::parse_loose_ref(content).unwrap();
-        assert_eq!(
-            parsed,
-            RefTarget::Direct(ObjectId::from_bytes(hex!(
-                "6121d0b97779278fcc32cc8a02754e7c588d9c18"
-            )))
-        );
-    }
-
-    #[test]
-    fn parse_symbolic_ref() {
-        let content = b"ref: refs/heads/main\n";
-        let (_, parsed) = RefTarget::parse_loose_ref(content).unwrap();
-        assert_eq!(
-            parsed,
-            RefTarget::Symbolic(RefName::Ref(b"heads/main".to_vec()))
-        );
+        let head_target = block_on(repo.lookup_ref(&head_target)).unwrap();
+        assert!(matches!(head_target.target(), RefTarget::Direct(_)));
     }
 
     #[test]
@@ -380,71 +188,5 @@ mod test {
         let oid = block_on(reference.resolve_object_id(&repo)).unwrap();
         let object = block_on(repo.lookup_object(oid)).unwrap();
         assert!(matches!(object, Object::Commit(_)));
-    }
-
-    #[test]
-    fn read_stash_packed_ref() {}
-
-    #[test]
-    fn parse_packed_refs_with_peeled() {
-        let data = b"# pack-refs with: peeled fully-peeled sorted \n\
-6121d0b97779278fcc32cc8a02754e7c588d9c18 refs/heads/main\n\
-21810577ec46dcb1623e1a1c1e8fe55ed3151118 refs/tags/fat-tag\n\
-^6121d0b97779278fcc32cc8a02754e7c588d9c18\n";
-        let refs = parse_packed_refs(data).unwrap();
-        assert_eq!(refs.len(), 2);
-        let commit = ObjectId::from_bytes(hex!("6121d0b97779278fcc32cc8a02754e7c588d9c18"));
-        let tag = ObjectId::from_bytes(hex!("21810577ec46dcb1623e1a1c1e8fe55ed3151118"));
-        assert_eq!(refs[0].0, RefName::Ref(b"heads/main".to_vec()));
-        assert_eq!(
-            refs[0].1,
-            RefEntry {
-                target: commit,
-                peeled: None
-            }
-        );
-        assert_eq!(refs[1].0, RefName::Ref(b"tags/fat-tag".to_vec()));
-        assert_eq!(
-            refs[1].1,
-            RefEntry {
-                target: tag,
-                peeled: Some(commit)
-            }
-        );
-    }
-
-    #[test]
-    fn parse_info_refs_with_peeled() {
-        let data = b"6121d0b97779278fcc32cc8a02754e7c588d9c18\trefs/heads/main\n\
-21810577ec46dcb1623e1a1c1e8fe55ed3151118\trefs/tags/fat-tag\n\
-6121d0b97779278fcc32cc8a02754e7c588d9c18\trefs/tags/fat-tag^{}\n";
-        let refs = parse_info_refs(data).unwrap();
-        assert_eq!(refs.len(), 2);
-        let commit = ObjectId::from_bytes(hex!("6121d0b97779278fcc32cc8a02754e7c588d9c18"));
-        let tag = ObjectId::from_bytes(hex!("21810577ec46dcb1623e1a1c1e8fe55ed3151118"));
-        assert_eq!(refs[0].0, RefName::Ref(b"heads/main".to_vec()));
-        assert_eq!(
-            refs[0].1,
-            RefEntry {
-                target: commit,
-                peeled: None
-            }
-        );
-        assert_eq!(refs[1].0, RefName::Ref(b"tags/fat-tag".to_vec()));
-        assert_eq!(
-            refs[1].1,
-            RefEntry {
-                target: tag,
-                peeled: Some(commit)
-            }
-        );
-    }
-
-    #[test]
-    fn parse_info_refs_malformed() {
-        assert!(matches!(
-            parse_info_refs(b"not a refs file\n"),
-            Err(Error::MalformedInfoRefs)
-        ));
     }
 }

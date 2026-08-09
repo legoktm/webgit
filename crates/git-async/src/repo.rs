@@ -6,8 +6,10 @@ use crate::{
     },
     object::{Object, ObjectId, ObjectIdPrefix, PrefixResolution},
     object_store::{RawObject, cache::IndexCache, lookup::PackName},
+    prelude::RefExt,
     reference::{
-        Ref, RefEntry, RefName, RefTarget, lookup_loose_ref, parse_info_refs, parse_packed_refs,
+        Ref, RefEntry, RefName, RefTarget, lookup_loose_ref, lookup_ref, parse_info_refs,
+        parse_packed_refs,
     },
 };
 use alloc::collections::{BTreeMap, BTreeSet};
@@ -254,12 +256,12 @@ impl<F: FileSystem> Repo<F> {
 
     /// Get the repository's HEAD ref.
     pub async fn head(&self) -> GResult<Ref> {
-        Ref::lookup(self, &RefName::Head).await
+        lookup_ref(self, &RefName::Head).await
     }
 
     /// Take a ref name and look up its content.
     pub(crate) async fn lookup_ref(&self, name: &RefName) -> GResult<Ref> {
-        Ref::lookup(self, name).await
+        lookup_ref(self, name).await
     }
 
     /// Look up a particular object in the repository, reading the entire object
