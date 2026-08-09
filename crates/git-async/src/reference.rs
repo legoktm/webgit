@@ -298,10 +298,11 @@ pub(crate) async fn lookup_loose_ref<F: FileSystem>(
 mod test {
     use crate::{
         object::{Object, ObjectId},
-        test::helpers::{make_basic_repo, make_packfile_repo},
+        test::open_test_repo,
     };
     use core::matches;
     use futures::executor::block_on;
+    use gib_testkit::{make_basic_repo, make_packfile_repo};
     use hex_literal::hex;
 
     use super::*;
@@ -309,7 +310,7 @@ mod test {
     #[test]
     fn resolve_head() {
         let test_repo = make_basic_repo().unwrap();
-        let repo = test_repo.repo();
+        let repo = open_test_repo(&test_repo);
         let head = block_on(repo.head()).unwrap();
         let head_target = match head.target {
             RefTarget::Direct(_) => panic!(),
@@ -344,7 +345,7 @@ mod test {
     #[test]
     fn read_thin_packed_ref() {
         let test_repo = make_packfile_repo().unwrap();
-        let repo = test_repo.repo();
+        let repo = open_test_repo(&test_repo);
         let ref_name = RefName::Ref(b"heads/main".to_vec());
         let reference = block_on(repo.lookup_ref(&ref_name)).unwrap();
         let oid = block_on(reference.resolve_object_id(&repo)).unwrap();
@@ -355,7 +356,7 @@ mod test {
     #[test]
     fn read_fat_packed_ref() {
         let test_repo = make_packfile_repo().unwrap();
-        let repo = test_repo.repo();
+        let repo = open_test_repo(&test_repo);
         let ref_name = RefName::Ref(b"tags/a-fat-tag".to_vec());
         let reference = block_on(repo.lookup_ref(&ref_name)).unwrap();
         let oid = block_on(reference.resolve_object_id(&repo)).unwrap();
@@ -372,7 +373,7 @@ mod test {
         // that lists refs via info/refs but won't serve them individually.
         std::fs::remove_file(test_repo.location.path().join(".git").join("packed-refs")).unwrap();
 
-        let repo = test_repo.repo();
+        let repo = open_test_repo(&test_repo);
         let ref_name = RefName::Ref(b"heads/main".to_vec());
         let reference = block_on(repo.lookup_ref(&ref_name)).unwrap();
         let oid = block_on(reference.resolve_object_id(&repo)).unwrap();

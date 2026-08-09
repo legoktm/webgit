@@ -15,13 +15,10 @@ use crate::{
     Repo,
     object::{Object, ObjectId, ObjectIdPrefix, ObjectType, PrefixResolution, Tree, TreeEntryType},
     reference::{RefName, RefTarget},
-    test::{
-        helpers::{make_basic_repo, make_file, make_similar_commits},
-        impls::TestFileSystem,
-        repo::TestRepo,
-    },
+    test::open_test_repo,
 };
 use futures::executor::block_on;
+use gib_testkit::{TestFileSystem, TestRepo, make_basic_repo, make_file, make_similar_commits};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
@@ -160,7 +157,7 @@ fn git_oid(test_repo: &TestRepo, rev: &str) -> ObjectId {
 }
 
 fn open(test_repo: &TestRepo) -> Repo<TestFileSystem> {
-    test_repo.repo()
+    open_test_repo(test_repo)
 }
 
 fn type_name(object_type: ObjectType) -> &'static str {

@@ -227,8 +227,8 @@ async fn get_obj_packfile_offset<F: File>(
 
 #[cfg(test)]
 mod tests {
-    use crate::test::helpers::{get_pack_id, make_basic_repo, make_file, make_packfile_repo};
     use futures::executor::block_on;
+    use gib_testkit::{get_pack_id, make_basic_repo, make_file, make_packfile_repo};
     use hex_literal::hex;
     use rand_core::{Rng, SeedableRng};
     use rand_pcg::Pcg32;

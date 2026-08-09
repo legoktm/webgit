@@ -408,8 +408,9 @@ async fn read_vec<R: File>(reader: &mut R, offset: u64, len: usize) -> GResult<V
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test::{impls::TestFileSystem, repo::TestRepo};
+    use crate::test::open_test_repo;
     use futures::executor::block_on;
+    use gib_testkit::{TestFileSystem, TestRepo};
     use std::fs;
 
     type TestGraph = CommitGraph<TestFileSystem>;
@@ -489,7 +490,7 @@ mod tests {
     fn graph(repo: &TestRepo) -> TestGraph {
         // Repo::open also loads the graph; assert that wiring works, then open a
         // standalone instance for direct testing of the lower-level methods.
-        assert!(repo.repo().commit_graph().is_some());
+        assert!(open_test_repo(repo).commit_graph().is_some());
         let objects_dir = block_on(repo.git_dir().open_subdir(b"objects")).unwrap();
         block_on(CommitGraph::open(&objects_dir))
             .unwrap()
@@ -500,7 +501,7 @@ mod tests {
     fn lookup_matches_commit_objects() {
         let (repo, oids) = graph_repo();
         let cg = graph(&repo);
-        let backing = repo.repo();
+        let backing = open_test_repo(&repo);
         assert!(cg.has_bloom());
 
         for id in [

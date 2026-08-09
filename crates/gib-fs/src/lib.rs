@@ -237,3 +237,93 @@ pub async fn search_for_files<F: File, D: Directory<F>>(
     }
     Ok(out)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures::executor::block_on;
+    use std::{
+        fs::{OpenOptions, create_dir},
+        io::{self, Write},
+        path::PathBuf,
+    };
+    use tempfile::TempDir;
+
+    /// A minimal `std::fs` directory, just enough to walk a tree.
+    ///
+    /// `gib-testkit` has a fuller implementation, but this crate cannot use it:
+    /// it depends on this one, and a dev-dependency cycle would put two
+    /// distinct copies of these traits in the same test binary.
+    #[derive(Clone)]
+    struct StdDir(PathBuf);
+
+    struct NoFile;
+
+    impl File for NoFile {
+        async fn read_all(&mut self) -> Result<Vec<u8>, FileSystemError> {
+            unimplemented!("the walk never reads file contents")
+        }
+        async fn read_segment(
+            &mut self,
+            _: Offset,
+            _: &mut [u8],
+        ) -> Result<usize, FileSystemError> {
+            unimplemented!("the walk never reads file contents")
+        }
+    }
+
+    impl Directory<NoFile> for StdDir {
+        async fn open_subdir(&self, name: &[u8]) -> Result<Self, FileSystemError> {
+            Ok(Self(self.0.join(str::from_utf8(name).unwrap())))
+        }
+
+        async fn list_dir(&self) -> Result<Vec<DirEntry>, FileSystemError> {
+            let mut out = Vec::new();
+            for entry in std::fs::read_dir(&self.0).unwrap() {
+                let entry = entry.unwrap();
+                let name = entry.file_name().into_encoded_bytes();
+                out.push(if entry.file_type().unwrap().is_dir() {
+                    DirEntry::Directory(name)
+                } else {
+                    DirEntry::File(name)
+                });
+            }
+            Ok(out)
+        }
+
+        async fn open_file(&self, _: &[u8]) -> Result<NoFile, FileSystemError> {
+            Ok(NoFile)
+        }
+    }
+
+    #[test]
+    fn test_search_for_files() {
+        fn touch(path: impl AsRef<std::path::Path>) -> io::Result<()> {
+            let mut f = OpenOptions::new()
+                .create(true)
+                .truncate(true)
+                .write(true)
+                .open(path)?;
+            f.flush()?;
+            Ok(())
+        }
+        let dir = TempDir::new().unwrap();
+        touch(dir.path().join("file-a")).unwrap();
+        touch(dir.path().join("file-b")).unwrap();
+        create_dir(dir.path().join("dir-a")).unwrap();
+        touch(dir.path().join("dir-a").join("file-c")).unwrap();
+        create_dir(dir.path().join("dir-a").join("dir-b")).unwrap();
+        touch(dir.path().join("dir-a").join("dir-b").join("file-d")).unwrap();
+        let mut expected: Vec<Path> = vec![
+            vec![b"file-a".to_vec()],
+            vec![b"file-b".to_vec()],
+            vec![b"dir-a".to_vec(), b"file-c".to_vec()],
+            vec![b"dir-a".to_vec(), b"dir-b".to_vec(), b"file-d".to_vec()],
+        ];
+        expected.sort();
+        let root = StdDir(dir.path().to_path_buf());
+        let mut paths = block_on(search_for_files(&root)).unwrap();
+        paths.sort();
+        assert_eq!(paths, expected);
+    }
+}

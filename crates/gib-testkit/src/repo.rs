@@ -1,12 +1,5 @@
-use crate::{
-    repo::{Repo, RepoConfig},
-    test::{
-        directory::{TestRepoDirectory, TestRepoFile},
-        impls::TestFileSystem,
-    },
-};
+use crate::directory::{TestRepoDirectory, TestRepoFile};
 
-use futures::executor::block_on;
 use std::{
     ffi::{OsStr, OsString},
     io::{self, Read, Seek, SeekFrom},
@@ -17,17 +10,20 @@ use std::{
 };
 use tempfile::{TempDir, tempdir, tempfile};
 
+/// Where a test repository lives on disk.
 #[derive(Debug, Clone)]
 pub enum TestDirectory {
+    /// A temporary directory, removed when the last handle is dropped.
     Temp(Arc<TempDir>),
 
-    // This is for debugging operations on real repos, the tests for which are
-    // not to be committed.
+    /// This is for debugging operations on real repos, the tests for which are
+    /// not to be committed.
     #[allow(dead_code)]
     Real(PathBuf),
 }
 
 impl TestDirectory {
+    /// The directory's path on disk.
     pub fn path(&self) -> &Path {
         use TestDirectory::*;
         match self {
@@ -50,12 +46,16 @@ impl TestDirectory {
     }
 }
 
+/// A real git repository, built by shelling out to the `git` CLI.
 #[derive(Debug)]
 pub struct TestRepo {
+    /// Where the repository's working tree (and `.git`) lives.
     pub location: TestDirectory,
 }
 
 impl TestRepo {
+    /// A `git` invocation in this repository, with the ambient identity and
+    /// date environment cleared so tests are reproducible.
     pub fn git_command(&self) -> Command {
         let mut command = Command::new("git");
         command
@@ -145,10 +145,6 @@ impl TestRepo {
             root: self.location.clone(),
             sub_path: PathBuf::from(".git"),
         }
-    }
-
-    pub fn repo(&self) -> Repo<TestFileSystem> {
-        block_on(RepoConfig::default().open(self.git_dir())).unwrap()
     }
 
     pub fn commit(

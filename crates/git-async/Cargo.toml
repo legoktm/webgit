@@ -24,6 +24,7 @@ nom.workspace = true
 
 [dev-dependencies]
 futures = { workspace = true, features = ["async-await", "executor"] }
+gib-testkit.workspace = true
 hex-literal.workspace = true
 rand_core.workspace = true
 rand_pcg.workspace = true

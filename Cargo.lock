@@ -369,6 +369,7 @@ name = "gib-fs"
 version = "0.0.0"
 dependencies = [
  "futures",
+ "tempfile",
 ]
 
 [[package]]
@@ -389,6 +390,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "gib-testkit"
+version = "0.0.0"
+dependencies = [
+ "futures",
+ "gib-fs",
+ "tempfile",
+]
+
+[[package]]
 name = "git-async"
 version = "0.1.1"
 dependencies = [
@@ -397,6 +407,7 @@ dependencies = [
  "gib-fs",
  "gib-hash",
  "gib-parse",
+ "gib-testkit",
  "hex",
  "hex-literal",
  "jiff",

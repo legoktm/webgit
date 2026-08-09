@@ -82,8 +82,9 @@ fn parse_header(input: &[u8]) -> nom::IResult<&[u8], (ObjectSize, ObjectType)> {
 
 #[cfg(test)]
 mod tests {
-    use crate::test::helpers::make_basic_repo;
+    use crate::test::open_test_repo;
     use futures::executor::block_on;
+    use gib_testkit::make_basic_repo;
     use hex_literal::hex;
 
     use super::*;
@@ -94,7 +95,7 @@ mod tests {
         let commit_id = test_repo.run_git(["rev-parse", "HEAD"]).unwrap();
         let commit_id = ObjectId::from_hex(commit_id.trim_ascii()).unwrap();
 
-        let repo = test_repo.repo();
+        let repo = open_test_repo(&test_repo);
         let object = block_on(read_loose_object(&repo, commit_id))
             .unwrap()
             .unwrap();
@@ -113,7 +114,7 @@ a commit
     #[test]
     fn test_read_loose_object_nonexistent() {
         let test_repo = make_basic_repo().unwrap();
-        let repo = test_repo.repo();
+        let repo = open_test_repo(&test_repo);
         let object = block_on(read_loose_object(
             &repo,
             ObjectId::from_bytes(hex!("0000000000000000000000000000000000000000")),

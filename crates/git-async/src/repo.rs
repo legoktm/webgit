@@ -304,16 +304,14 @@ fn parse_info_packs(data: &[u8]) -> GResult<Vec<PackName>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        reference::RefTarget,
-        test::{helpers::make_basic_repo, impls::TestFileSystem, repo::TestRepo},
-    };
+    use crate::{reference::RefTarget, test::open_test_repo};
     use futures::executor::block_on;
+    use gib_testkit::{TestFileSystem, TestRepo, make_basic_repo, make_file, make_packfile_repo};
 
     #[test]
     fn read_head() {
         let test_repo = TestRepo::new().unwrap();
-        let repo = test_repo.repo();
+        let repo = open_test_repo(&test_repo);
         let head = block_on(repo.head()).unwrap();
         assert_eq!(
             head.target(),
@@ -335,7 +333,7 @@ mod tests {
             .run_git(["update-ref", "refs/remotes/origin/main", "HEAD"])
             .unwrap();
 
-        let repo = test_repo.repo();
+        let repo = open_test_repo(&test_repo);
         let refs = block_on(repo.ref_names()).unwrap();
         let expected: BTreeSet<_> = vec![
             RefName::Head,
@@ -370,7 +368,7 @@ mod tests {
     fn all_refs_loose() {
         let test_repo = make_basic_repo().unwrap();
         test_repo.run_git(["branch", "a-branch"]).unwrap();
-        let repo = test_repo.repo();
+        let repo = open_test_repo(&test_repo);
         let refs = block_on(repo.all_refs()).unwrap();
 
         let head = head_oid(&test_repo);
@@ -403,9 +401,9 @@ mod tests {
 
     #[test]
     fn all_refs_packed_with_peeled() {
-        let test_repo = crate::test::helpers::make_packfile_repo().unwrap();
+        let test_repo = make_packfile_repo().unwrap();
         remove_info_refs(&test_repo);
-        let repo = test_repo.repo();
+        let repo = open_test_repo(&test_repo);
         let refs = block_on(repo.all_refs()).unwrap();
 
         let head = head_oid(&test_repo);
@@ -420,9 +418,9 @@ mod tests {
 
     #[test]
     fn all_refs_loose_shadows_packed() {
-        let test_repo = crate::test::helpers::make_packfile_repo().unwrap();
+        let test_repo = make_packfile_repo().unwrap();
         remove_info_refs(&test_repo);
-        crate::test::helpers::make_file(&test_repo, "shadow-file").unwrap();
+        make_file(&test_repo, "shadow-file").unwrap();
         test_repo.run_git(["add", "--all"]).unwrap();
         test_repo
             .commit(
@@ -433,7 +431,7 @@ mod tests {
             )
             .unwrap();
 
-        let repo = test_repo.repo();
+        let repo = open_test_repo(&test_repo);
         let refs = block_on(repo.all_refs()).unwrap();
         // The new commit wrote a loose refs/heads/main which must win over
         // the stale entry still present in packed-refs.
@@ -443,13 +441,13 @@ mod tests {
 
     #[test]
     fn all_refs_from_info_refs() {
-        let test_repo = crate::test::helpers::make_packfile_repo().unwrap();
+        let test_repo = make_packfile_repo().unwrap();
         test_repo.run_git(["update-server-info"]).unwrap();
         let head = head_oid(&test_repo);
         // Remove packed-refs to prove info/refs alone is consulted.
         std::fs::remove_file(test_repo.location.path().join(".git").join("packed-refs")).unwrap();
 
-        let repo = test_repo.repo();
+        let repo = open_test_repo(&test_repo);
         let refs = block_on(repo.all_refs()).unwrap();
         let main = refs.get(&RefName::Ref(b"heads/main".to_vec())).unwrap();
         assert_eq!(main.target(), head);
@@ -472,7 +470,7 @@ mod tests {
 
     #[test]
     fn discover_packs_prefers_info_packs() {
-        let test_repo = crate::test::helpers::make_packfile_repo().unwrap();
+        let test_repo = make_packfile_repo().unwrap();
         test_repo.run_git(["update-server-info"]).unwrap();
         let git_dir = test_repo.git_dir();
         let objects_dir = block_on(git_dir.open_subdir(b"objects")).unwrap();
@@ -509,7 +507,7 @@ mod tests {
 
     #[test]
     fn discover_packs_falls_back_to_listing() {
-        let test_repo = crate::test::helpers::make_packfile_repo().unwrap();
+        let test_repo = make_packfile_repo().unwrap();
         test_repo.run_git(["update-server-info"]).unwrap();
         // Remove the manifest so discovery must list the pack directory, as on
         // a repo that was never prepared with update-server-info but is served

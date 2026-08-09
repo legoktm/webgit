@@ -1,9 +1,10 @@
 [package]
-name = "gib-fs"
+name = "gib-testkit"
 version = "0.0.0"
 edition = "2024"
 publish = false
 
-[dev-dependencies]
+[dependencies]
 futures = { workspace = true, features = ["async-await", "executor"] }
+gib-fs.workspace = true
 tempfile.workspace = true

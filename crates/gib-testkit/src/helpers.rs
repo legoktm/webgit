@@ -1,4 +1,4 @@
-use crate::test::repo::TestRepo;
+use crate::repo::TestRepo;
 use std::{
     fs::{self, OpenOptions, read_dir, remove_file},
     io::{self, Write},

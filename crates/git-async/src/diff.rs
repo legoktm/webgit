@@ -306,15 +306,9 @@ impl TreeDiff {
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        Repo,
-        reference::RefName,
-        test::{
-            helpers::{make_basic_repo, make_file},
-            impls::TestFileSystem,
-        },
-    };
+    use crate::{Repo, reference::RefName, test::open_test_repo};
     use futures::executor::block_on;
+    use gib_testkit::{TestFileSystem, make_basic_repo, make_file};
     use std::{
         collections::BTreeSet,
         fs::{create_dir, remove_file},
@@ -332,7 +326,7 @@ mod tests {
     #[test]
     fn diff_same() {
         let test_repo = make_basic_repo().unwrap();
-        let repo = test_repo.repo();
+        let repo = open_test_repo(&test_repo);
         let tree = head_tree(&repo);
         assert!(
             block_on(TreeDiff::new(&repo, &tree, &tree))
@@ -345,7 +339,7 @@ mod tests {
     #[test]
     fn basic_root_diff() {
         let test_repo = make_basic_repo().unwrap();
-        let repo = test_repo.repo();
+        let repo = open_test_repo(&test_repo);
         let mut file_a = make_file(&test_repo, "a").unwrap();
         test_repo.run_git(["add", "--all"]).unwrap();
         test_repo
@@ -426,7 +420,7 @@ mod tests {
     #[test]
     fn basic_subtree_diff() {
         let test_repo = make_basic_repo().unwrap();
-        let repo = test_repo.repo();
+        let repo = open_test_repo(&test_repo);
         create_dir(test_repo.location.path().join("dir")).unwrap();
         let mut file_a = make_file(&test_repo, PathBuf::from("dir").join("a")).unwrap();
         test_repo.run_git(["add", "--all"]).unwrap();
@@ -486,7 +480,7 @@ mod tests {
     #[test]
     fn complex_subtree_diff() {
         let test_repo = make_basic_repo().unwrap();
-        let repo = test_repo.repo();
+        let repo = open_test_repo(&test_repo);
         make_file(&test_repo, "a").unwrap();
         test_repo.run_git(["add", "--all"]).unwrap();
         test_repo

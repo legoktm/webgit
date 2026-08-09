@@ -347,12 +347,10 @@ mod tests {
         object::ObjectId,
         object_store::lookup::{find_packed_object, lookup},
         repo::RepoConfig,
-        test::{
-            helpers::{make_basic_repo, make_packfile_repo, make_similar_commits},
-            impls::TestFileSystem,
-        },
+        test::open_test_repo,
     };
     use futures::executor::block_on;
+    use gib_testkit::{TestFileSystem, make_basic_repo, make_packfile_repo, make_similar_commits};
     use hex_literal::hex;
 
     use super::*;
@@ -361,7 +359,7 @@ mod tests {
     fn read_non_deltified_commit() {
         let test_repo = make_packfile_repo().unwrap();
         let raw_object = block_on(lookup(
-            &test_repo.repo(),
+            &open_test_repo(&test_repo),
             ObjectId::from_hex(b"78dc5b70bd81aa46ec7dfce87a69826e354a916b").unwrap(),
         ))
         .unwrap()
@@ -380,7 +378,7 @@ a commit
     fn read_non_deltified_blob() {
         let test_repo = make_packfile_repo().unwrap();
         let raw_object = block_on(lookup(
-            &test_repo.repo(),
+            &open_test_repo(&test_repo),
             ObjectId::from_hex(b"e69de29bb2d1d6434b8b29ae775ad8c2e48c5391").unwrap(),
         ))
         .unwrap()
@@ -393,7 +391,7 @@ a commit
     fn read_non_deltified_tree() {
         let test_repo = make_packfile_repo().unwrap();
         let raw_object = block_on(lookup(
-            &test_repo.repo(),
+            &open_test_repo(&test_repo),
             ObjectId::from_hex(b"3a4df67dd7fd7cb3ca82d9896dbdd28053d39bdb").unwrap(),
         ))
         .unwrap()
@@ -409,7 +407,7 @@ a commit
     fn read_non_deltified_tag() {
         let test_repo = make_packfile_repo().unwrap();
         let raw_object = block_on(lookup(
-            &test_repo.repo(),
+            &open_test_repo(&test_repo),
             ObjectId::from_hex(b"fbb9ae04dfa95dc527c1e6dde722f9048c5262ef").unwrap(),
         ))
         .unwrap()
@@ -432,7 +430,7 @@ a tag
         let test_repo = make_basic_repo().unwrap();
         make_similar_commits(&test_repo).unwrap();
         test_repo.run_git(["gc"]).unwrap();
-        let repo = test_repo.repo();
+        let repo = open_test_repo(&test_repo);
         let cache = repo.index_cache.clone();
         let (mut pack, offset) = block_on(find_packed_object(
             &repo,
@@ -458,7 +456,7 @@ a tag
         let test_repo = make_basic_repo().unwrap();
         make_similar_commits(&test_repo).unwrap();
         test_repo.run_git(["gc"]).unwrap();
-        let repo = test_repo.repo();
+        let repo = open_test_repo(&test_repo);
         let cache = repo.index_cache.clone();
         let (mut pack, offset) = block_on(find_packed_object(
             &repo,
@@ -526,7 +524,7 @@ a tag
         make_similar_commits(&test_repo).unwrap();
         test_repo.run_git(["gc"]).unwrap();
         let raw_object = block_on(lookup(
-            &test_repo.repo(),
+            &open_test_repo(&test_repo),
             ObjectId::from_hex(b"9cded1c631096bb2caf71e1f2e0765bf6420d040").unwrap(),
         ))
         .unwrap()
@@ -577,7 +575,7 @@ a tag
         test_repo.run_git(["update-server-info"]).unwrap();
         assert!(test_repo.run_git(["rev-parse", "HEAD^"]).is_ok());
         let raw_object = block_on(lookup(
-            &test_repo.repo(),
+            &open_test_repo(&test_repo),
             ObjectId::from_hex(b"9cded1c631096bb2caf71e1f2e0765bf6420d040").unwrap(),
         ))
         .unwrap()

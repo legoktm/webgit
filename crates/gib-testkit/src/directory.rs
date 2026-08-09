@@ -1,17 +1,19 @@
-use crate::{
-    file_system::{DirEntry, Directory, File, FileSystemError, Offset},
-    test::repo::TestDirectory,
-};
-use core::cmp::min;
+use crate::repo::TestDirectory;
+use gib_fs::{DirEntry, Directory, File, FileSystemError, Offset};
 use std::{
+    cmp::min,
     fs,
-    io::{self, Read, Seek, Write},
+    io::{self, Read, Seek},
     path::PathBuf,
 };
 
+/// A directory handle rooted at a [`TestDirectory`], addressed by relative
+/// path.
 #[derive(Debug, Clone)]
 pub struct TestRepoDirectory {
+    /// The repository (or other) root this handle is relative to.
     pub root: TestDirectory,
+    /// The path of this directory below `root`.
     pub sub_path: PathBuf,
 }
 
@@ -22,7 +24,9 @@ pub struct TestRepoDirectory {
 /// paths as the lazy production implementation.
 #[derive(Debug)]
 pub struct TestRepoFile {
+    /// The absolute path of the file.
     pub path: PathBuf,
+    /// Kept alive so a `TempDir` root outlives handles into it.
     pub _dir: TestDirectory,
 }
 
@@ -115,7 +119,7 @@ impl File for TestRepoFile {
 mod tests {
     use super::*;
     use futures::executor::block_on;
-    use std::{fs::OpenOptions, sync::Arc};
+    use std::{fs::OpenOptions, io::Write, sync::Arc};
     use tempfile::tempdir;
 
     #[test]
