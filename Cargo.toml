@@ -13,6 +13,7 @@ futures = { version = "0.3.32", default-features = false }
 gib-fs = { path = "crates/gib-fs" }
 gib-hash = { path = "crates/gib-hash" }
 gib-object = { path = "crates/gib-object" }
+gib-pack = { path = "crates/gib-pack" }
 gib-parse = { path = "crates/gib-parse" }
 gib-ref = { path = "crates/gib-ref" }
 gib-testkit = { path = "crates/gib-testkit" }

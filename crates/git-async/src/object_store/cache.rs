@@ -1,15 +1,12 @@
 use crate::{
     error::GResult,
     file_system::{Directory, File},
-    object_store::{
-        index::{FanoutTable, ShortOffsetTable},
-        lookup::PackName,
-        pack::validate_packfile_version,
-    },
+    object_store::lookup::PackName,
     repo::RepoConfig,
 };
 use alloc::vec::Vec;
 use gib_fs::{PageCache, new_page_cache};
+use gib_pack::{FanoutTable, ShortOffsetTable, validate_packfile_version};
 
 /// A single pack's index metadata, plus a page cache for its `.idx` file that
 /// persists across object lookups so the binary-search reads are not re-fetched

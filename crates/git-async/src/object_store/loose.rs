@@ -59,7 +59,7 @@ pub(crate) async fn read_loose_object<F: FileSystem>(
 
 #[cfg(test)]
 mod tests {
-    use crate::{object_store::ObjectType, test::open_test_repo};
+    use crate::{object::ObjectType, test::open_test_repo};
     use futures::executor::block_on;
     use gib_testkit::make_basic_repo;
     use hex_literal::hex;

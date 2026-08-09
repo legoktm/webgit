@@ -3,7 +3,7 @@
 use crate::{file_system::FileSystemError, object::ObjectId, reference::RefName};
 use alloc::vec::Vec;
 use gib_object::ObjectError;
-use gib_parse::ParseError;
+use gib_pack::{PackError, PackObjectError};
 use gib_ref::RefError;
 use miniz_oxide::inflate::TINFLStatus;
 
@@ -95,50 +95,30 @@ impl From<ObjectError> for Error {
     }
 }
 
-#[derive(Debug)]
-pub(crate) enum InternalObjectError {
-    ExternalError(Error),
-    ObjectTooLarge,
-    ParseError { snippet: Vec<u8> },
-    MissingFields,
-    MalformedPackObject,
-    PackObjectDecompressError(TINFLStatus),
-}
-
-pub(crate) type IResult<T> = core::result::Result<T, InternalObjectError>;
-
-impl From<Error> for InternalObjectError {
-    fn from(value: Error) -> Self {
-        Self::ExternalError(value)
-    }
-}
-
-impl From<ParseError> for InternalObjectError {
-    fn from(value: ParseError) -> Self {
+impl From<PackError> for Error {
+    fn from(value: PackError) -> Self {
         match value {
-            ParseError::ParseError { input_snippet } => InternalObjectError::ParseError {
-                snippet: input_snippet,
-            },
-            ParseError::MissingFields => InternalObjectError::MissingFields,
+            PackError::FileSystem(e) => Self::FileSystem(e),
+            PackError::UnsupportedIndexVersion => Self::UnsupportedIndexVersion,
+            PackError::CorruptIndexFile => Self::CorruptIndexFile,
+            PackError::UnsupportedPackVersion => Self::UnsupportedPackVersion,
+            PackError::CorruptPackFile => Self::CorruptPackFile,
+            PackError::UnexpectedThinPack => Self::UnexpectedThinPack,
         }
     }
 }
 
-impl From<FileSystemError> for InternalObjectError {
-    fn from(value: FileSystemError) -> Self {
-        Self::ExternalError(value.into())
-    }
-}
-
-pub(crate) fn annotate_with_object_id(id: ObjectId) -> impl Fn(InternalObjectError) -> Error {
+/// Attach the [`ObjectId`] a lookup asked for to the errors `gib-pack` raises
+/// while reconstructing it.
+///
+/// The pack reader works from an offset and so cannot name the object itself,
+/// but every caller here does know which ID it was resolving — and an error
+/// that doesn't say which object is corrupt is much less useful.
+pub(crate) fn annotate_pack_object_error(id: ObjectId) -> impl Fn(PackObjectError) -> Error {
     move |internal| match internal {
-        InternalObjectError::ExternalError(error) => error,
-        InternalObjectError::ObjectTooLarge => Error::ObjectTooLarge(id),
-        InternalObjectError::MalformedPackObject => Error::MalformedPackObject(id),
-        InternalObjectError::ParseError { snippet } => Error::ObjectParseError { id, snippet },
-        InternalObjectError::MissingFields => Error::ObjectMissingRequiredFields(id),
-        InternalObjectError::PackObjectDecompressError(status) => {
-            Error::PackObjectDecompressError { id, status }
-        }
+        PackObjectError::Pack(error) => error.into(),
+        PackObjectError::ObjectTooLarge => Error::ObjectTooLarge(id),
+        PackObjectError::MalformedObject => Error::MalformedPackObject(id),
+        PackObjectError::Decompress(status) => Error::PackObjectDecompressError { id, status },
     }
 }

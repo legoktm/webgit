@@ -1,0 +1,18 @@
+[package]
+name = "gib-pack"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+gib-fs.workspace = true
+gib-hash.workspace = true
+gib-object.workspace = true
+miniz_oxide.workspace = true
+
+[dev-dependencies]
+futures = { workspace = true, features = ["async-await", "executor"] }
+gib-testkit.workspace = true
+hex-literal.workspace = true
+rand_core.workspace = true
+rand_pcg.workspace = true

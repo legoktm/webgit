@@ -17,6 +17,7 @@ accessory.workspace = true
 gib-fs.workspace = true
 gib-hash.workspace = true
 gib-object.workspace = true
+gib-pack.workspace = true
 gib-parse.workspace = true
 gib-ref.workspace = true
 hex.workspace = true

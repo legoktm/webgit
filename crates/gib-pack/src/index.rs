@@ -1,13 +1,10 @@
-use crate::{
-    error::{Error, GResult},
-    file_system::{File, Offset},
-    object::{ObjectId, ObjectIdPrefix, PrefixResolution},
-};
-use alloc::{vec, vec::Vec};
-use core::cmp::Ordering;
+use crate::{PackError, PackResult};
+use gib_fs::{File, Offset};
+use gib_hash::{ObjectId, ObjectIdPrefix, PrefixResolution};
+use std::cmp::Ordering;
 
-/// Where the sorted table of object IDs starts: past the magic number, the
-/// version and the fanout table.
+// Where the sorted table of object IDs starts: past the magic number, the
+// version and the fanout table.
 const IDS_OFFSET: Offset = Offset(
     4 // magic number
     + 4 // version
@@ -15,19 +12,19 @@ const IDS_OFFSET: Offset = Offset(
 );
 
 #[derive(Clone)]
-pub(crate) struct FanoutTable {
+pub struct FanoutTable {
     fanout: [u32; 256],
 }
 
 impl FanoutTable {
-    pub(crate) async fn load<F: File>(file: &mut F) -> GResult<Self> {
+    pub async fn load<F: File>(file: &mut F) -> PackResult<Self> {
         let mut buf = [0u8; 4 + 4 + 256 * 4];
         let read_size = file.read_segment(Offset(0), &mut buf).await?;
         if read_size != buf.len() {
-            return Err(Error::CorruptIndexFile);
+            return Err(PackError::CorruptIndexFile);
         }
         if buf[0..8] != [0xff, b't', b'O', b'c', 0, 0, 0, 2] {
-            return Err(Error::UnsupportedIndexVersion);
+            return Err(PackError::UnsupportedIndexVersion);
         }
         let mut fanout = [0u32; 256];
         for (entry_bytes, entry) in buf[8..].chunks(4).zip(fanout.iter_mut()) {
@@ -36,22 +33,22 @@ impl FanoutTable {
         Ok(Self { fanout })
     }
 
-    pub(crate) fn entry(&self, prefix: u8) -> u32 {
+    pub fn entry(&self, prefix: u8) -> u32 {
         self.fanout[usize::from(prefix)]
     }
 
-    pub(crate) fn total_objects(&self) -> u32 {
+    pub fn total_objects(&self) -> u32 {
         *self.fanout.last().unwrap()
     }
 }
 
 #[derive(Clone)]
-pub(crate) struct ShortOffsetTable {
+pub struct ShortOffsetTable {
     table: Vec<u8>,
 }
 
 impl ShortOffsetTable {
-    pub(crate) fn offset_of_table(total_objects: u32) -> Offset {
+    pub fn offset_of_table(total_objects: u32) -> Offset {
         Offset(
             4 // header
             + 4 // version
@@ -61,31 +58,31 @@ impl ShortOffsetTable {
         )
     }
 
-    pub(crate) async fn load<F: File>(file: &mut F, total_objects: u32) -> GResult<Self> {
+    pub async fn load<F: File>(file: &mut F, total_objects: u32) -> PackResult<Self> {
         let table_size: usize = usize::try_from(total_objects).unwrap() * 4;
         let mut table = vec![0u8; table_size];
         let read_size = file
             .read_segment(Self::offset_of_table(total_objects), &mut table)
             .await?;
         if read_size < table_size {
-            return Err(Error::CorruptIndexFile);
+            return Err(PackError::CorruptIndexFile);
         }
         Ok(Self { table })
     }
 
-    pub(crate) fn entry(&self, object_idx: u32) -> u32 {
+    pub fn entry(&self, object_idx: u32) -> u32 {
         let object_idx: usize = object_idx.try_into().unwrap();
         let entry_bytes = &self.table[(object_idx * 4)..((object_idx + 1) * 4)];
         u32::from_be_bytes(entry_bytes.try_into().unwrap())
     }
 }
 
-pub(crate) async fn find_object_in_pack_index<F: File>(
+pub async fn find_object_in_pack_index<F: File>(
     fanout: &FanoutTable,
     offsets: Option<&ShortOffsetTable>,
     idx_file: &mut F,
     id: ObjectId,
-) -> GResult<Option<Offset>> {
+) -> PackResult<Option<Offset>> {
     if let Some(obj_idx) = find_object_idx(fanout, idx_file, id).await? {
         let offset =
             get_obj_packfile_offset(offsets, idx_file, obj_idx, fanout.total_objects()).await?;
@@ -99,7 +96,7 @@ async fn find_object_idx<F: File>(
     fanout: &FanoutTable,
     idx_file: &mut F,
     id: ObjectId,
-) -> GResult<Option<u32>> {
+) -> PackResult<Option<u32>> {
     let (lower_bound, upper_bound) = fanout_bucket(fanout, id.bytes()[0]);
 
     let mut buf = [0u8; 20];
@@ -137,7 +134,7 @@ fn fanout_bucket(fanout: &FanoutTable, first_byte: u8) -> (u32, u32) {
 }
 
 /// Read the object ID at `obj_idx` in the index's sorted ID table.
-async fn read_object_id<F: File>(idx_file: &mut F, obj_idx: u32) -> GResult<ObjectId> {
+async fn read_object_id<F: File>(idx_file: &mut F, obj_idx: u32) -> PackResult<ObjectId> {
     let mut buf = [0u8; 20];
     idx_file
         .read_segment(IDS_OFFSET + u64::from(obj_idx) * 20, &mut buf)
@@ -157,11 +154,11 @@ async fn read_object_id<F: File>(idx_file: &mut F, obj_idx: u32) -> GResult<Obje
 /// Only the fanout bucket for the abbreviation's first byte is searched, which
 /// is sound because an abbreviation is at least four characters long, so every
 /// ID it covers shares that byte.
-pub(crate) async fn find_prefix_in_pack_index<F: File>(
+pub async fn find_prefix_in_pack_index<F: File>(
     fanout: &FanoutTable,
     idx_file: &mut F,
     prefix: &ObjectIdPrefix,
-) -> GResult<PrefixResolution> {
+) -> PackResult<PrefixResolution> {
     let (lower_bound, upper_bound) = fanout_bucket(fanout, prefix.first_byte());
 
     // Partition point: the first entry that does not sort before the prefix.
@@ -198,7 +195,7 @@ async fn get_obj_packfile_offset<F: File>(
     idx_file: &mut F,
     obj_idx: u32,
     total_objects: u32,
-) -> GResult<Offset> {
+) -> PackResult<Offset> {
     let packfile_offset_short = if let Some(offset_table) = offset_table {
         offset_table.entry(obj_idx)
     } else {
@@ -299,7 +296,7 @@ mod tests {
     struct MemIdx(Vec<u8>);
 
     impl File for MemIdx {
-        async fn read_all(&mut self) -> Result<Vec<u8>, crate::file_system::FileSystemError> {
+        async fn read_all(&mut self) -> Result<Vec<u8>, gib_fs::FileSystemError> {
             Ok(self.0.clone())
         }
 
@@ -307,7 +304,7 @@ mod tests {
             &mut self,
             offset: Offset,
             dest: &mut [u8],
-        ) -> Result<usize, crate::file_system::FileSystemError> {
+        ) -> Result<usize, gib_fs::FileSystemError> {
             let start = usize::try_from(offset.0).unwrap().min(self.0.len());
             let len = dest.len().min(self.0.len() - start);
             dest[..len].copy_from_slice(&self.0[start..(start + len)]);
