@@ -26,11 +26,11 @@ use crate::{
     error::{Error, GResult},
     file_system::{Directory, File, FileSystem, FileSystemError, Offset},
     object::ObjectId,
-    object_store::page_read::{CachingPageReader, PageCache, new_page_cache},
 };
 use alloc::{vec, vec::Vec};
 use bloom::BloomSettings;
 use core::cmp::Ordering;
+use gib_fs::{CachingPageReader, PageCache, new_page_cache};
 
 /// A commit's parent that is absent (root commit, or the second slot of a
 /// single-parent commit).

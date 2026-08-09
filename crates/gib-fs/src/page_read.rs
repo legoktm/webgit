@@ -1,8 +1,9 @@
-use core::cell::RefCell;
-use core::cmp::min;
+use std::cell::RefCell;
+use std::cmp::min;
+use std::collections::BTreeMap;
+use std::rc::Rc;
 
-use crate::file_system::{File, FileSystemError, Offset};
-use alloc::{collections::BTreeMap, rc::Rc, vec, vec::Vec};
+use crate::{File, FileSystemError, Offset};
 
 const PAGE_SIZE: usize = 4096;
 const PAGE_SIZE_U64: u64 = 4096;
@@ -14,13 +15,16 @@ const PAGE_SIZE_U64: u64 = 4096;
 /// an `await`, so concurrently-polled reads (e.g. via `join_all`) can share a
 /// cache without risking a `RefCell` double-borrow panic. The worst case for a
 /// race is two reads fetching the same page, which is merely redundant.
-pub(crate) type PageCache = Rc<RefCell<BTreeMap<Offset, Rc<[u8]>>>>;
+pub type PageCache = Rc<RefCell<BTreeMap<Offset, Rc<[u8]>>>>;
 
-pub(crate) fn new_page_cache() -> PageCache {
+/// Create an empty [`PageCache`].
+pub fn new_page_cache() -> PageCache {
     Rc::new(RefCell::new(BTreeMap::new()))
 }
 
-pub(crate) struct CachingPageReader<F> {
+/// A [`File`] wrapper that reads in 4 KiB pages and caches them, so repeated
+/// or overlapping reads of the same region cost one underlying read.
+pub struct CachingPageReader<F> {
     file: F,
     pages: PageCache,
 }
@@ -35,7 +39,7 @@ impl<F: File> CachingPageReader<F> {
     }
 
     /// Create a reader backed by an existing, shared page cache.
-    pub(crate) fn with_cache(file: F, pages: PageCache) -> Self {
+    pub fn with_cache(file: F, pages: PageCache) -> Self {
         Self { file, pages }
     }
 

@@ -10,11 +10,11 @@ use crate::{
         },
         loose::read_loose_object,
         pack::{form_deltified_chain, reconstruct_deltified_object_from_chain},
-        page_read::CachingPageReader,
     },
     repo::Repo,
 };
 use alloc::vec::Vec;
+use gib_fs::CachingPageReader;
 
 #[derive(Clone)]
 pub(crate) struct PackName {

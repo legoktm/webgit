@@ -5,11 +5,11 @@ use crate::{
         index::{FanoutTable, ShortOffsetTable},
         lookup::PackName,
         pack::validate_packfile_version,
-        page_read::{PageCache, new_page_cache},
     },
     repo::RepoConfig,
 };
 use alloc::vec::Vec;
+use gib_fs::{PageCache, new_page_cache};
 
 /// A single pack's index metadata, plus a page cache for its `.idx` file that
 /// persists across object lookups so the binary-search reads are not re-fetched

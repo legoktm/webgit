@@ -5,7 +5,6 @@ mod index;
 pub(crate) mod lookup;
 mod loose;
 mod pack;
-pub(crate) mod page_read;
 
 /// The type of a git object, as a plain (fieldless) enum
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
