@@ -13,7 +13,6 @@ categories = ["development-tools", "no-std"]
 all-features = true
 
 [dependencies]
-accessory.workspace = true
 gib-commitgraph.workspace = true
 gib-diff.workspace = true
 gib-fs.workspace = true
@@ -21,17 +20,9 @@ gib-hash.workspace = true
 gib-object.workspace = true
 gib-odb.workspace = true
 gib-pack.workspace = true
-gib-parse.workspace = true
 gib-ref.workspace = true
-hex.workspace = true
-jiff.workspace = true
 miniz_oxide.workspace = true
-nom.workspace = true
 
 [dev-dependencies]
 futures = { workspace = true, features = ["async-await", "executor"] }
 gib-testkit.workspace = true
-hex-literal.workspace = true
-rand_core.workspace = true
-rand_pcg.workspace = true
-tempfile.workspace = true

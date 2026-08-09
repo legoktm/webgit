@@ -66,8 +66,6 @@
 
 #![deny(clippy::all)]
 
-extern crate alloc;
-
 pub mod commit_graph;
 pub mod diff;
 pub mod error;

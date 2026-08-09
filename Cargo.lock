@@ -480,7 +480,6 @@ dependencies = [
 name = "git-async"
 version = "0.1.1"
 dependencies = [
- "accessory",
  "futures",
  "gib-commitgraph",
  "gib-diff",
@@ -489,17 +488,9 @@ dependencies = [
  "gib-object",
  "gib-odb",
  "gib-pack",
- "gib-parse",
  "gib-ref",
  "gib-testkit",
- "hex",
- "hex-literal",
- "jiff",
  "miniz_oxide",
- "nom",
- "rand_core",
- "rand_pcg",
- "tempfile",
 ]
 
 [[package]]

@@ -1,7 +1,6 @@
 //! A module for errors which may occur during the use of `git-async`
 
 use crate::{file_system::FileSystemError, object::ObjectId, reference::RefName};
-use alloc::vec::Vec;
 use gib_commitgraph::CommitGraphError;
 use gib_diff::DiffError;
 use gib_object::ObjectError;
@@ -13,14 +12,18 @@ use miniz_oxide::inflate::TINFLStatus;
 pub use gib_object::UnexpectedObjectType;
 
 #[expect(missing_docs)]
-pub type GResult<T> = core::result::Result<T, Error>;
+pub type GResult<T> = Result<T, Error>;
 
+/// Anything that can go wrong while reading a repository.
+///
+/// Each sub-crate raises its own error; this enum is where they are reunited,
+/// so a consumer needs to match on one type. The `From` impls below are the
+/// only place that translation happens.
 #[expect(missing_docs)]
 #[non_exhaustive]
 #[derive(Debug)]
 pub enum Error {
     FileSystem(FileSystemError),
-    PathError(Vec<u8>),
     LooseObjectDecompressError {
         #[expect(missing_docs)]
         id: ObjectId,
@@ -33,7 +36,6 @@ pub enum Error {
         #[expect(missing_docs)]
         status: TINFLStatus,
     },
-    FromHexError(hex::FromHexError),
     UnsupportedIndexVersion,
     CorruptIndexFile,
     CorruptCommitGraph,
@@ -56,7 +58,6 @@ pub enum Error {
     MissingObject(ObjectId),
     ObjectTooLarge(ObjectId),
     UnexpectedThinPack,
-    NotAnnotatedWithRepo,
     UnexpectedObjectType(UnexpectedObjectType),
     DiffCanceled,
     NotAGitRepository,
@@ -71,12 +72,6 @@ impl From<UnexpectedObjectType> for Error {
 impl From<FileSystemError> for Error {
     fn from(value: FileSystemError) -> Self {
         Self::FileSystem(value)
-    }
-}
-
-impl From<hex::FromHexError> for Error {
-    fn from(value: hex::FromHexError) -> Self {
-        Self::FromHexError(value)
     }
 }
 

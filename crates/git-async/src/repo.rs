@@ -10,9 +10,8 @@ use crate::{
         parse_packed_refs,
     },
 };
-use alloc::collections::{BTreeMap, BTreeSet};
-use alloc::vec::Vec;
 use gib_odb::ObjectDb;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Configuration for opening a repository
 pub struct RepoConfig {

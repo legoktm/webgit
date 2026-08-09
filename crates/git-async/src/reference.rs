@@ -134,7 +134,6 @@ mod test {
         reference::{RefName, RefTarget},
         test::open_test_repo,
     };
-    use core::matches;
     use futures::executor::block_on;
     use gib_testkit::{make_basic_repo, make_packfile_repo};
 
