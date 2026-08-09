@@ -2,6 +2,7 @@
 
 use crate::{file_system::FileSystemError, object::ObjectId, reference::RefName};
 use alloc::vec::Vec;
+use gib_commitgraph::CommitGraphError;
 use gib_object::ObjectError;
 use gib_pack::{PackError, PackObjectError};
 use gib_ref::RefError;
@@ -91,6 +92,15 @@ impl From<ObjectError> for Error {
         match value {
             ObjectError::Parse { id, snippet } => Self::ObjectParseError { id, snippet },
             ObjectError::MissingFields(id) => Self::ObjectMissingRequiredFields(id),
+        }
+    }
+}
+
+impl From<CommitGraphError> for Error {
+    fn from(value: CommitGraphError) -> Self {
+        match value {
+            CommitGraphError::FileSystem(e) => Self::FileSystem(e),
+            CommitGraphError::Corrupt => Self::CorruptCommitGraph,
         }
     }
 }

@@ -1,0 +1,13 @@
+[package]
+name = "gib-commitgraph"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+gib-fs.workspace = true
+gib-hash.workspace = true
+
+[dev-dependencies]
+futures = { workspace = true, features = ["async-await", "executor"] }
+gib-testkit.workspace = true

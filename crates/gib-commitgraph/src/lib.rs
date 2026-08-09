@@ -16,21 +16,43 @@
 //!
 //! Reference: `gitformat-commit-graph(5)`.
 
+#![deny(clippy::all)]
 // Chunk ids (oidf/oidl/bidx/bdat) and parent slots (parent1/parent2/parents)
 // follow git's own names, which pedantic flags as too similar.
 #![allow(clippy::similar_names)]
 
 pub mod bloom;
 
-use crate::{
-    error::{Error, GResult},
-    file_system::{Directory, File, FileSystem, FileSystemError, Offset},
-    object::ObjectId,
-};
-use alloc::{vec, vec::Vec};
 use bloom::BloomSettings;
-use core::cmp::Ordering;
-use gib_fs::{CachingPageReader, PageCache, new_page_cache};
+use gib_fs::{
+    CachingPageReader, Directory, File, FileSystem, FileSystemError, Offset, PageCache,
+    new_page_cache,
+};
+use gib_hash::ObjectId;
+use std::cmp::Ordering;
+
+/// Something went wrong reading a commit-graph that *is* one.
+///
+/// A file that is absent, of an unsupported form, or not a commit-graph at all
+/// is not an error: [`CommitGraph::open`] returns `Ok(None)` for those, so the
+/// caller falls back to reading commit objects. This type is for a file that
+/// claims to be a usable graph but then doesn't hold together.
+#[derive(Debug)]
+pub enum CommitGraphError {
+    #[expect(missing_docs)]
+    FileSystem(FileSystemError),
+    /// The graph's chunks are shorter than its own tables say they are, or a
+    /// record points outside them.
+    Corrupt,
+}
+
+impl From<FileSystemError> for CommitGraphError {
+    fn from(value: FileSystemError) -> Self {
+        Self::FileSystem(value)
+    }
+}
+
+type GResult<T> = Result<T, CommitGraphError>;
 
 /// A commit's parent that is absent (root commit, or the second slot of a
 /// single-parent commit).
@@ -86,7 +108,7 @@ impl<F: FileSystem> CommitGraph<F> {
     /// absent, wrong magic/version, the split form, or required chunks missing),
     /// so the caller can fall back to object reads. `Err` is reserved for I/O
     /// errors and structurally corrupt files.
-    pub(crate) async fn open(objects_dir: &F::Directory) -> GResult<Option<Self>> {
+    pub async fn open(objects_dir: &F::Directory) -> GResult<Option<Self>> {
         let info_dir = match objects_dir.open_subdir(b"info").await {
             Ok(dir) => dir,
             Err(FileSystemError::NotFound(_)) => return Ok(None),
@@ -273,7 +295,7 @@ impl<F: FileSystem> CommitGraph<F> {
     }
 
     /// Binary-search the sorted `OIDL` chunk for `id`, bounded by the fanout.
-    /// Mirrors [`crate::object_store::index`]'s pack-index search.
+    /// Mirrors `gib-pack`'s pack-index search.
     async fn position_of(
         &self,
         reader: &mut CachingPageReader<F::File>,
@@ -346,7 +368,7 @@ impl<F: FileSystem> CommitGraph<F> {
         start: u32,
         parents: &mut Vec<ObjectId>,
     ) -> GResult<()> {
-        let edge_offset = self.edge_offset.ok_or(Error::CorruptCommitGraph)?;
+        let edge_offset = self.edge_offset.ok_or(CommitGraphError::Corrupt)?;
         let mut index = start;
         loop {
             let raw =
@@ -390,7 +412,7 @@ async fn read_array<const N: usize, R: File>(reader: &mut R, offset: u64) -> GRe
     let mut buf = [0u8; N];
     let read = reader.read_segment(Offset(offset), &mut buf).await?;
     if read < N {
-        return Err(Error::CorruptCommitGraph);
+        return Err(CommitGraphError::Corrupt);
     }
     Ok(buf)
 }
@@ -400,7 +422,7 @@ async fn read_vec<R: File>(reader: &mut R, offset: u64, len: usize) -> GResult<V
     let mut buf = vec![0u8; len];
     let read = reader.read_segment(Offset(offset), &mut buf).await?;
     if read < len {
-        return Err(Error::CorruptCommitGraph);
+        return Err(CommitGraphError::Corrupt);
     }
     Ok(buf)
 }
@@ -408,7 +430,6 @@ async fn read_vec<R: File>(reader: &mut R, offset: u64, len: usize) -> GResult<V
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test::open_test_repo;
     use futures::executor::block_on;
     use gib_testkit::{TestFileSystem, TestRepo};
     use std::fs;
@@ -488,9 +509,6 @@ mod tests {
     }
 
     fn graph(repo: &TestRepo) -> TestGraph {
-        // Repo::open also loads the graph; assert that wiring works, then open a
-        // standalone instance for direct testing of the lower-level methods.
-        assert!(open_test_repo(repo).commit_graph().is_some());
         let objects_dir = block_on(repo.git_dir().open_subdir(b"objects")).unwrap();
         block_on(CommitGraph::open(&objects_dir))
             .unwrap()
@@ -501,24 +519,23 @@ mod tests {
     fn lookup_matches_commit_objects() {
         let (repo, oids) = graph_repo();
         let cg = graph(&repo);
-        let backing = open_test_repo(&repo);
         assert!(cg.has_bloom());
 
         for id in [
             oids.c2, oids.c3, oids.c4, oids.c5, oids.b1, oids.b2, oids.merge,
         ] {
             let (_pos, entry) = block_on(cg.lookup(id)).unwrap().expect("in graph");
-            let commit = block_on(backing.lookup_object(id))
-                .unwrap()
-                .commit()
-                .unwrap();
-            assert_eq!(entry.tree, commit.tree(), "tree of {id}");
-            assert_eq!(entry.parents, commit.parents().to_vec(), "parents of {id}");
-            assert_eq!(
-                entry.commit_time,
-                commit.commit_date().timestamp().as_second(),
-                "time of {id}"
-            );
+            // Compare against the commit object itself, as git reads it.
+            let field = |format: &str| {
+                let out = repo
+                    .run_git(["log", "-1", &format!("--format={format}"), &id.to_string()])
+                    .unwrap();
+                String::from_utf8(out.trim_ascii_end().to_vec()).unwrap()
+            };
+            assert_eq!(entry.tree.to_string(), field("%T"), "tree of {id}");
+            let parents: Vec<String> = entry.parents.iter().map(ObjectId::to_string).collect();
+            assert_eq!(parents.join(" "), field("%P"), "parents of {id}");
+            assert_eq!(entry.commit_time.to_string(), field("%ct"), "time of {id}");
         }
     }
 
@@ -623,3 +640,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod differential;

@@ -365,6 +365,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "gib-commitgraph"
+version = "0.0.0"
+dependencies = [
+ "futures",
+ "gib-fs",
+ "gib-hash",
+ "gib-testkit",
+]
+
+[[package]]
 name = "gib-fs"
 version = "0.0.0"
 dependencies = [
@@ -444,6 +454,7 @@ version = "0.1.1"
 dependencies = [
  "accessory",
  "futures",
+ "gib-commitgraph",
  "gib-fs",
  "gib-hash",
  "gib-object",
