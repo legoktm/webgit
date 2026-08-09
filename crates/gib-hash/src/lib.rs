@@ -12,7 +12,7 @@ use nom::{
 
 /// The ID of a git object
 ///
-/// `git-async` only supports SHA-1 repositories, so this is always 20 bytes or
+/// `gib` only supports SHA-1 repositories, so this is always 20 bytes or
 /// 40 hex characters
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Accessors)]
 pub struct ObjectId {

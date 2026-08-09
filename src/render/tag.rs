@@ -1,7 +1,7 @@
 use crate::cache::CachingRepo;
 use crate::error::GitContext;
 use crate::render::format_datetime;
-use git_async::reference::RefName;
+use gib::reference::RefName;
 use yew::prelude::*;
 
 pub(crate) async fn build_tag(

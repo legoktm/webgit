@@ -21,7 +21,7 @@ use crate::render::yield_to_browser;
 use futures::FutureExt;
 use futures::future::{Either, LocalBoxFuture, select};
 use futures::stream::{FuturesUnordered, StreamExt};
-use git_async::object::{Object, ObjectId, Tree, TreeEntryType};
+use gib::object::{Object, ObjectId, Tree, TreeEntryType};
 use std::collections::VecDeque;
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::{JsCast, JsValue};
@@ -358,7 +358,7 @@ impl<'a, S: ObjectSource> Walk<'a, S> {
                                     .object(id)
                                     .await?
                                     .blob()
-                                    .map_err(git_async::error::Error::from)
+                                    .map_err(gib::error::Error::from)
                                     .context("expected a blob")?
                                     .data_owned())
                             }
@@ -389,7 +389,7 @@ impl<'a, S: ObjectSource> Walk<'a, S> {
                         repo.object(id)
                             .await?
                             .tree()
-                            .map_err(git_async::error::Error::from)
+                            .map_err(gib::error::Error::from)
                             .context("expected a tree")
                     }
                     .await;
@@ -845,7 +845,7 @@ fn append(
 #[cfg(test)]
 mod walk_tests {
     use super::*;
-    use git_async::object::{ObjectType, RawObject};
+    use gib::object::{ObjectType, RawObject};
     use std::cell::{Cell, RefCell};
     use std::collections::BTreeMap;
 

@@ -1,7 +1,24 @@
 [workspace]
 members = ["crates/*"]
 # Make bare `cargo test`/`build` in the root cover the library crates too.
-default-members = [".", "crates/*"]
+#
+# gib-testkit is deliberately absent: `trunk build` builds the default members
+# for wasm32, and the testkit shells out to `git` and uses unix-only APIs, so it
+# cannot be built for that target. It is still covered by `cargo test
+# --workspace`, and every crate that needs it takes it as a dev-dependency.
+default-members = [
+    ".",
+    "crates/gib",
+    "crates/gib-commitgraph",
+    "crates/gib-diff",
+    "crates/gib-fs",
+    "crates/gib-hash",
+    "crates/gib-object",
+    "crates/gib-odb",
+    "crates/gib-pack",
+    "crates/gib-parse",
+    "crates/gib-ref",
+]
 
 [workspace.dependencies]
 accessory = "2.1.0"
@@ -10,6 +27,7 @@ comrak = { version = "0.54.0", default-features = false }
 console_error_panic_hook = "0.1"
 crc32fast = { version = "1.5.0", default-features = false }
 futures = { version = "0.3.32", default-features = false }
+gib = { path = "crates/gib" }
 gib-commitgraph = { path = "crates/gib-commitgraph" }
 gib-diff = { path = "crates/gib-diff" }
 gib-fs = { path = "crates/gib-fs" }
@@ -20,7 +38,6 @@ gib-pack = { path = "crates/gib-pack" }
 gib-parse = { path = "crates/gib-parse" }
 gib-ref = { path = "crates/gib-ref" }
 gib-testkit = { path = "crates/gib-testkit" }
-git-async = { path = "crates/git-async" }
 git-version = "0.3.9"
 hex = { version = "0.4.3", default-features = false, features = [] }
 hex-literal = "1.1.0"
@@ -91,7 +108,7 @@ crate-type = ["cdylib"]
 [dependencies]
 anyhow.workspace = true
 futures = { workspace = true, features = ["alloc", "async-await"] }
-git-async.workspace = true
+gib.workspace = true
 wasm-bindgen.workspace = true
 wasm-bindgen-futures.workspace = true
 js-sys.workspace = true

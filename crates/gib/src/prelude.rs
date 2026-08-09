@@ -7,7 +7,7 @@
 //!
 //! ```
 //! # #[allow(unused_imports)]
-//! use git_async::prelude::*;
+//! use gib::prelude::*;
 //! ```
 
 use crate::{

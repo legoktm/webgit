@@ -2,7 +2,7 @@ use crate::{
     console_log,
     fetch::{fetch_bytes, fetch_text},
 };
-use git_async::file_system::{DirEntry, Directory, File, FileSystem, FileSystemError, Offset};
+use gib::file_system::{DirEntry, Directory, File, FileSystem, FileSystemError, Offset};
 use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{DomParser, SupportedType};
 

@@ -12,7 +12,7 @@ use crate::archive::{ArchiveEntry, EntryKind, collect_entries, stream_tar_gz};
 use crate::cache::CachingRepo;
 use crate::render::{use_blob_url, yield_to_browser};
 use crate::stats::format_bytes;
-use git_async::object::{Commit, Tree};
+use gib::object::{Commit, Tree};
 use std::cell::Cell;
 use wasm_bindgen::JsCast;
 use web_sys::Blob;

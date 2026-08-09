@@ -3,7 +3,7 @@ use crate::{
     render::{CommitRow, apply_decorations, commits_table, decoration_map, walk_commits_streamed},
     route::log_url,
 };
-use git_async::object::Commit;
+use gib::object::Commit;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use yew::prelude::*;

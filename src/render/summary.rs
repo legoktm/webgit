@@ -6,7 +6,7 @@ use crate::{
         tags_section,
     },
 };
-use git_async::object::Commit;
+use gib::object::Commit;
 use std::cell::RefCell;
 use std::rc::Rc;
 use yew::prelude::*;

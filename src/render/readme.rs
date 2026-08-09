@@ -1,5 +1,5 @@
 use crate::cache::CachingRepo;
-use git_async::object::{Tree, TreeEntryType};
+use gib::object::{Tree, TreeEntryType};
 use web_sys::HtmlIFrameElement;
 use yew::prelude::*;
 

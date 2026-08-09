@@ -365,6 +365,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "gib"
+version = "0.0.0"
+dependencies = [
+ "futures",
+ "gib-commitgraph",
+ "gib-diff",
+ "gib-fs",
+ "gib-hash",
+ "gib-object",
+ "gib-odb",
+ "gib-pack",
+ "gib-ref",
+ "gib-testkit",
+ "miniz_oxide",
+]
+
+[[package]]
 name = "gib-commitgraph"
 version = "0.0.0"
 dependencies = [
@@ -474,23 +491,6 @@ dependencies = [
  "futures",
  "gib-fs",
  "tempfile",
-]
-
-[[package]]
-name = "git-async"
-version = "0.1.1"
-dependencies = [
- "futures",
- "gib-commitgraph",
- "gib-diff",
- "gib-fs",
- "gib-hash",
- "gib-object",
- "gib-odb",
- "gib-pack",
- "gib-ref",
- "gib-testkit",
- "miniz_oxide",
 ]
 
 [[package]]
@@ -1677,7 +1677,7 @@ dependencies = [
  "comrak",
  "console_error_panic_hook",
  "futures",
- "git-async",
+ "gib",
  "git-version",
  "insta",
  "jiff",

@@ -20,10 +20,10 @@
 //! # Example
 //!
 //! ```
-//! # use git_async::Repo;
-//! # use git_async::prelude::*;
-//! # use git_async::error::GResult;
-//! # use git_async::file_system::{File, Directory, FileSystem, FileSystemError, Offset, DirEntry};
+//! # use gib::Repo;
+//! # use gib::prelude::*;
+//! # use gib::error::GResult;
+//! # use gib::file_system::{File, Directory, FileSystem, FileSystemError, Offset, DirEntry};
 //! # struct MyFile;
 //! # impl File for MyFile {
 //! #     async fn read_all(&mut self) -> Result<Vec<u8>, FileSystemError> { unimplemented!() }

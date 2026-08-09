@@ -1,13 +1,13 @@
 use crate::fs::HttpFilesystem;
-use git_async::Repo;
-use git_async::commit_graph::bloom::{BloomSettings, path_maybe_changed};
-use git_async::diff::TreeDiff;
-use git_async::error::{Error as GitError, GResult};
-use git_async::object::{
+use gib::Repo;
+use gib::commit_graph::bloom::{BloomSettings, path_maybe_changed};
+use gib::diff::TreeDiff;
+use gib::error::{Error as GitError, GResult};
+use gib::object::{
     Commit, Object, ObjectId, ObjectIdPrefix, ObjectType, PrefixResolution, RawObject, Tree,
 };
-use git_async::prelude::*;
-use git_async::reference::{Ref, RefEntry, RefName};
+use gib::prelude::*;
+use gib::reference::{Ref, RefEntry, RefName};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
@@ -107,7 +107,7 @@ impl CachingRepo {
     }
 
     // --- Re-implementations that call lookup_object internally ---------------
-    // These mirror the git_async methods of the same name but route every
+    // These mirror the gib methods of the same name but route every
     // lookup through self.lookup_object so the cache is always consulted.
 
     pub(crate) async fn peel_ref_to_commit(&self, r: &Ref) -> GResult<Option<Commit>> {
@@ -511,7 +511,7 @@ impl CachingRepo {
         &self,
         records: &[(
             ObjectId,
-            git_async::commit_graph::CommitGraphEntry,
+            gib::commit_graph::CommitGraphEntry,
             Option<Vec<u8>>,
         )],
     ) {

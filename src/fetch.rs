@@ -1,4 +1,4 @@
-use git_async::file_system::FileSystemError;
+use gib::file_system::FileSystemError;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use wasm_bindgen::{JsCast, JsValue};

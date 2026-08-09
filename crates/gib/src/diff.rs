@@ -5,7 +5,7 @@
 //! it diffs two trees through the repository's object database.
 //!
 //! ```
-//! # use git_async::{diff::TreeDiff, error::GResult, object::Tree, Repo, file_system::FileSystem};
+//! # use gib::{diff::TreeDiff, error::GResult, object::Tree, Repo, file_system::FileSystem};
 //! async fn changed_files<F: FileSystem>(
 //!     repo: &Repo<F>,
 //!     left: &Tree,

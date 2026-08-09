@@ -1,5 +1,5 @@
 use crate::render::{is_binary, use_object_url};
-use git_async::object::ObjectId;
+use gib::object::ObjectId;
 use std::rc::Rc;
 use yew::prelude::*;
 

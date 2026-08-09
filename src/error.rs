@@ -1,5 +1,5 @@
-use git_async::error::Error as GitError;
-use git_async::file_system::FileSystemError;
+use gib::error::Error as GitError;
+use gib::file_system::FileSystemError;
 
 pub(crate) trait GitContext<T> {
     fn context<C: std::fmt::Display>(self, msg: C) -> anyhow::Result<T>;

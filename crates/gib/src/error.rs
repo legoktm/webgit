@@ -1,4 +1,4 @@
-//! A module for errors which may occur during the use of `git-async`
+//! A module for errors which may occur during the use of `gib`
 
 use crate::{file_system::FileSystemError, object::ObjectId, reference::RefName};
 use gib_commitgraph::CommitGraphError;

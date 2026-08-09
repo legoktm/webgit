@@ -2,9 +2,9 @@ use crate::cache::CachingRepo;
 use crate::error::GitContext;
 use crate::render::{format_datetime, is_binary, yield_to_browser};
 use futures::stream::{FuturesOrdered, StreamExt};
-use git_async::diff::{DiffEntry, TreeDiff};
-use git_async::error::Error as GitError;
-use git_async::object::{Object, ObjectId, ObjectIdPrefix, PrefixResolution};
+use gib::diff::{DiffEntry, TreeDiff};
+use gib::error::Error as GitError;
+use gib::object::{Object, ObjectId, ObjectIdPrefix, PrefixResolution};
 use similar::{ChangeTag, TextDiffConfig};
 use yew::prelude::*;
 

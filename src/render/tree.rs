@@ -1,5 +1,5 @@
 use crate::route::{encode_component, encode_path};
-use git_async::object::{Tree, TreeEntryType};
+use gib::object::{Tree, TreeEntryType};
 use yew::prelude::*;
 
 fn mode_string(entry_type: TreeEntryType) -> &'static str {

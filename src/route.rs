@@ -13,8 +13,8 @@ use crate::render::summary::{SummaryProps, build_summary};
 use crate::render::tag::{TagProps, build_tag};
 use crate::render::tree::{TreeProps, build_tree_props};
 use crate::render::{commit_for_entry, head_branch_name};
-use git_async::object::{ObjectId, Tree, TreeEntryType};
-use git_async::reference::RefName;
+use gib::object::{ObjectId, Tree, TreeEntryType};
+use gib::reference::RefName;
 use std::rc::Rc;
 
 // ---------------------------------------------------------------------------
@@ -301,7 +301,7 @@ pub(crate) fn active_tab(route: &Route) -> &'static str {
 async fn resolve_ref_to_commit(
     repo: &CachingRepo,
     name: &str,
-) -> anyhow::Result<(git_async::object::Commit, RefKind)> {
+) -> anyhow::Result<(gib::object::Commit, RefKind)> {
     let refs = repo.all_refs().await.context("list refs")?;
     let tags_ref = RefName::Ref(format!("tags/{name}").into_bytes());
     if let Some(entry) = refs.get(&tags_ref)
@@ -358,7 +358,7 @@ pub(crate) enum LoadedView {
 /// missing objects) propagate so `RouteView` can show them in the content area.
 pub(crate) async fn build_route(
     hash: &str,
-    head_commit: &git_async::object::Commit,
+    head_commit: &gib::object::Commit,
     root_tree: &Tree,
     repo: &Rc<CachingRepo>,
     clone_url: &Rc<String>,
@@ -377,7 +377,7 @@ pub(crate) async fn build_route(
         )),
         Route::Log { offset, head, path } => {
             let resolved;
-            let log_commit: &git_async::object::Commit = match &head {
+            let log_commit: &gib::object::Commit = match &head {
                 Some(name) => {
                     resolved = resolve_ref_to_commit(repo, name).await?.0;
                     &resolved
@@ -419,7 +419,7 @@ pub(crate) async fn build_route(
                     .await
                     .context(format!("lookup tree for {ref_name}"))?
                     .tree()
-                    .map_err(git_async::error::Error::from)
+                    .map_err(gib::error::Error::from)
                     .context(format!("expected tree for {ref_name}"))?;
                 &resolved_tree
             } else {
@@ -442,7 +442,7 @@ pub(crate) async fn build_route(
             // Both the commit and its tree, where the tree route needs only the
             // tree: the commit's id and date go into the archive itself.
             let resolved_commit;
-            let commit: &git_async::object::Commit = match &head {
+            let commit: &gib::object::Commit = match &head {
                 Some(name) => {
                     resolved_commit = resolve_ref_to_commit(repo, name).await?.0;
                     &resolved_commit
@@ -456,7 +456,7 @@ pub(crate) async fn build_route(
                     .await
                     .context("lookup tree to archive")?
                     .tree()
-                    .map_err(git_async::error::Error::from)
+                    .map_err(gib::error::Error::from)
                     .context("expected a tree to archive")?;
                 &resolved_tree
             } else {

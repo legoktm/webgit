@@ -1,6 +1,6 @@
 use crate::cache::CachingRepo;
 use crate::render::collect_refs;
-use git_async::reference::{RefName, RefTarget};
+use gib::reference::{RefName, RefTarget};
 use git_version::git_version;
 use std::rc::Rc;
 use yew::prelude::*;

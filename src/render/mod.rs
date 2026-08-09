@@ -1,7 +1,7 @@
 use crate::cache::CachingRepo;
 use crate::route::encode_component;
-use git_async::object::{Commit, ObjectId, TreeEntryType};
-use git_async::reference::{RefEntry, RefName, RefTarget};
+use gib::object::{Commit, ObjectId, TreeEntryType};
+use gib::reference::{RefEntry, RefName, RefTarget};
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
 use std::rc::Rc;
@@ -502,7 +502,7 @@ pub(crate) async fn decoration_map(repo: &CachingRepo) -> BTreeMap<ObjectId, Vec
 }
 
 /// The id of the entry named `name` in `tree`, or `None` if absent.
-fn entry_id(tree: &git_async::object::Tree, name: &str) -> Option<ObjectId> {
+fn entry_id(tree: &gib::object::Tree, name: &str) -> Option<ObjectId> {
     tree.entries()
         .find(|e| e.name() == name.as_bytes())
         .map(|e| e.id())
