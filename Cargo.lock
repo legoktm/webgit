@@ -375,6 +375,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "gib-diff"
+version = "0.0.0"
+dependencies = [
+ "accessory",
+ "futures",
+ "gib-fs",
+ "gib-hash",
+ "gib-object",
+ "gib-odb",
+ "gib-testkit",
+]
+
+[[package]]
 name = "gib-fs"
 version = "0.0.0"
 dependencies = [
@@ -470,6 +483,7 @@ dependencies = [
  "accessory",
  "futures",
  "gib-commitgraph",
+ "gib-diff",
  "gib-fs",
  "gib-hash",
  "gib-object",

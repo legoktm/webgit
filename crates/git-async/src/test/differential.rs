@@ -638,10 +638,9 @@ fn trees_packed() {
 // Diff
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "diff")]
 mod diff_tests {
     use super::*;
-    use crate::diff::{DiffEntry, TreeDiff};
+    use crate::diff::DiffEntry;
 
     /// Classify a tree entry the way git's raw diff status does: a mode change
     /// within one kind is a modification, a change of kind is a typechange.
@@ -708,7 +707,7 @@ mod diff_tests {
 
         let left = tree_of(&repo, git_oid(test_repo, left_rev));
         let right = tree_of(&repo, git_oid(test_repo, right_rev));
-        let diff = block_on(TreeDiff::new(&repo, &left, &right)).unwrap();
+        let diff = block_on(repo.tree_diff(&left, &right)).unwrap();
         let actual: BTreeSet<String> = diff.entries().iter().map(render).collect();
         let only_ours: Vec<&String> = actual.difference(&expected).collect();
         let only_gits: Vec<&String> = expected.difference(&actual).collect();

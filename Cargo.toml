@@ -11,6 +11,7 @@ console_error_panic_hook = "0.1"
 crc32fast = { version = "1.5.0", default-features = false }
 futures = { version = "0.3.32", default-features = false }
 gib-commitgraph = { path = "crates/gib-commitgraph" }
+gib-diff = { path = "crates/gib-diff" }
 gib-fs = { path = "crates/gib-fs" }
 gib-hash = { path = "crates/gib-hash" }
 gib-object = { path = "crates/gib-object" }
@@ -90,7 +91,7 @@ crate-type = ["cdylib"]
 [dependencies]
 anyhow.workspace = true
 futures = { workspace = true, features = ["alloc", "async-await"] }
-git-async = { workspace = true, features = ["diff"] }
+git-async.workspace = true
 wasm-bindgen.workspace = true
 wasm-bindgen-futures.workspace = true
 js-sys.workspace = true

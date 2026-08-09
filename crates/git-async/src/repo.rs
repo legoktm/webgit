@@ -1,8 +1,9 @@
 use crate::{
     commit_graph::CommitGraph,
+    diff::TreeDiff,
     error::{Error, GResult},
     file_system::{Directory, FileSystem, FileSystemError, read_file_if_exists, search_for_files},
-    object::{Object, ObjectId, ObjectIdPrefix, PrefixResolution, RawObject},
+    object::{Object, ObjectId, ObjectIdPrefix, PrefixResolution, RawObject, Tree},
     prelude::RefExt,
     reference::{
         Ref, RefEntry, RefName, RefTarget, lookup_loose_ref, lookup_ref, parse_info_refs,
@@ -232,6 +233,24 @@ impl<F: FileSystem> Repo<F> {
     /// Use [`Object::from_raw`] to parse the result into a typed object.
     pub async fn lookup_raw(&self, id: ObjectId) -> GResult<Option<RawObject>> {
         Ok(self.odb.lookup(id).await?)
+    }
+
+    /// Diff two trees, reading any sub-trees from this repository.
+    pub async fn tree_diff(&self, left: &Tree, right: &Tree) -> GResult<TreeDiff> {
+        Ok(TreeDiff::new(&self.odb, left, right).await?)
+    }
+
+    /// Diff two trees, stopping early if `cancel` returns `true`.
+    ///
+    /// `cancel` is polled regularly during the walk, so a long diff started by
+    /// one task can be abandoned by another.
+    pub async fn tree_diff_cancelable(
+        &self,
+        left: &Tree,
+        right: &Tree,
+        cancel: impl AsyncFnMut() -> bool,
+    ) -> GResult<TreeDiff> {
+        Ok(TreeDiff::new_cancelable(&self.odb, left, right, cancel).await?)
     }
 }
 

@@ -3,6 +3,7 @@
 use crate::{file_system::FileSystemError, object::ObjectId, reference::RefName};
 use alloc::vec::Vec;
 use gib_commitgraph::CommitGraphError;
+use gib_diff::DiffError;
 use gib_object::ObjectError;
 use gib_odb::OdbError;
 use gib_pack::PackError;
@@ -93,6 +94,18 @@ impl From<ObjectError> for Error {
         match value {
             ObjectError::Parse { id, snippet } => Self::ObjectParseError { id, snippet },
             ObjectError::MissingFields(id) => Self::ObjectMissingRequiredFields(id),
+        }
+    }
+}
+
+impl From<DiffError> for Error {
+    fn from(value: DiffError) -> Self {
+        match value {
+            DiffError::Canceled => Self::DiffCanceled,
+            DiffError::Odb(e) => e.into(),
+            DiffError::Object(e) => e.into(),
+            DiffError::MissingObject(id) => Self::MissingObject(id),
+            DiffError::UnexpectedObjectType(e) => Self::UnexpectedObjectType(e),
         }
     }
 }
