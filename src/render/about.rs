@@ -81,9 +81,9 @@ pub(crate) fn about_view(props: &AboutProps) -> Html {
                 </tbody>
             </table>
 
-            <h3 class="summary-heading">{ "viewer" }</h3>
+            <h3 class="summary-heading">{ "gib viewer" }</h3>
             <p>
-                { "This viewer allows you to view repositories entirely \
+                { "gib (\"git-in-browser\") allows you to view repositories entirely \
                    client-side. Objects are fetched as needed and stored in \
                    IndexedDB, similar to how " }
                 <code>{ "git" }</code>
