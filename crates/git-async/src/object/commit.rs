@@ -6,13 +6,12 @@ use crate::{
         header::{ObjectHeaderIter, RangeObjectHeader},
         parse_author_committer_tagger,
     },
-    parsing::ParseError,
     repo::Repo,
-    subslice_range::SubsliceRange,
 };
 use accessory::Accessors;
 use alloc::vec::Vec;
 use core::ops::Range;
+use gib_parse::{ParseError, SubsliceRange};
 use jiff::Zoned;
 use nom::{Parser, combinator::all_consuming};
 

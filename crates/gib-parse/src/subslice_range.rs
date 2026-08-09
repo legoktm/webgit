@@ -1,6 +1,6 @@
-use core::ops::Range;
+use std::ops::Range;
 
-pub(crate) trait SubsliceRange {
+pub trait SubsliceRange {
     fn subslice_range_stable(&self, subslice: &Self) -> Option<Range<usize>>;
 }
 

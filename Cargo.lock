@@ -365,11 +365,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "gib-hash"
+version = "0.0.0"
+dependencies = [
+ "accessory",
+ "gib-parse",
+ "hex",
+ "nom",
+]
+
+[[package]]
+name = "gib-parse"
+version = "0.0.0"
+dependencies = [
+ "nom",
+]
+
+[[package]]
 name = "git-async"
 version = "0.1.1"
 dependencies = [
  "accessory",
  "futures",
+ "gib-hash",
+ "gib-parse",
  "hex",
  "hex-literal",
  "jiff",

@@ -3,11 +3,11 @@
 use crate::{
     file_system::FileSystemError,
     object::{ObjectId, ObjectType},
-    parsing::ParseError,
     reference::RefName,
 };
 use accessory::Accessors;
 use alloc::vec::Vec;
+use gib_parse::ParseError;
 use miniz_oxide::inflate::TINFLStatus;
 
 #[expect(missing_docs)]

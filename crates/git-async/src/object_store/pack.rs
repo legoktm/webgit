@@ -174,7 +174,7 @@ async fn read_pack_object_header<F: File>(
             if eof_pos - pos < 20 {
                 return Err(Error::CorruptPackFile.into());
             }
-            base_id.bytes.copy_from_slice(&buf[pos..(pos + 20)]);
+            *base_id = ObjectId::from_bytes(<[u8; 20]>::try_from(&buf[pos..(pos + 20)]).unwrap());
             pos += 20;
         }
     }

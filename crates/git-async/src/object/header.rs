@@ -1,8 +1,8 @@
-use crate::{parsing::ParseResult, subslice_range::SubsliceRange};
 use accessory::Accessors;
 use alloc::vec::Vec;
 use core::iter::FusedIterator;
 use core::ops::Range;
+use gib_parse::{ParseResult, SubsliceRange};
 use nom::{
     Parser,
     bytes::complete::take_till,

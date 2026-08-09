@@ -10,11 +10,11 @@ use crate::{
     error::{Error, GResult},
     file_system::{Directory, File, FileSystem, FileSystemError, read_file_if_exists},
     object::{Commit, ObjectId, Tree},
-    parsing::ParseResult,
     repo::Repo,
 };
 use accessory::Accessors;
 use alloc::vec::Vec;
+use gib_parse::ParseResult;
 use nom::{
     Parser,
     branch::alt,

@@ -2,13 +2,12 @@ use crate::{
     error::GResult,
     file_system::FileSystem,
     object::{Object, ObjectId},
-    parsing::{ParseError, ParseResult},
     repo::Repo,
-    subslice_range::SubsliceRange,
 };
 use accessory::Accessors;
 use alloc::vec::Vec;
 use core::{fmt::Debug, iter::FusedIterator, ops::Range};
+use gib_parse::{ParseError, ParseResult, SubsliceRange};
 use nom::{
     Parser,
     branch::alt,

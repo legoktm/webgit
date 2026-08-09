@@ -1,15 +1,12 @@
-use crate::{
-    object::{
-        ObjectId, ObjectType,
-        header::{ObjectHeaderIter, RangeObjectHeader},
-        parse_author_committer_tagger,
-    },
-    parsing::ParseError,
-    subslice_range::SubsliceRange,
+use crate::object::{
+    ObjectId, ObjectType,
+    header::{ObjectHeaderIter, RangeObjectHeader},
+    parse_author_committer_tagger,
 };
 use accessory::Accessors;
 use alloc::vec::Vec;
 use core::ops::Range;
+use gib_parse::{ParseError, SubsliceRange};
 use jiff::Zoned;
 use nom::{Parser, combinator::all_consuming};
 

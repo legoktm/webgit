@@ -1,0 +1,11 @@
+[package]
+name = "gib-hash"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+accessory.workspace = true
+gib-parse.workspace = true
+hex.workspace = true
+nom.workspace = true

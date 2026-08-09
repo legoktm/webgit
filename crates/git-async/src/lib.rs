@@ -76,9 +76,7 @@ pub mod object;
 pub mod reference;
 
 mod object_store;
-mod parsing;
 mod repo;
-mod subslice_range;
 
 pub use repo::Repo;
 pub use repo::RepoConfig;

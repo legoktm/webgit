@@ -1,8 +1,7 @@
-use alloc::vec::Vec;
-use core::cmp;
+use std::cmp;
 
 #[derive(Debug)]
-pub(crate) enum ParseError {
+pub enum ParseError {
     ParseError { input_snippet: Vec<u8> },
     MissingFields,
 }
@@ -38,4 +37,4 @@ impl From<nom::Err<ParseError>> for ParseError {
     }
 }
 
-pub(crate) type ParseResult<I, T> = nom::IResult<I, T, ParseError>;
+pub type ParseResult<I, T> = nom::IResult<I, T, ParseError>;
