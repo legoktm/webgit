@@ -18,6 +18,7 @@ gib-commitgraph.workspace = true
 gib-fs.workspace = true
 gib-hash.workspace = true
 gib-object.workspace = true
+gib-odb.workspace = true
 gib-pack.workspace = true
 gib-parse.workspace = true
 gib-ref.workspace = true

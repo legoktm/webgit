@@ -1,0 +1,18 @@
+[package]
+name = "gib-odb"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+gib-fs.workspace = true
+gib-hash.workspace = true
+gib-object.workspace = true
+gib-pack.workspace = true
+hex.workspace = true
+miniz_oxide.workspace = true
+
+[dev-dependencies]
+futures = { workspace = true, features = ["async-await", "executor"] }
+gib-testkit.workspace = true
+hex-literal.workspace = true

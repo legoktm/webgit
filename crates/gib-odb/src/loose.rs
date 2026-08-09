@@ -1,25 +1,20 @@
-use gib_object::parse_header;
+use crate::{OdbError, OdbResult};
+use gib_fs::{Directory, File, FileSystem, FileSystemError};
+use gib_hash::ObjectId;
+use gib_object::{RawObject, parse_header};
 use miniz_oxide::inflate::decompress_to_vec_zlib;
 
-use crate::{
-    error::{Error, GResult},
-    file_system::{Directory, File, FileSystem, FileSystemError},
-    object::ObjectId,
-    object_store::RawObject,
-    repo::Repo,
-};
-
+/// Open `objects/ab/cdef…` for `id`, or `None` if it is not there.
 async fn get_loose_object_file<F: FileSystem>(
-    repo: &Repo<F>,
+    objects_dir: &F::Directory,
     id: ObjectId,
-) -> GResult<Option<F::File>> {
+) -> OdbResult<Option<F::File>> {
     let (prefix, suffix) = id.bytes().split_at(1);
     let mut prefix_buf = [0u8; 2];
     hex::encode_to_slice(prefix, &mut prefix_buf).unwrap();
     let mut suffix_buf = [0u8; 2 * 19];
     hex::encode_to_slice(suffix, &mut suffix_buf).unwrap();
-    let mut dir = repo.git_dir.open_subdir(b"objects").await?;
-    dir = match dir.open_subdir(&prefix_buf).await {
+    let dir = match objects_dir.open_subdir(&prefix_buf).await {
         Ok(d) => d,
         Err(FileSystemError::NotFound(_)) => return Ok(None),
         Err(e) => return Err(e.into()),
@@ -33,10 +28,10 @@ async fn get_loose_object_file<F: FileSystem>(
 }
 
 pub(crate) async fn read_loose_object<F: FileSystem>(
-    repo: &Repo<F>,
+    objects_dir: &F::Directory,
     id: ObjectId,
-) -> GResult<Option<RawObject>> {
-    let file = get_loose_object_file(repo, id).await?;
+) -> OdbResult<Option<RawObject>> {
+    let file = get_loose_object_file::<F>(objects_dir, id).await?;
     let Some(mut file) = file else {
         return Ok(None);
     };
@@ -46,11 +41,12 @@ pub(crate) async fn read_loose_object<F: FileSystem>(
         Err(FileSystemError::NotFound(_)) => return Ok(None),
         Err(e) => return Err(e.into()),
     };
-    let data = decompress_to_vec_zlib(&data).map_err(|e| Error::LooseObjectDecompressError {
+    let data = decompress_to_vec_zlib(&data).map_err(|e| OdbError::LooseObjectDecompressError {
         id,
         status: e.status,
     })?;
-    let (body, (_, object_type)) = parse_header(&data).map_err(|_| Error::MalformedObject(id))?;
+    let (body, (_, object_type)) =
+        parse_header(&data).map_err(|_| OdbError::MalformedObject(id))?;
     Ok(Some(RawObject {
         object_type,
         body: body.to_vec(),
@@ -59,12 +55,12 @@ pub(crate) async fn read_loose_object<F: FileSystem>(
 
 #[cfg(test)]
 mod tests {
-    use crate::{object::ObjectType, test::open_test_repo};
-    use futures::executor::block_on;
-    use gib_testkit::make_basic_repo;
-    use hex_literal::hex;
-
     use super::*;
+    use crate::test_support::objects_dir;
+    use futures::executor::block_on;
+    use gib_object::ObjectType;
+    use gib_testkit::{TestFileSystem, make_basic_repo};
+    use hex_literal::hex;
 
     #[test]
     fn test_read_loose_object_existing() {
@@ -72,10 +68,12 @@ mod tests {
         let commit_id = test_repo.run_git(["rev-parse", "HEAD"]).unwrap();
         let commit_id = ObjectId::from_hex(commit_id.trim_ascii()).unwrap();
 
-        let repo = open_test_repo(&test_repo);
-        let object = block_on(read_loose_object(&repo, commit_id))
-            .unwrap()
-            .unwrap();
+        let object = block_on(read_loose_object::<TestFileSystem>(
+            &objects_dir(&test_repo),
+            commit_id,
+        ))
+        .unwrap()
+        .unwrap();
         assert_eq!(object.object_type, ObjectType::Commit);
         assert_eq!(
             object.body,
@@ -91,9 +89,8 @@ a commit
     #[test]
     fn test_read_loose_object_nonexistent() {
         let test_repo = make_basic_repo().unwrap();
-        let repo = open_test_repo(&test_repo);
-        let object = block_on(read_loose_object(
-            &repo,
+        let object = block_on(read_loose_object::<TestFileSystem>(
+            &objects_dir(&test_repo),
             ObjectId::from_bytes(hex!("0000000000000000000000000000000000000000")),
         ))
         .unwrap();

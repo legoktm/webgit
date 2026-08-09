@@ -406,6 +406,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "gib-odb"
+version = "0.0.0"
+dependencies = [
+ "futures",
+ "gib-fs",
+ "gib-hash",
+ "gib-object",
+ "gib-pack",
+ "gib-testkit",
+ "hex",
+ "hex-literal",
+ "miniz_oxide",
+]
+
+[[package]]
 name = "gib-pack"
 version = "0.0.0"
 dependencies = [
@@ -458,6 +473,7 @@ dependencies = [
  "gib-fs",
  "gib-hash",
  "gib-object",
+ "gib-odb",
  "gib-pack",
  "gib-parse",
  "gib-ref",

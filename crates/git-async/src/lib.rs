@@ -77,7 +77,6 @@ pub mod object;
 pub mod prelude;
 pub mod reference;
 
-mod object_store;
 mod repo;
 
 pub use repo::Repo;

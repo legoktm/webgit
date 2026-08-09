@@ -4,7 +4,8 @@ use crate::{file_system::FileSystemError, object::ObjectId, reference::RefName};
 use alloc::vec::Vec;
 use gib_commitgraph::CommitGraphError;
 use gib_object::ObjectError;
-use gib_pack::{PackError, PackObjectError};
+use gib_odb::OdbError;
+use gib_pack::PackError;
 use gib_ref::RefError;
 use miniz_oxide::inflate::TINFLStatus;
 
@@ -96,6 +97,25 @@ impl From<ObjectError> for Error {
     }
 }
 
+impl From<OdbError> for Error {
+    fn from(value: OdbError) -> Self {
+        match value {
+            OdbError::FileSystem(e) => Self::FileSystem(e),
+            OdbError::Pack(e) => e.into(),
+            OdbError::MalformedInfoPacks => Self::MalformedInfoPacks,
+            OdbError::MalformedPackObject(id) => Self::MalformedPackObject(id),
+            OdbError::MalformedObject(id) => Self::MalformedObject(id),
+            OdbError::ObjectTooLarge(id) => Self::ObjectTooLarge(id),
+            OdbError::PackObjectDecompressError { id, status } => {
+                Self::PackObjectDecompressError { id, status }
+            }
+            OdbError::LooseObjectDecompressError { id, status } => {
+                Self::LooseObjectDecompressError { id, status }
+            }
+        }
+    }
+}
+
 impl From<CommitGraphError> for Error {
     fn from(value: CommitGraphError) -> Self {
         match value {
@@ -115,20 +135,5 @@ impl From<PackError> for Error {
             PackError::CorruptPackFile => Self::CorruptPackFile,
             PackError::UnexpectedThinPack => Self::UnexpectedThinPack,
         }
-    }
-}
-
-/// Attach the [`ObjectId`] a lookup asked for to the errors `gib-pack` raises
-/// while reconstructing it.
-///
-/// The pack reader works from an offset and so cannot name the object itself,
-/// but every caller here does know which ID it was resolving — and an error
-/// that doesn't say which object is corrupt is much less useful.
-pub(crate) fn annotate_pack_object_error(id: ObjectId) -> impl Fn(PackObjectError) -> Error {
-    move |internal| match internal {
-        PackObjectError::Pack(error) => error.into(),
-        PackObjectError::ObjectTooLarge => Error::ObjectTooLarge(id),
-        PackObjectError::MalformedObject => Error::MalformedPackObject(id),
-        PackObjectError::Decompress(status) => Error::PackObjectDecompressError { id, status },
     }
 }

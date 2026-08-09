@@ -14,6 +14,7 @@ gib-commitgraph = { path = "crates/gib-commitgraph" }
 gib-fs = { path = "crates/gib-fs" }
 gib-hash = { path = "crates/gib-hash" }
 gib-object = { path = "crates/gib-object" }
+gib-odb = { path = "crates/gib-odb" }
 gib-pack = { path = "crates/gib-pack" }
 gib-parse = { path = "crates/gib-parse" }
 gib-ref = { path = "crates/gib-ref" }

@@ -1,11 +1,8 @@
 use crate::{
     commit_graph::CommitGraph,
     error::{Error, GResult},
-    file_system::{
-        DirEntry, Directory, FileSystem, FileSystemError, read_file_if_exists, search_for_files,
-    },
-    object::{Object, ObjectId, ObjectIdPrefix, PrefixResolution},
-    object_store::{RawObject, cache::IndexCache, lookup::PackName},
+    file_system::{Directory, FileSystem, FileSystemError, read_file_if_exists, search_for_files},
+    object::{Object, ObjectId, ObjectIdPrefix, PrefixResolution, RawObject},
     prelude::RefExt,
     reference::{
         Ref, RefEntry, RefName, RefTarget, lookup_loose_ref, lookup_ref, parse_info_refs,
@@ -14,6 +11,7 @@ use crate::{
 };
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
+use gib_odb::ObjectDb;
 
 /// Configuration for opening a repository
 pub struct RepoConfig {
@@ -55,8 +53,8 @@ impl Default for RepoConfig {
 /// It is generic over the implementation of filesystem operations.
 pub struct Repo<F: FileSystem> {
     pub(crate) git_dir: F::Directory,
-    pub(crate) pack_dir: F::Directory,
-    pub(crate) index_cache: IndexCache,
+    /// Where objects are found: packs, their indexes, and loose objects.
+    odb: ObjectDb<F>,
     /// The commit-graph cache, if the repository has a usable single-file one.
     commit_graph: Option<CommitGraph<F>>,
 }
@@ -68,16 +66,13 @@ impl<F: FileSystem> Repo<F> {
     ) -> GResult<Self> {
         let git_dir = Self::resolve_git_dir(open_dir).await?;
         let objects_dir = git_dir.open_subdir(b"objects").await?;
-        let pack_dir = objects_dir.open_subdir(b"pack").await?;
-        let pack_ids = Self::discover_packs(&objects_dir, &pack_dir).await?;
-        let index_cache = IndexCache::new(&pack_dir, pack_ids, config).await?;
+        let odb = ObjectDb::open(objects_dir.clone(), config.index_offset_cache_max).await?;
         // Best-effort: a missing or unsupported commit-graph just means falling
         // back to object reads, so any error degrades to `None`.
         let commit_graph = CommitGraph::open(&objects_dir).await.ok().flatten();
         Ok(Repo {
             git_dir,
-            pack_dir,
-            index_cache,
+            odb,
             commit_graph,
         })
     }
@@ -85,58 +80,6 @@ impl<F: FileSystem> Repo<F> {
     /// The repository's commit-graph cache, if it has a usable one.
     pub fn commit_graph(&self) -> Option<&CommitGraph<F>> {
         self.commit_graph.as_ref()
-    }
-
-    /// Find the repository's packfiles.
-    ///
-    /// Prefer `objects/info/packs` — the manifest written by
-    /// `git update-server-info` for fetching over dumb HTTP — so a repository
-    /// prepared for static serving is discovered without ever listing a
-    /// directory. This matters because many HTTP servers disable directory
-    /// indexes, and listing them would be a guaranteed wasted (often failing)
-    /// request. Only when the manifest is absent do we fall back to listing
-    /// the pack directory, which still works on servers that expose an
-    /// autoindex.
-    ///
-    /// The manifest is only as fresh as the last `update-server-info` run;
-    /// this mirrors how [`Repo::all_refs`] prefers `info/refs` over a `refs/`
-    /// walk for the same reason.
-    async fn discover_packs(
-        objects_dir: &F::Directory,
-        pack_dir: &F::Directory,
-    ) -> GResult<Vec<PackName>> {
-        if let Some(packs) = Self::info_packs(objects_dir).await? {
-            return Ok(packs);
-        }
-        Self::list_packs(pack_dir).await
-    }
-
-    /// Read `objects/info/packs` if present, returning `None` when there is no
-    /// such manifest (the repository wasn't prepared with `update-server-info`).
-    async fn info_packs(objects_dir: &F::Directory) -> GResult<Option<Vec<PackName>>> {
-        let info_dir = match objects_dir.open_subdir(b"info").await {
-            Ok(info_dir) => info_dir,
-            Err(FileSystemError::NotFound(_)) => return Ok(None),
-            Err(e) => return Err(e.into()),
-        };
-        let Some(data) = read_file_if_exists(&info_dir, b"packs").await? else {
-            return Ok(None);
-        };
-        Ok(Some(parse_info_packs(&data)?))
-    }
-
-    /// Discover packs by listing the pack directory's autoindex.
-    async fn list_packs(pack_dir: &F::Directory) -> GResult<Vec<PackName>> {
-        let entries = pack_dir.list_dir().await?;
-        Ok(entries
-            .into_iter()
-            .filter_map(|dirent| {
-                let DirEntry::File(name) = dirent else {
-                    return None;
-                };
-                PackName::new(name)
-            })
-            .collect())
     }
 
     pub(crate) async fn resolve_git_dir(open_dir: F::Directory) -> GResult<F::Directory> {
@@ -280,7 +223,7 @@ impl<F: FileSystem> Repo<F> {
     /// Only packed objects are searched; see [`PrefixResolution`] for how an
     /// abbreviation shared by several objects is reported.
     pub async fn resolve_prefix(&self, prefix: &ObjectIdPrefix) -> GResult<PrefixResolution> {
-        crate::object_store::lookup::resolve_prefix(self, prefix).await
+        Ok(self.odb.resolve_prefix(prefix).await?)
     }
 
     /// Look up the raw (unparsed) bytes and type of an object.
@@ -288,23 +231,8 @@ impl<F: FileSystem> Repo<F> {
     /// Returns `None` if the object does not exist in the repository.
     /// Use [`Object::from_raw`] to parse the result into a typed object.
     pub async fn lookup_raw(&self, id: ObjectId) -> GResult<Option<RawObject>> {
-        crate::object_store::lookup::lookup(self, id).await
+        Ok(self.odb.lookup(id).await?)
     }
-}
-
-/// Parse the `objects/info/packs` file written by `git update-server-info`.
-///
-/// Each line is `P <packfile-name>`.
-fn parse_info_packs(data: &[u8]) -> GResult<Vec<PackName>> {
-    let mut packs = Vec::new();
-    for line in data.split(|&b| b == b'\n') {
-        if line.is_empty() {
-            continue;
-        }
-        let name = line.strip_prefix(b"P ").ok_or(Error::MalformedInfoPacks)?;
-        packs.push(PackName::from_pack_filename(name.to_vec()).ok_or(Error::MalformedInfoPacks)?);
-    }
-    Ok(packs)
 }
 
 #[cfg(test)]
@@ -460,82 +388,5 @@ mod tests {
         let fat_tag = refs.get(&RefName::Ref(b"tags/a-fat-tag".to_vec())).unwrap();
         assert_ne!(fat_tag.target(), head);
         assert_eq!(fat_tag.peeled(), Some(head));
-    }
-
-    #[test]
-    fn parse_info_packs_lines() {
-        let packs = parse_info_packs(b"P pack-0123abcd.pack\nP pack-fedcba98.pack\n\n").unwrap();
-        assert_eq!(packs.len(), 2);
-        assert_eq!(packs[0].pack_filename, b"pack-0123abcd.pack");
-        assert_eq!(packs[0].index_filename, b"pack-0123abcd.idx");
-        assert!(matches!(
-            parse_info_packs(b"garbage\n"),
-            Err(Error::MalformedInfoPacks)
-        ));
-    }
-
-    #[test]
-    fn discover_packs_prefers_info_packs() {
-        let test_repo = make_packfile_repo().unwrap();
-        test_repo.run_git(["update-server-info"]).unwrap();
-        let git_dir = test_repo.git_dir();
-        let objects_dir = block_on(git_dir.open_subdir(b"objects")).unwrap();
-        let pack_dir = block_on(objects_dir.open_subdir(b"pack")).unwrap();
-        let expected = block_on(Repo::<TestFileSystem>::discover_packs(
-            &objects_dir,
-            &pack_dir,
-        ))
-        .unwrap();
-        assert_eq!(expected.len(), 1);
-
-        // objects/info/packs is consulted before the pack directory is listed,
-        // so a server with no autoindex (an empty stand-in pack directory)
-        // still discovers the same pack without a single directory listing.
-        std::fs::create_dir(
-            test_repo
-                .location
-                .path()
-                .join(".git")
-                .join("objects")
-                .join("empty"),
-        )
-        .unwrap();
-        let empty_dir = block_on(objects_dir.open_subdir(b"empty")).unwrap();
-        let from_info = block_on(Repo::<TestFileSystem>::discover_packs(
-            &objects_dir,
-            &empty_dir,
-        ))
-        .unwrap();
-        assert_eq!(from_info.len(), 1);
-        assert_eq!(from_info[0].index_filename, expected[0].index_filename);
-        assert_eq!(from_info[0].pack_filename, expected[0].pack_filename);
-    }
-
-    #[test]
-    fn discover_packs_falls_back_to_listing() {
-        let test_repo = make_packfile_repo().unwrap();
-        test_repo.run_git(["update-server-info"]).unwrap();
-        // Remove the manifest so discovery must list the pack directory, as on
-        // a repo that was never prepared with update-server-info but is served
-        // from a host that does expose an autoindex.
-        std::fs::remove_file(
-            test_repo
-                .location
-                .path()
-                .join(".git")
-                .join("objects")
-                .join("info")
-                .join("packs"),
-        )
-        .unwrap();
-        let git_dir = test_repo.git_dir();
-        let objects_dir = block_on(git_dir.open_subdir(b"objects")).unwrap();
-        let pack_dir = block_on(objects_dir.open_subdir(b"pack")).unwrap();
-        let listed = block_on(Repo::<TestFileSystem>::discover_packs(
-            &objects_dir,
-            &pack_dir,
-        ))
-        .unwrap();
-        assert_eq!(listed.len(), 1);
     }
 }

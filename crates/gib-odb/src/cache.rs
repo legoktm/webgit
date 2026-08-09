@@ -1,11 +1,5 @@
-use crate::{
-    error::GResult,
-    file_system::{Directory, File},
-    object_store::lookup::PackName,
-    repo::RepoConfig,
-};
-use alloc::vec::Vec;
-use gib_fs::{PageCache, new_page_cache};
+use crate::{OdbResult, PackName};
+use gib_fs::{Directory, File, PageCache, new_page_cache};
 use gib_pack::{FanoutTable, ShortOffsetTable, validate_packfile_version};
 
 /// A single pack's index metadata, plus a page cache for its `.idx` file that
@@ -28,11 +22,11 @@ impl IndexCache {
     pub async fn new<F: File, D: Directory<F>>(
         pack_dir: &D,
         pack_ids: Vec<PackName>,
-        config: &RepoConfig,
-    ) -> GResult<Self> {
+        index_offset_cache_max: usize,
+    ) -> OdbResult<Self> {
         let mut indexes = Vec::with_capacity(pack_ids.len());
         let mut objects_in_offset_cache: usize = 0;
-        let max_objects_in_offset_cache = config.index_offset_cache_max / size_of::<u32>();
+        let max_objects_in_offset_cache = index_offset_cache_max / size_of::<u32>();
         for pack_id in pack_ids {
             let mut file = pack_dir.open_file(&pack_id.index_filename).await?;
             let fanout = FanoutTable::load(&mut file).await?;
