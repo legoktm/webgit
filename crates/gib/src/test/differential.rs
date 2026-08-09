@@ -729,11 +729,6 @@ mod diff_tests {
         // A symlink where dir/nested/two was: a typechange rather than an edit.
         fs::remove_file(root.join("dir").join("nested").join("two")).unwrap();
         std::os::unix::fs::symlink("one", root.join("dir").join("nested").join("two")).unwrap();
-        // Note: a *mode-only* change (e.g. 100755 -> 100644 with identical
-        // content) is deliberately not part of this fixture. `TreeDiff` reports
-        // paths whose object IDs differ, so it does not see one, while
-        // `git diff-tree` reports it as a modification. That is a standing
-        // scope limitation of the diff API, not something this suite pins.
         commit_all(test_repo, "before");
 
         fs::remove_file(root.join("gone").join("doomed")).unwrap();
@@ -741,6 +736,13 @@ mod diff_tests {
         fs::create_dir(root.join("fresh")).unwrap();
         write_file(root, "fresh/added", b"brand new\n");
         write_file(root, "dir/one", b"changed again\n");
+        // A mode-only change: the blob is untouched, only the executable bit
+        // moves, so this is only visible if modes are compared too.
+        fs::set_permissions(
+            root.join("dir").join("nested").join("script.sh"),
+            fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
         commit_all(test_repo, "after");
     }
 

@@ -199,8 +199,14 @@ async fn tree_diff_impl<E: From<DiffError>>(
                 (Some(_), None) => Ordering::Less,
                 (Some(l), Some(r)) => l.name().cmp(r.name()),
             };
+            // Skip entries that are identical on both sides. The mode is part
+            // of that, not just the object: a file that only gained the
+            // executable bit — or was replaced by a symlink to the same
+            // content — keeps its blob id, and git still calls that a change.
             if name_ordering == Ordering::Equal
                 && left_entry.as_ref().map(TreeEntry::id) == right_entry.as_ref().map(TreeEntry::id)
+                && left_entry.as_ref().map(TreeEntry::entry_type)
+                    == right_entry.as_ref().map(TreeEntry::entry_type)
             {
                 left_entry = left_entries.as_mut().and_then(Iterator::next);
                 right_entry = right_entries.as_mut().and_then(Iterator::next);
