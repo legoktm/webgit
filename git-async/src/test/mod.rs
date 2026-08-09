@@ -1,3 +1,4 @@
+pub(crate) mod differential;
 pub(crate) mod directory;
 pub(crate) mod helpers;
 pub(crate) mod impls;
