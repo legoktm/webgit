@@ -1,0 +1,16 @@
+[package]
+name = "gib-object"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+accessory.workspace = true
+gib-hash.workspace = true
+gib-parse.workspace = true
+jiff.workspace = true
+nom.workspace = true
+
+[dev-dependencies]
+gib-testkit.workspace = true
+hex-literal.workspace = true

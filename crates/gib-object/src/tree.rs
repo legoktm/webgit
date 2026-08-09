@@ -1,12 +1,5 @@
-use crate::{
-    error::GResult,
-    file_system::FileSystem,
-    object::{Object, ObjectId},
-    repo::Repo,
-};
+use crate::ObjectId;
 use accessory::Accessors;
-use alloc::vec::Vec;
-use core::{fmt::Debug, iter::FusedIterator, ops::Range};
 use gib_parse::{ParseError, ParseResult, SubsliceRange};
 use nom::{
     Parser,
@@ -17,6 +10,7 @@ use nom::{
     multi::many,
     sequence::terminated,
 };
+use std::{fmt::Debug, iter::FusedIterator, ops::Range};
 
 /// The type of an entry in a tree
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Copy, Clone)]
@@ -55,20 +49,6 @@ pub struct TreeEntry<'a> {
     /// The [`ObjectId`] that the entry points to
     #[access(get(cp))]
     id: ObjectId,
-}
-
-impl TreeEntry<'_> {
-    /// Look up the target object using the provided [`Repo`].
-    ///
-    /// Returns `None` if the tree entry is a commit, because in that case it is
-    /// a pointer to a commit in an external repository.
-    pub async fn lookup<F: FileSystem>(&self, repo: &Repo<F>) -> GResult<Option<Object>> {
-        if self.entry_type == TreeEntryType::Commit {
-            Ok(None)
-        } else {
-            Ok(Some(repo.lookup_object(self.id).await?))
-        }
-    }
 }
 
 #[derive(Clone)]

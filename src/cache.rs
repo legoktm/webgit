@@ -90,7 +90,7 @@ impl CachingRepo {
     pub(crate) async fn lookup_object(&self, id: ObjectId) -> GResult<Object> {
         if let Some(raw) = self.idb_get(id).await {
             crate::fetch::record_cache_hit(raw.body.len() as u64);
-            return Object::from_raw(id, raw);
+            return Ok(Object::from_raw(id, raw)?);
         }
         let raw = self
             .inner
@@ -102,7 +102,7 @@ impl CachingRepo {
         // alive until the queued `put` finishes on its own. Awaiting here would
         // make every caller block on a disk write it doesn't care about.
         self.idb_set(id, &raw);
-        Object::from_raw(id, raw)
+        Ok(Object::from_raw(id, raw)?)
     }
 
     // --- Re-implementations that call lookup_object internally ---------------

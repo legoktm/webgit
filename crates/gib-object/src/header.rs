@@ -1,7 +1,4 @@
 use accessory::Accessors;
-use alloc::vec::Vec;
-use core::iter::FusedIterator;
-use core::ops::Range;
 use gib_parse::{ParseResult, SubsliceRange};
 use nom::{
     Parser,
@@ -11,6 +8,8 @@ use nom::{
     multi::many0,
     sequence::{delimited, terminated},
 };
+use std::iter::FusedIterator;
+use std::ops::Range;
 
 /// An arbitrary object header, with a name and a value
 #[derive(Clone, PartialEq, Eq, Accessors)]

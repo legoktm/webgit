@@ -14,6 +14,7 @@
 use crate::{
     Repo,
     object::{Object, ObjectId, ObjectIdPrefix, ObjectType, PrefixResolution, Tree, TreeEntryType},
+    prelude::*,
     reference::{RefName, RefTarget},
     test::open_test_repo,
 };

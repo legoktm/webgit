@@ -12,6 +12,7 @@ crc32fast = { version = "1.5.0", default-features = false }
 futures = { version = "0.3.32", default-features = false }
 gib-fs = { path = "crates/gib-fs" }
 gib-hash = { path = "crates/gib-hash" }
+gib-object = { path = "crates/gib-object" }
 gib-parse = { path = "crates/gib-parse" }
 gib-testkit = { path = "crates/gib-testkit" }
 git-async = { path = "crates/git-async" }

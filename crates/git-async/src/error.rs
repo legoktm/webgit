@@ -1,25 +1,15 @@
 //! A module for errors which may occur during the use of `git-async`
 
-use crate::{
-    file_system::FileSystemError,
-    object::{ObjectId, ObjectType},
-    reference::RefName,
-};
-use accessory::Accessors;
+use crate::{file_system::FileSystemError, object::ObjectId, reference::RefName};
 use alloc::vec::Vec;
+use gib_object::ObjectError;
 use gib_parse::ParseError;
 use miniz_oxide::inflate::TINFLStatus;
 
-#[expect(missing_docs)]
-pub type GResult<T> = core::result::Result<T, Error>;
+pub use gib_object::UnexpectedObjectType;
 
 #[expect(missing_docs)]
-#[derive(Debug, Accessors)]
-pub struct UnexpectedObjectType {
-    pub id: ObjectId,
-    pub expected: ObjectType,
-    pub received: ObjectType,
-}
+pub type GResult<T> = core::result::Result<T, Error>;
 
 #[expect(missing_docs)]
 #[non_exhaustive]
@@ -83,6 +73,15 @@ impl From<FileSystemError> for Error {
 impl From<hex::FromHexError> for Error {
     fn from(value: hex::FromHexError) -> Self {
         Self::FromHexError(value)
+    }
+}
+
+impl From<ObjectError> for Error {
+    fn from(value: ObjectError) -> Self {
+        match value {
+            ObjectError::Parse { id, snippet } => Self::ObjectParseError { id, snippet },
+            ObjectError::MissingFields(id) => Self::ObjectMissingRequiredFields(id),
+        }
     }
 }
 

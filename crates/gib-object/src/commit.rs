@@ -1,19 +1,13 @@
 use crate::{
-    error::GResult,
-    file_system::FileSystem,
-    object::{
-        ObjectId,
-        header::{ObjectHeaderIter, RangeObjectHeader},
-        parse_author_committer_tagger,
-    },
-    repo::Repo,
+    ObjectId,
+    header::{ObjectHeaderIter, RangeObjectHeader},
+    parse_author_committer_tagger,
 };
 use accessory::Accessors;
-use alloc::vec::Vec;
-use core::ops::Range;
 use gib_parse::{ParseError, SubsliceRange};
 use jiff::Zoned;
 use nom::{Parser, combinator::all_consuming};
+use std::ops::Range;
 
 /// A commit object
 #[derive(Accessors, Clone)]
@@ -100,15 +94,6 @@ impl Commit {
     /// Additional headers are those not parsed by `git-async`, e.g. `mergetag`.
     pub fn additional_headers(&self) -> ObjectHeaderIter<'_> {
         ObjectHeaderIter::new(&self.body, &self.additional_headers)
-    }
-
-    /// Look up all the parents of the commit, using the provided [`Repo`].
-    pub async fn lookup_parents<F: FileSystem>(&self, repo: &Repo<F>) -> GResult<Vec<Commit>> {
-        let mut out = Vec::with_capacity(self.parents.len());
-        for parent in &self.parents {
-            out.push(repo.lookup_object(*parent).await?.commit()?);
-        }
-        Ok(out)
     }
 
     pub(crate) fn parse(id: ObjectId, body: Vec<u8>) -> Result<Self, ParseError> {

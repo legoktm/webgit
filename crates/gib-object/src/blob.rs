@@ -1,6 +1,5 @@
-use crate::object::ObjectId;
+use crate::ObjectId;
 use accessory::Accessors;
-use alloc::vec::Vec;
 
 /// A blob object
 ///

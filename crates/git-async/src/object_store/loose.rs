@@ -1,17 +1,11 @@
+use gib_object::parse_header;
 use miniz_oxide::inflate::decompress_to_vec_zlib;
-use nom::{
-    Parser,
-    branch::alt,
-    bytes::complete::tag,
-    character::complete::{char, u64},
-    sequence::terminated,
-};
 
 use crate::{
     error::{Error, GResult},
     file_system::{Directory, File, FileSystem, FileSystemError},
     object::ObjectId,
-    object_store::{ObjectSize, ObjectType, RawObject},
+    object_store::RawObject,
     repo::Repo,
 };
 
@@ -63,26 +57,9 @@ pub(crate) async fn read_loose_object<F: FileSystem>(
     }))
 }
 
-fn parse_header(input: &[u8]) -> nom::IResult<&[u8], (ObjectSize, ObjectType)> {
-    let (rest, (object_type, size)) = (
-        terminated(
-            alt((
-                tag("commit").map(|_| ObjectType::Commit),
-                tag("tag").map(|_| ObjectType::Tag),
-                tag("tree").map(|_| ObjectType::Tree),
-                tag("blob").map(|_| ObjectType::Blob),
-            )),
-            char(' '),
-        ),
-        terminated(u64, char('\0')).map(ObjectSize),
-    )
-        .parse(input)?;
-    Ok((rest, (size, object_type)))
-}
-
 #[cfg(test)]
 mod tests {
-    use crate::test::open_test_repo;
+    use crate::{object_store::ObjectType, test::open_test_repo};
     use futures::executor::block_on;
     use gib_testkit::make_basic_repo;
     use hex_literal::hex;

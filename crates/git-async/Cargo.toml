@@ -16,6 +16,7 @@ all-features = true
 accessory.workspace = true
 gib-fs.workspace = true
 gib-hash.workspace = true
+gib-object.workspace = true
 gib-parse.workspace = true
 hex.workspace = true
 jiff.workspace = true

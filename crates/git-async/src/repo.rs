@@ -265,7 +265,11 @@ impl<F: FileSystem> Repo<F> {
     /// Look up a particular object in the repository, reading the entire object
     /// into memory.
     pub async fn lookup_object(&self, id: ObjectId) -> GResult<Object> {
-        Object::lookup(self, id).await
+        let raw = self
+            .lookup_raw(id)
+            .await?
+            .ok_or_else(|| Error::MissingObject(id))?;
+        Ok(Object::from_raw(id, raw)?)
     }
 
     /// Expand an abbreviated object ID (see [`ObjectIdPrefix`]) into the full

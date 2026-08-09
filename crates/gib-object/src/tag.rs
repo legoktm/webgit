@@ -1,14 +1,13 @@
-use crate::object::{
+use crate::{
     ObjectId, ObjectType,
     header::{ObjectHeaderIter, RangeObjectHeader},
     parse_author_committer_tagger,
 };
 use accessory::Accessors;
-use alloc::vec::Vec;
-use core::ops::Range;
 use gib_parse::{ParseError, SubsliceRange};
 use jiff::Zoned;
 use nom::{Parser, combinator::all_consuming};
+use std::ops::Range;
 
 /// A tag object
 ///

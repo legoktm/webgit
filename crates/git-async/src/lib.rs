@@ -21,6 +21,7 @@
 //!
 //! ```
 //! # use git_async::Repo;
+//! # use git_async::prelude::*;
 //! # use git_async::error::GResult;
 //! # use git_async::file_system::{File, Directory, FileSystem, FileSystemError, Offset, DirEntry};
 //! # struct MyFile;
@@ -73,6 +74,7 @@ pub mod diff;
 pub mod error;
 pub mod file_system;
 pub mod object;
+pub mod prelude;
 pub mod reference;
 
 mod object_store;

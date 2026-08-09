@@ -10,6 +10,7 @@ use crate::{
     error::{Error, GResult},
     file_system::{Directory, File, FileSystem, FileSystemError, read_file_if_exists},
     object::{Commit, ObjectId, Tree},
+    prelude::ObjectExt,
     repo::Repo,
 };
 use accessory::Accessors;

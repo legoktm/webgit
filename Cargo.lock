@@ -383,6 +383,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "gib-object"
+version = "0.0.0"
+dependencies = [
+ "accessory",
+ "gib-hash",
+ "gib-parse",
+ "gib-testkit",
+ "hex-literal",
+ "jiff",
+ "nom",
+]
+
+[[package]]
 name = "gib-parse"
 version = "0.0.0"
 dependencies = [
@@ -406,6 +419,7 @@ dependencies = [
  "futures",
  "gib-fs",
  "gib-hash",
+ "gib-object",
  "gib-parse",
  "gib-testkit",
  "hex",
