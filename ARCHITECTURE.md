@@ -27,3 +27,10 @@ We optimize for minimizing the amount of git data that needs to be loaded/fetche
 already in IndexedDB then it's essentially free.
 
 Where possible, we lazily render data instead of requiring every lookup to be complete.
+
+## Security
+
+We set as strict a CSP as possible, banning inline CSS and JS.
+
+We mostly assume that the Git repository is not malicious. But we still take some precautions where
+we can, such as rendering markdown in an iframe.
