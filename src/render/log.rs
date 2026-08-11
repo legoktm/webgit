@@ -53,7 +53,10 @@ pub(crate) async fn build_log(
     LogProps {
         commits,
         prev_url,
-        next_url: has_next.then(|| log_url(path, offset + PAGE_SIZE, head)),
+        // Saturating for the same reason as `prev_url`'s subtraction above:
+        // `offset` is whatever `?offset=` said, so the next page's offset must
+        // not be allowed to wrap past the end of the number line.
+        next_url: has_next.then(|| log_url(path, offset.saturating_add(PAGE_SIZE), head)),
     }
 }
 

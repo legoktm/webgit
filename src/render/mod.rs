@@ -738,8 +738,11 @@ pub(crate) async fn walk_commits_streamed(
 
     // Collect the ids of matching commits in order. We need `skip + limit` to
     // fill the page, plus the detection of one more to know whether a next page
-    // exists.
-    let want = skip + limit;
+    // exists. `skip` comes straight from `?offset=` in the URL, so the sum is
+    // saturating: near `usize::MAX` (reachable on wasm32, where that is only
+    // 4 GiB) it would otherwise panic in debug builds and wrap in release,
+    // turning a nonsense offset into a page of the wrong commits.
+    let want = skip.saturating_add(limit);
     let mut matched: Vec<ObjectId> = Vec::new();
     let mut has_more = false;
     let mut traversed = 0usize;
