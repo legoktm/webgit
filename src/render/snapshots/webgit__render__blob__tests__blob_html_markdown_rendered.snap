@@ -1,0 +1,10 @@
+---
+source: src/render/blob.rs
+expression: "render_route(\"docs/setup.md\", b\"# Setup\\n\\nSee [install](install.md).\\n\",\nNone, true)"
+---
+<div class="blob-info">blob: e69de29bb2d1d6434b8b29ae775ad8c2e48c5391 · <a href="#!/tree/docs/setup.md" class="blob-alt-view">source</a>
+</div>
+<iframe title="setup.md" height="150" sandbox="allow-same-origin allow-top-navigation-by-user-activation" srcdoc="&lt;!doctype html&gt;&lt;html lang=&quot;en&quot;&gt;&lt;head&gt;&lt;meta charset=&quot;utf-8&quot;&gt;&lt;base target=&quot;_top&quot;&gt;&lt;link rel=&quot;stylesheet&quot; href=&quot;&quot;&gt;&lt;/head&gt;&lt;body class=&quot;markdown-body&quot;&gt;&lt;h1&gt;Setup&lt;/h1&gt;
+&lt;p&gt;See &lt;a href=&quot;#!/tree/docs/install.md&quot;&gt;install&lt;/a&gt;.&lt;/p&gt;
+&lt;/body&gt;&lt;/html&gt;" class="markdown-frame">
+</iframe>

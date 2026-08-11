@@ -458,7 +458,7 @@ fn nav_bar(props: &NavBarProps) -> Html {
     let route = parse_hash(&props.hash);
     let (head, nav_path): (Option<&str>, &str) = match &route {
         Route::Log { head, path, .. } => (head.as_deref(), path.as_str()),
-        Route::Tree { head, path } => (head.as_deref(), path.as_str()),
+        Route::Tree { head, path, .. } => (head.as_deref(), path.as_str()),
         _ => (None, ""),
     };
     let active = active_tab(&route);
@@ -508,7 +508,7 @@ enum PathBar {
 /// lookup; the breadcrumb itself is derived from the path.
 async fn compute_path_bar(hash: &str, repo: &CachingRepo) -> PathBar {
     match parse_hash(hash) {
-        Route::Tree { path, head } => {
+        Route::Tree { path, head, .. } => {
             let display = resolve_display_head(repo, head.as_deref()).await;
             PathBar::Crumbs {
                 display,

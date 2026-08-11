@@ -1,6 +1,6 @@
 ---
 source: src/render/readme.rs
-expression: "render(ReadmeProps\n{\n    content:\n    Some(ReadmeContent::Markdown(markdown_to_html(\"# webgit\\n\\nA *client-side* Git viewer.\\n\\n\\\n                 | a | b |\\n|---|---|\\n| 1 | 2 |\\n\"))),\n})"
+expression: "render(ReadmeProps\n{\n    content:\n    Some(ReadmeContent::Markdown(markdown_to_html(\"# webgit\\n\\nA *client-side* Git viewer.\\n\\n\\\n                 | a | b |\\n|---|---|\\n| 1 | 2 |\\n\",\n    &link_base(),))),\n})"
 ---
 <iframe title="README" height="150" sandbox="allow-same-origin allow-top-navigation-by-user-activation" srcdoc="&lt;!doctype html&gt;&lt;html lang=&quot;en&quot;&gt;&lt;head&gt;&lt;meta charset=&quot;utf-8&quot;&gt;&lt;base target=&quot;_top&quot;&gt;&lt;link rel=&quot;stylesheet&quot; href=&quot;&quot;&gt;&lt;/head&gt;&lt;body class=&quot;markdown-body&quot;&gt;&lt;h1&gt;webgit&lt;/h1&gt;
 &lt;p&gt;A &lt;em&gt;client-side&lt;/em&gt; Git viewer.&lt;/p&gt;
@@ -18,5 +18,5 @@ expression: "render(ReadmeProps\n{\n    content:\n    Some(ReadmeContent::Markdo
 &lt;/tr&gt;
 &lt;/tbody&gt;
 &lt;/table&gt;
-&lt;/body&gt;&lt;/html&gt;" class="readme-frame">
+&lt;/body&gt;&lt;/html&gt;" class="markdown-frame">
 </iframe>

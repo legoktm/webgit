@@ -82,6 +82,9 @@ pub(crate) enum Route {
     Tree {
         path: String,
         head: Option<String>,
+        /// Show a markdown blob rendered rather than as source (`?render=1`).
+        /// Ignored when the path resolves to anything else.
+        render: bool,
     },
     /// A `.tar.gz` of a ref's tree (HEAD's, when there is no `?h=`), built on
     /// arrival. A route rather than a button because building one is exactly
@@ -218,7 +221,7 @@ fn strip_route_prefix<'a>(hash: &'a str, prefix: &str, seps: &[char]) -> Option<
 /// #!/refs/heads[/]                 the branch list
 /// #!/refs/tags[/]                  the tag list
 /// #!/refs/tags/<tag>               one tag
-/// #!/tree[/<path>][?h=<ref>]
+/// #!/tree[/<path>][?…]             the tree, or a blob; query: h=<ref>, render=1
 /// #!/snapshot[/…][?h=<ref>]        a .tar.gz of a ref's tree (path ignored)
 /// ```
 ///
@@ -259,14 +262,15 @@ pub(crate) fn parse_hash(hash: &str) -> Route {
     }
 
     if let Some(rest) = strip_route_prefix(hash, "#!/tree", &['/', '?']) {
-        let (path, head) = parse_tree_rest(rest);
-        return Route::Tree { path, head };
+        let (path, head, render) = parse_tree_rest(rest);
+        return Route::Tree { path, head, render };
     }
 
     if let Some(rest) = strip_route_prefix(hash, "#!/snapshot", &['/', '?']) {
         // Only the ref matters here: a snapshot is always of a whole tree, so
-        // anything in the path position is ignored rather than 404'd.
-        let (_, head) = parse_tree_rest(rest);
+        // anything in the path position is ignored rather than 404'd, and so is
+        // a `render=1` that came along with it.
+        let (_, head, _) = parse_tree_rest(rest);
         return Route::Snapshot { head };
     }
 
@@ -292,7 +296,7 @@ pub(crate) fn parse_hash(hash: &str) -> Route {
     Route::Summary
 }
 
-fn parse_tree_rest(rest: &str) -> (String, Option<String>) {
+fn parse_tree_rest(rest: &str) -> (String, Option<String>, bool) {
     let rest = rest.trim_start_matches('/');
     let (path_part, query_string) = match rest.find('?') {
         Some(i) => (&rest[..i], Some(&rest[i + 1..])),
@@ -304,7 +308,9 @@ fn parse_tree_rest(rest: &str) -> (String, Option<String>) {
             .filter(|v| !v.is_empty())
             .map(decode_component)
     });
-    (decode_path(path_part), head)
+    // A flag, so only the spelling [`tree_url`] writes counts as asking for it.
+    let render = query_string.is_some_and(|qs| qs.split('&').any(|part| part == "render=1"));
+    (decode_path(path_part), head, render)
 }
 
 fn parse_log_query(query_string: &str) -> (usize, Option<String>) {
@@ -455,7 +461,7 @@ pub(crate) async fn build_route(
         Route::Refs(RefsRoute::Tag(tag)) => {
             Ok(LoadedView::Tag(build_tag(repo, tag, repo_name).await?))
         }
-        Route::Tree { path, head } => {
+        Route::Tree { path, head, render } => {
             let resolved_tree;
             let tree: &Tree = if let Some(ref ref_name) = head {
                 let (commit, _kind) = resolve_ref_to_commit(repo, ref_name).await?;
@@ -478,7 +484,13 @@ pub(crate) async fn build_route(
                     head.as_deref(),
                 )))
             } else if let Some((id, data)) = walk_to_blob(tree, &path, repo).await {
-                Ok(LoadedView::Blob(build_blob_props(id, &path, data)))
+                Ok(LoadedView::Blob(build_blob_props(
+                    id,
+                    &path,
+                    data,
+                    head.as_deref(),
+                    render,
+                )))
             } else {
                 Ok(LoadedView::NotFound(path))
             }
@@ -532,6 +544,24 @@ pub(crate) async fn build_route(
 /// encoding happens here.
 pub(crate) fn snapshot_url(head: &str) -> String {
     format!("#!/snapshot?h={}", encode_component(head))
+}
+
+/// The URL for a tree view — a directory listing, or a blob. `path` and `head`
+/// are the decoded values (a real path, a real ref name); both are encoded
+/// here. `render` asks for a markdown blob's rendered form.
+pub(crate) fn tree_url(path: &str, head: Option<&str>, render: bool) -> String {
+    let base = if path.is_empty() {
+        "#!/tree".to_string()
+    } else {
+        format!("#!/tree/{}", encode_path(path))
+    };
+    let head = head.map(encode_component);
+    match (head, render) {
+        (None, false) => base,
+        (None, true) => format!("{base}?render=1"),
+        (Some(head), false) => format!("{base}?h={head}"),
+        (Some(head), true) => format!("{base}?h={head}&render=1"),
+    }
 }
 
 /// The URL for a log view. `path` and `head` are the decoded values (a real
@@ -696,12 +726,80 @@ mod tests {
     fn test_parse_hash_tree() {
         assert!(matches!(
             parse_hash("#!/tree"),
-            Route::Tree { path, head: None } if path.is_empty()
+            Route::Tree { path, head: None, render: false } if path.is_empty()
         ));
         assert!(matches!(
             parse_hash("#!/tree/src/main.rs"),
-            Route::Tree { path, head: None } if path == "src/main.rs"
+            Route::Tree { path, head: None, render: false } if path == "src/main.rs"
         ));
+    }
+
+    #[test]
+    fn test_parse_hash_tree_render() {
+        assert!(matches!(
+            parse_hash("#!/tree/docs/setup.md?render=1"),
+            Route::Tree { path, head: None, render: true } if path == "docs/setup.md"
+        ));
+        assert!(matches!(
+            parse_hash("#!/tree/docs/setup.md?h=v1&render=1"),
+            Route::Tree { path, head: Some(head), render: true }
+                if path == "docs/setup.md" && head == "v1"
+        ));
+        // Only the flag as written by `tree_url` asks for it.
+        for hash in [
+            "#!/tree/a.md",
+            "#!/tree/a.md?render=0",
+            "#!/tree/a.md?render",
+            "#!/tree/a.md?h=render=1",
+        ] {
+            assert!(
+                matches!(parse_hash(hash), Route::Tree { render: false, .. }),
+                "{hash}"
+            );
+        }
+    }
+
+    /// A snapshot is of a whole tree, so the flag means nothing there and must
+    /// not stop the ref from being read.
+    #[test]
+    fn test_parse_hash_snapshot_ignores_render() {
+        assert!(matches!(
+            parse_hash("#!/snapshot?h=v1&render=1"),
+            Route::Snapshot { head: Some(head) } if head == "v1"
+        ));
+    }
+
+    #[test]
+    fn test_tree_url() {
+        assert_eq!(tree_url("", None, false), "#!/tree");
+        assert_eq!(tree_url("docs/a.md", None, false), "#!/tree/docs/a.md");
+        assert_eq!(
+            tree_url("docs/a.md", None, true),
+            "#!/tree/docs/a.md?render=1"
+        );
+        assert_eq!(
+            tree_url("docs/a.md", Some("main"), false),
+            "#!/tree/docs/a.md?h=main"
+        );
+        assert_eq!(
+            tree_url("docs/a.md", Some("release/2.0"), true),
+            "#!/tree/docs/a.md?h=release%2F2.0&render=1"
+        );
+    }
+
+    /// The round trip that matters for the rendered view: a path and a ref that
+    /// contain route syntax come back out of the router unchanged, flag intact.
+    #[test]
+    fn test_tree_url_round_trips_through_the_router() {
+        let url = tree_url("docs/a?b.md", Some("x&render=1"), true);
+        match parse_hash(&url) {
+            Route::Tree { path, head, render } => {
+                assert_eq!(path, "docs/a?b.md");
+                assert_eq!(head.as_deref(), Some("x&render=1"));
+                assert!(render);
+            }
+            _ => panic!("expected a tree route from {url}"),
+        }
     }
 
     #[test]
@@ -733,14 +831,21 @@ mod tests {
 
     #[test]
     fn test_parse_tree_rest() {
-        assert_eq!(parse_tree_rest(""), ("".into(), None));
-        assert_eq!(parse_tree_rest("/src"), ("src".into(), None));
-        assert_eq!(parse_tree_rest("?h=main"), ("".into(), Some("main".into())));
+        assert_eq!(parse_tree_rest(""), ("".into(), None, false));
+        assert_eq!(parse_tree_rest("/src"), ("src".into(), None, false));
+        assert_eq!(
+            parse_tree_rest("?h=main"),
+            ("".into(), Some("main".into()), false)
+        );
         assert_eq!(
             parse_tree_rest("/src?h=stable"),
-            ("src".into(), Some("stable".into()))
+            ("src".into(), Some("stable".into()), false)
         );
-        assert_eq!(parse_tree_rest("?h="), ("".into(), None));
+        assert_eq!(parse_tree_rest("?h="), ("".into(), None, false));
+        assert_eq!(
+            parse_tree_rest("/a.md?render=1"),
+            ("a.md".into(), None, true)
+        );
     }
 
     #[test]
@@ -917,7 +1022,7 @@ mod tests {
         // (encoded, so it stays one name rather than becoming path segments).
         assert_eq!(
             parse_tree_rest("/src/a%3Fb.rs?h=foo%26bar"),
-            ("src/a?b.rs".into(), Some("foo&bar".into()))
+            ("src/a?b.rs".into(), Some("foo&bar".into()), false)
         );
         match parse_hash("#!/refs/tags/release%2F2.0") {
             Route::Refs(RefsRoute::Tag(name)) => assert_eq!(name, "release/2.0"),

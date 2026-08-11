@@ -1,4 +1,6 @@
+use crate::render::markdown::{LinkBase, MarkdownFrame, markdown_to_html};
 use crate::render::{is_binary, use_object_url};
+use crate::route::tree_url;
 use gib::object::ObjectId;
 use std::rc::Rc;
 use yew::prelude::*;
@@ -105,6 +107,9 @@ fn image_format(filename: &str, data: &[u8]) -> Option<ImageFormat> {
 pub(crate) enum BlobContent {
     /// The blob's lines; a line's 1-based number is its index here.
     Text(Vec<String>),
+    /// A markdown blob asked for with `?render=1`, already rendered to HTML and
+    /// bound for the sandboxed frame.
+    Markdown(String),
     /// A blob to render as an image, in the format its object URL should claim.
     Image { format: ImageFormat },
     /// A blob git's heuristic calls binary, with its size in bytes.
@@ -130,30 +135,83 @@ impl BlobContent {
     }
 }
 
+/// The blob's other view — rendered markdown from the source, or the source
+/// from the rendered markdown — as the link that reaches it.
+#[derive(PartialEq, Clone)]
+pub(crate) struct AltView {
+    pub url: String,
+    pub label: &'static str,
+}
+
 /// The view inputs for a blob: its id, its bytes and how to display them.
 /// Doubles as the component's props and the test fixture.
 #[derive(Properties, PartialEq, Clone)]
 pub(crate) struct BlobProps {
     pub blob_id: String,
     /// The blob's file name — the last component of its path. Used as the
-    /// downloaded file's name, and as an image's alt text.
+    /// downloaded file's name, as an image's alt text, and to name the frame a
+    /// rendered markdown blob is shown in.
     pub name: String,
     /// The blob's bytes, as read from the object. `Rc` so that the props clone
     /// on every re-render stays a refcount bump rather than a copy of the whole
     /// file.
     pub data: Rc<Vec<u8>>,
     pub content: BlobContent,
+    /// The link to the blob's other view, for a markdown blob that has one.
+    pub alt_view: Option<AltView>,
 }
 
-/// Build the blob view's props. `path` is the blob's full path within the tree;
-/// only its last component is used, to recognise an image by extension and to
-/// name the download.
-pub(crate) fn build_blob_props(blob_id: ObjectId, path: &str, data: Vec<u8>) -> BlobProps {
+/// Whether a file name is one this view will render as markdown.
+fn is_markdown(filename: &str) -> bool {
+    let Some((_, ext)) = filename.rsplit_once('.') else {
+        return false;
+    };
+    matches!(ext.to_ascii_lowercase().as_str(), "md" | "markdown")
+}
+
+/// Build the blob view's props. `path` is the blob's full path within the tree
+/// and `head` the ref it was reached through, which together address the blob's
+/// other view; the path's last component recognises an image by extension and
+/// names the download.
+///
+/// `render` is the route's `?render=1`: show a markdown blob rendered rather
+/// than as source. It is a request, not a promise — a file that isn't markdown,
+/// or one too large for the text view, is classified as it would have been
+/// anyway.
+pub(crate) fn build_blob_props(
+    blob_id: ObjectId,
+    path: &str,
+    data: Vec<u8>,
+    head: Option<&str>,
+    render: bool,
+) -> BlobProps {
     let filename = path.rsplit('/').next().unwrap_or(path);
+    // Where the rendered document's own links resolve from: the directory it
+    // sits in, and — for a bare fragment — the rendered view's own URL.
+    let base = LinkBase {
+        dir: path.rsplit_once('/').map_or("", |(dir, _)| dir).to_string(),
+        self_url: tree_url(path, head, true),
+    };
+    let content = blob_content(filename, &data, render.then_some(&base));
+    let alt_view = match &content {
+        BlobContent::Markdown(_) => Some(AltView {
+            url: tree_url(path, head, false),
+            label: "source",
+        }),
+        // Only from the source view, and only when the rendered view would
+        // actually render: otherwise the link leads back to the page the reader
+        // is already on.
+        BlobContent::Text(_) if is_markdown(filename) && !render => Some(AltView {
+            url: base.self_url,
+            label: "rendered",
+        }),
+        _ => None,
+    };
     BlobProps {
         blob_id: blob_id.to_string(),
         name: filename.to_string(),
-        content: blob_content(filename, &data),
+        content,
+        alt_view,
         data: Rc::new(data),
     }
 }
@@ -172,7 +230,13 @@ pub(crate) fn build_blob_props(blob_id: ObjectId, path: &str, data: Vec<u8>) -> 
 /// budget for building a DOM node per line, and an image is one node no matter
 /// how large. The browser decodes it lazily and can drop it again, which is
 /// more than can be said for the `String`s the text path would allocate.
-fn blob_content(filename: &str, data: &[u8]) -> BlobContent {
+///
+/// `render` is `Some` when the route asked for markdown to be rendered, and
+/// carries where the document's links resolve from. Rendering sits *after* the
+/// caps rather than beside the image check: comrak's output is a DOM the browser
+/// has to lay out like any other, so an over-cap markdown file is refused for
+/// the same reason an over-cap source file is.
+fn blob_content(filename: &str, data: &[u8], render: Option<&LinkBase>) -> BlobContent {
     if let Some(format) = image_format(filename, data) {
         return BlobContent::Image { format };
     }
@@ -188,6 +252,11 @@ fn blob_content(filename: &str, data: &[u8]) -> BlobContent {
     }
 
     let text = String::from_utf8_lossy(data);
+    if let Some(base) = render
+        && is_markdown(filename)
+    {
+        return BlobContent::Markdown(markdown_to_html(&text, base));
+    }
     let mut lines: Vec<&str> = text.split('\n').collect();
     // A trailing newline yields a spurious empty final element; drop it so a
     // file ending in '\n' renders the same as one that doesn't.
@@ -231,6 +300,7 @@ pub(crate) fn blob_view(props: &BlobProps, url: &str) -> Html {
         blob_id,
         name,
         content,
+        alt_view,
         data: _,
     } = props;
 
@@ -244,6 +314,10 @@ pub(crate) fn blob_view(props: &BlobProps, url: &str) -> Html {
                         { "download" }
                     </a>
                 }
+                if let Some(alt) = alt_view {
+                    { " · " }
+                    <a class="blob-alt-view" href={alt.url.clone()}>{ alt.label }</a>
+                }
             </div>
             { match content {
                 BlobContent::Text(lines) => html! {
@@ -252,6 +326,9 @@ pub(crate) fn blob_view(props: &BlobProps, url: &str) -> Html {
                             { for lines.iter().enumerate().map(|(i, line)| blob_row(i + 1, line)) }
                         </tbody>
                     </table>
+                },
+                BlobContent::Markdown(html) => html! {
+                    <MarkdownFrame html={html.clone()} title={name.clone()} />
                 },
                 BlobContent::Image { .. } if url.is_empty() => html! {},
                 BlobContent::Image { .. } => html! {
@@ -304,18 +381,42 @@ mod tests {
         render_path("file.txt", data)
     }
 
+    /// The classification of `data` under `filename`, with markdown left as
+    /// source — what almost every case here wants.
+    fn blob_content_source(filename: &str, data: &[u8]) -> BlobContent {
+        blob_content(filename, data, None)
+    }
+
+    /// A [`LinkBase`] for a document at the repository root, for the cases that
+    /// do render markdown.
+    fn root_base() -> LinkBase {
+        LinkBase {
+            dir: String::new(),
+            self_url: "#!/tree/x.md?render=1".to_string(),
+        }
+    }
+
     /// The props are built *inside* the closure rather than passed into it:
     /// `ServerRenderer` requires the closure be `Send`, and `BlobProps` holds an
     /// `Rc`. Moving the inputs in instead (both `Send`) keeps the refcount
     /// non-atomic, which is what a single-threaded WASM app wants.
     fn render_path(path: &str, data: &[u8]) -> String {
+        render_route(path, data, None, false)
+    }
+
+    /// As [`render_path`], but for a blob reached through a `?h=` ref and/or
+    /// with `?render=1` — the inputs that decide the alt-view link.
+    fn render_route(path: &str, data: &[u8], head: Option<&str>, render: bool) -> String {
         let id = ObjectId::from_hex(b"e69de29bb2d1d6434b8b29ae775ad8c2e48c5391").unwrap();
         let path = path.to_string();
         let data = data.to_vec();
+        let head = head.map(String::from);
         let html = futures::executor::block_on(
-            yew::ServerRenderer::<BlobView>::with_props(move || build_blob_props(id, &path, data))
-                .hydratable(false)
-                .render(),
+            yew::ServerRenderer::<BlobView>::with_props(move || {
+                build_blob_props(id, &path, data, head.as_deref(), render)
+            })
+            .hydratable(false)
+            .render(),
         );
         html.replace("><", ">\n<")
     }
@@ -343,7 +444,7 @@ mod tests {
         let url = url.to_string();
         let html = futures::executor::block_on(
             yew::ServerRenderer::<BlobViewWithUrl>::with_props(move || WithUrlProps {
-                blob: build_blob_props(id, &path, data),
+                blob: build_blob_props(id, &path, data, None, false),
                 url,
             })
             .hydratable(false)
@@ -425,6 +526,124 @@ mod tests {
         assert!(!html.contains("<script>"), "{html}");
     }
 
+    /// A markdown file's source view, which offers the rendered one. The link
+    /// is the only difference from any other text blob.
+    #[test]
+    fn test_blob_html_markdown_source() {
+        insta::assert_snapshot!(render_path("docs/setup.md", b"# Setup\n\nRun it.\n"));
+    }
+
+    /// The rendered view: the frame in place of the source table, and a link
+    /// back to the source. Under SSR the frame carries an empty stylesheet href
+    /// and its initial height, as in the readme frame snapshot.
+    #[test]
+    fn test_blob_html_markdown_rendered() {
+        insta::assert_snapshot!(render_route(
+            "docs/setup.md",
+            b"# Setup\n\nSee [install](install.md).\n",
+            None,
+            true
+        ));
+    }
+
+    /// Both directions of the toggle stay on the ref the blob was reached
+    /// through — unlike the links *inside* the document, which address paths.
+    #[test]
+    fn test_blob_markdown_alt_view_keeps_the_ref() {
+        let id = ObjectId::from_hex(b"e69de29bb2d1d6434b8b29ae775ad8c2e48c5391").unwrap();
+        let source = build_blob_props(id, "docs/a.md", b"# x\n".to_vec(), Some("v1.0"), false);
+        assert_eq!(
+            source.alt_view.map(|a| (a.label, a.url)),
+            Some(("rendered", "#!/tree/docs/a.md?h=v1.0&render=1".to_string()))
+        );
+        let rendered = build_blob_props(id, "docs/a.md", b"# x\n".to_vec(), Some("v1.0"), true);
+        assert_eq!(
+            rendered.alt_view.map(|a| (a.label, a.url)),
+            Some(("source", "#!/tree/docs/a.md?h=v1.0".to_string()))
+        );
+    }
+
+    /// A document below the root has its relative links resolved against its
+    /// own directory, which is what the `LinkBase` handed to the renderer is
+    /// for.
+    #[test]
+    fn test_blob_markdown_links_resolve_against_the_documents_directory() {
+        let id = ObjectId::from_hex(b"e69de29bb2d1d6434b8b29ae775ad8c2e48c5391").unwrap();
+        let props = build_blob_props(id, "docs/guide/a.md", b"[b](b.md)\n".to_vec(), None, true);
+        let BlobContent::Markdown(html) = props.content else {
+            panic!("expected rendered markdown");
+        };
+        assert!(
+            html.contains(r##"href="#!/tree/docs/guide/b.md""##),
+            "{html}"
+        );
+    }
+
+    /// Only markdown gets the link, and only when the other view would show
+    /// something: a file the text view refuses is refused rendered too, and
+    /// must not offer a link back to the page the reader is on.
+    #[test]
+    fn test_blob_alt_view_absent_where_there_is_nothing_to_toggle() {
+        let id = ObjectId::from_hex(b"e69de29bb2d1d6434b8b29ae775ad8c2e48c5391").unwrap();
+        let cases: [(&str, Vec<u8>, bool); 4] = [
+            // Not markdown.
+            ("src/main.rs", b"fn main() {}\n".to_vec(), false),
+            ("logo.png", PNG.to_vec(), false),
+            // Markdown, but past the caps — with and without the flag.
+            ("big.md", vec![b'x'; MAX_BLOB_BYTES + 1], false),
+            ("big.md", vec![b'x'; MAX_BLOB_BYTES + 1], true),
+        ];
+        for (path, data, render) in cases {
+            let props = build_blob_props(id, path, data, None, render);
+            assert!(props.alt_view.is_none(), "{path} render={render}");
+        }
+    }
+
+    /// The caps and the binary check come first, so asking for markdown can't
+    /// route a file around them.
+    #[test]
+    fn test_blob_markdown_is_still_capped_and_sniffed() {
+        assert!(matches!(
+            blob_content(
+                "big.md",
+                &vec![b'x'; MAX_BLOB_BYTES + 1],
+                Some(&root_base())
+            ),
+            BlobContent::TooManyBytes { .. }
+        ));
+        assert!(matches!(
+            blob_content(
+                "many.md",
+                &b"x\n".repeat(MAX_BLOB_LINES + 1),
+                Some(&root_base())
+            ),
+            BlobContent::TooManyLines { .. }
+        ));
+        assert!(matches!(
+            blob_content("weird.md", b"# title\0\n", Some(&root_base())),
+            BlobContent::Binary { .. }
+        ));
+    }
+
+    /// Without the flag a `.md` is source, whatever else is true of it.
+    #[test]
+    fn test_blob_markdown_only_renders_when_asked() {
+        assert!(matches!(
+            blob_content_source("a.md", b"# x\n"),
+            BlobContent::Text(_)
+        ));
+    }
+
+    #[test]
+    fn test_is_markdown() {
+        assert!(is_markdown("README.md"));
+        assert!(is_markdown("a.MD"));
+        assert!(is_markdown("notes.markdown"));
+        for name in ["README", "a.mdx", "a.txt", "md", "a.md.gz"] {
+            assert!(!is_markdown(name), "{name}");
+        }
+    }
+
     #[test]
     fn test_blob_html_too_many_bytes() {
         // One very long line: over the byte cap without approaching the line
@@ -446,7 +665,7 @@ mod tests {
         let mut data = vec![0u8; MAX_BLOB_BYTES + 1];
         data[0] = b'x';
         assert!(matches!(
-            blob_content("file.txt", &data),
+            blob_content_source("file.txt", &data),
             BlobContent::Binary { .. }
         ));
     }
@@ -455,11 +674,11 @@ mod tests {
     fn test_blob_caps_are_inclusive() {
         // Exactly at either limit still renders; only past it is refused.
         assert!(matches!(
-            blob_content("file.txt", &vec![b'x'; MAX_BLOB_BYTES]),
+            blob_content_source("file.txt", &vec![b'x'; MAX_BLOB_BYTES]),
             BlobContent::Text(_)
         ));
         assert!(matches!(
-            blob_content("file.txt", &b"x\n".repeat(MAX_BLOB_LINES)),
+            blob_content_source("file.txt", &b"x\n".repeat(MAX_BLOB_LINES)),
             BlobContent::Text(_)
         ));
     }
@@ -468,7 +687,7 @@ mod tests {
     const GIF: &[u8] = b"GIF89a\x01\0\x01\0\x80\0\0";
 
     fn format_of(path: &str, data: &[u8]) -> Option<ImageFormat> {
-        match blob_content(path, data) {
+        match blob_content_source(path, data) {
             BlobContent::Image { format, .. } => Some(format),
             _ => None,
         }
@@ -503,7 +722,7 @@ mod tests {
             ("payload.bin", PNG),
             ("file.txt", b"hello\n"),
         ] {
-            let props = build_blob_props(id, path, data.to_vec());
+            let props = build_blob_props(id, path, data.to_vec(), None, false);
             assert_eq!(props.data.as_slice(), data, "{path}");
         }
     }
@@ -514,7 +733,7 @@ mod tests {
     #[test]
     fn test_build_blob_props_uses_filename_from_path() {
         let id = ObjectId::from_hex(b"e69de29bb2d1d6434b8b29ae775ad8c2e48c5391").unwrap();
-        let props = build_blob_props(id, "docs/img/logo.png", PNG.to_vec());
+        let props = build_blob_props(id, "docs/img/logo.png", PNG.to_vec(), None, false);
         assert_eq!(props.name, "logo.png");
         assert!(matches!(props.content, BlobContent::Image { .. }));
     }
@@ -543,18 +762,18 @@ mod tests {
         // Plain text under an image name stays text, rather than becoming a
         // broken <img>.
         assert!(matches!(
-            blob_content("fake.png", b"not actually a png\n"),
+            blob_content_source("fake.png", b"not actually a png\n"),
             BlobContent::Text(_)
         ));
         // Binary-but-not-PNG under an image name is reported as binary.
         assert!(matches!(
-            blob_content("fake.png", b"PK\x03\x04\0\0"),
+            blob_content_source("fake.png", b"PK\x03\x04\0\0"),
             BlobContent::Binary { .. }
         ));
         // A signature that doesn't match the extension it claims counts for
         // nothing: neither half of the pair is trusted on its own.
         assert!(matches!(
-            blob_content("mislabelled.gif", PNG),
+            blob_content_source("mislabelled.gif", PNG),
             BlobContent::Binary { .. }
         ));
     }
@@ -563,11 +782,11 @@ mod tests {
     #[test]
     fn test_image_magic_without_extension_is_not_an_image() {
         assert!(matches!(
-            blob_content("payload.bin", PNG),
+            blob_content_source("payload.bin", PNG),
             BlobContent::Binary { .. }
         ));
         assert!(matches!(
-            blob_content("noext", PNG),
+            blob_content_source("noext", PNG),
             BlobContent::Binary { .. }
         ));
     }
@@ -577,7 +796,7 @@ mod tests {
     fn test_svg_renders_as_text() {
         let svg = b"<svg xmlns=\"http://www.w3.org/2000/svg\"><rect/></svg>\n";
         assert!(matches!(
-            blob_content("icon.svg", svg),
+            blob_content_source("icon.svg", svg),
             BlobContent::Text(_)
         ));
     }
@@ -589,7 +808,7 @@ mod tests {
         let mut big = PNG.to_vec();
         big.resize(MAX_BLOB_BYTES + 1, 0);
         assert!(matches!(
-            blob_content("huge.png", &big),
+            blob_content_source("huge.png", &big),
             BlobContent::Image { .. }
         ));
     }
@@ -623,7 +842,7 @@ mod tests {
     #[test]
     fn test_count_lines_matches_rendered_rows() {
         for case in [&b""[..], b"a", b"a\n", b"a\nb", b"a\nb\n", b"\n", b"\n\n"] {
-            let BlobContent::Text(lines) = blob_content("file.txt", case) else {
+            let BlobContent::Text(lines) = blob_content_source("file.txt", case) else {
                 panic!("expected text for {case:?}");
             };
             assert_eq!(count_lines(case), lines.len(), "{case:?}");

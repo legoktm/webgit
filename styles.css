@@ -251,7 +251,8 @@ code {
     font-family: var(--mono);
 }
 
-.blob-download {
+.blob-download,
+.blob-alt-view {
     color: var(--link);
 }
 
@@ -594,9 +595,10 @@ a.ref-label:hover {
     line-height: 1.5;
 }
 
-/* The sandboxed frame holding a rendered README.md. Its height attribute is
-   set from the measured content, so it never scrolls internally. */
-.readme-frame {
+/* The sandboxed frame holding rendered markdown — the README, or a `.md` blob
+   viewed with `?render=1`. Its height attribute is set from the measured
+   content, so it never scrolls internally. */
+.markdown-frame {
     display: block;
     width: 100%;
     border: 0;
