@@ -18,7 +18,7 @@ use gib::object::{Commit, Tree};
 use render::about::AboutView;
 use render::blob::BlobView;
 use render::commit::CommitView;
-use render::listing::{ListingProps, ListingView, build_listing_props};
+use render::listing::{ListingProps, ListingView, parse_listing};
 use render::log::LogView;
 use render::readme::ReadmeView;
 use render::refs_all::RefsAllView;
@@ -599,9 +599,7 @@ async fn load_listing() -> anyhow::Result<ListingProps> {
     let text = fetch::fetch_text(&url)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to load {url}: {e:?}"))?;
-    let paths: Vec<String> = serde_json::from_str(&text)
-        .map_err(|e| anyhow::anyhow!("Failed to parse listing.json: {e}"))?;
-    Ok(build_listing_props(paths))
+    parse_listing(&text).map_err(|e| anyhow::anyhow!("Failed to parse listing.json: {e}"))
 }
 
 // ---------------------------------------------------------------------------

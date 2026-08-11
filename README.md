@@ -49,7 +49,32 @@ by running `git commit-graph write --reachable --changed-paths`.
 
 ### Index listing
 
-You'll need to create a `/listing.json` file that contains a JSON array of paths to repositories.
+You'll need to create a `/listing.json` file that contains a JSON array of objects, each mapping a
+directory prefix to the repositories under it:
+
+```json
+[
+    {"": ["standalone.git"]},
+    {"public": ["foo.git", "bar.git"]},
+    {"mirrors": ["linux.git"]}
+]
+```
+
+The page renders exactly what the file says: sections and repositories appear in the order they're
+written, not sorted. An empty prefix puts repositories at the web root, so the example above links
+to `/standalone.git/`, `/public/foo.git/`, `/public/bar.git/` and `/mirrors/linux.git/`.
+
+If your repositories already sit in a directory tree, you can generate the file from it, using each
+repository's parent directory as its prefix:
+
+```sh
+find /var/www/repos -type d -name '*.git' -prune -printf '%P\n' | sort |
+    jq -R -s '[splits("\n")|select(. != "")]|map(split("/"))|group_by(.[:-1])|map({(.[0][:-1]|join("/")): map(.[-1])})' > /var/www/repos/listing.json
+```
+
+That sorts everything by path, which is only a starting point — the file is the authority on order,
+so reorder it by hand (or generate it some other way) if you want something other than alphabetical.
+`-printf` is a GNU find extension, and repository names are assumed not to contain newlines.
 
 Then you can serve the same dist/index.html under your webroot and it will automatically render
 the listing instead.

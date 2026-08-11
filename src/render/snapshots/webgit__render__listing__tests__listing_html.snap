@@ -1,6 +1,6 @@
 ---
 source: src/render/listing.rs
-expression: "render(ListingProps\n{\n    groups:\n    group_repos(&entries(&[\"public/foo.git\", \"public/bar.git\", \"top.git\"])),\n})"
+expression: "render(parse_listing(r#\"[{\"\": [\"top.git\"]}, {\"public\": [\"foo.git\", \"bar.git\"]}]\"#).unwrap())"
 ---
 <h3 class="summary-heading">Repositories</h3>
 <table class="summary-table repo-listing">
@@ -20,12 +20,12 @@ expression: "render(ListingProps\n{\n    groups:\n    group_repos(&entries(&[\"p
 </tr>
 <tr>
 <td class="name">
-<a href="/public/bar.git/">bar.git</a>
+<a href="/public/foo.git/">foo.git</a>
 </td>
 </tr>
 <tr>
 <td class="name">
-<a href="/public/foo.git/">foo.git</a>
+<a href="/public/bar.git/">bar.git</a>
 </td>
 </tr>
 </tbody>
