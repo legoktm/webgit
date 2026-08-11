@@ -11,6 +11,21 @@ pub(crate) struct HttpFile {
     url: String,
 }
 
+/// The value of the `Range` header asking for `len` bytes at `offset`.
+///
+/// A `Range` is text, so the offsets stay 64-bit the whole way through. This
+/// arithmetic used to narrow them to `usize` first, which wraps on wasm32:
+/// an object 5 GiB into a pack came back as one ~1 GiB in, and the bytes the
+/// server returned looked valid but belonged to some other object entirely.
+/// `len` is a buffer length, so it is a `usize` legitimately.
+fn range_header(offset: Offset, len: usize) -> String {
+    let start = offset.0;
+    // HTTP ranges are inclusive at both ends, hence the -1. `len` is non-zero:
+    // `read_segment` returns early on an empty read.
+    let end = start + len as u64 - 1;
+    format!("bytes={start}-{end}")
+}
+
 impl File for HttpFile {
     async fn read_all(&mut self) -> Result<Vec<u8>, FileSystemError> {
         web_sys::console::debug_1(&JsValue::from_str(&format!("read_all for {}", self.url)));
@@ -30,14 +45,11 @@ impl File for HttpFile {
         if dest.is_empty() {
             return Ok(0);
         }
+        let range = range_header(offset, dest.len());
         web_sys::console::debug_1(&JsValue::from_str(&format!(
-            "read_segment({}, {}) for {}",
-            offset.0,
-            offset.0 as usize + dest.len(),
+            "read_segment({range}) for {}",
             self.url
         )));
-        let start = offset.0 as usize;
-        let range = format!("bytes={start}-{}", dest.len() - 1 + start);
         let data = fetch_bytes(&self.url, Some(range)).await?;
         // The server may return fewer bytes than requested when the range runs
         // past EOF (a short 206), or zero bytes for a 416 (range entirely past
@@ -174,4 +186,25 @@ pub(crate) struct HttpFilesystem;
 impl FileSystem for HttpFilesystem {
     type Directory = HttpDirectory;
     type File = HttpFile;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// HTTP ranges are inclusive at both ends, and an offset beyond 4 GiB has
+    /// to reach the header intact. The truncation this guards against is only
+    /// observable on wasm32, where `usize` is 32 bits wide — the assertion
+    /// below states the contract the wasm build depends on.
+    #[test]
+    fn range_header_is_inclusive_and_64_bit() {
+        assert_eq!(range_header(Offset(0), 1), "bytes=0-0");
+        assert_eq!(range_header(Offset(12), 4), "bytes=12-15");
+        // An object 5 GiB into a pack. Narrowed to 32 bits this would wrap to
+        // roughly 1 GiB and quietly read someone else's bytes.
+        assert_eq!(
+            range_header(Offset(5 * 1024 * 1024 * 1024), 8),
+            "bytes=5368709120-5368709127"
+        );
+    }
 }
