@@ -830,8 +830,13 @@ fn append(
             header.set_mode(MODE_LINK);
             header.set_entry_type(tar::EntryType::Symlink);
             header.set_size(0);
-            header.set_link_name(String::from_utf8_lossy(target).as_ref())?;
-            builder.append_data(&mut header, path, &[][..])
+            // `append_link` rather than `set_link_name` + `append_data`: a
+            // target too long for the 100-byte ustar linkname field only fits
+            // behind a GNU longlink record, and `append_link` is what emits
+            // one. Vendored and nix-style trees hit that limit, and the whole
+            // download used to fail on the first such symlink. It is the same
+            // fallback `append_data` already gives an over-long entry *path*.
+            builder.append_link(&mut header, path, String::from_utf8_lossy(target).as_ref())
         }
         EntryKind::File { executable } => {
             header.set_mode(if *executable { MODE_EXEC } else { MODE_FILE });
@@ -1338,7 +1343,11 @@ mod tests {
                     e.path().unwrap().to_string_lossy().into_owned(),
                     h.mode().unwrap(),
                     h.entry_type().as_byte(),
-                    h.link_name()
+                    // From the entry, not the header: a target too long for the
+                    // header field lives in a preceding GNU longlink record,
+                    // and only the entry knows to look there — same reason the
+                    // path above comes from `e.path()`.
+                    e.link_name()
                         .unwrap()
                         .map(|p| p.to_string_lossy().into_owned()),
                     h.size().unwrap(),
@@ -1392,6 +1401,35 @@ mod tests {
             "long path missing from {:?}",
             got.iter().map(|(p, ..)| p).collect::<Vec<_>>()
         );
+    }
+
+    /// A symlink target too long for a ustar header round-trips the same way,
+    /// via a GNU longlink entry. Vendored and nix-style trees carry targets
+    /// well past the 100-byte field, and one of them used to fail the whole
+    /// download rather than just its own entry.
+    #[test]
+    fn test_long_symlink_target_round_trips() {
+        let target = format!("{}/README.md", "../a-long-directory-name".repeat(6));
+        assert!(target.len() > 100, "the target has to overflow the field");
+        let tar = build_tar(
+            &[ArchiveEntry {
+                path: "link.md".to_string(),
+                kind: EntryKind::Symlink {
+                    target: target.clone().into_bytes(),
+                },
+                data: Vec::new(),
+            }],
+            "demo-main/",
+            &"c".repeat(40),
+            1_700_000_000,
+        )
+        .unwrap();
+        let link = entries_of(&tar)
+            .into_iter()
+            .find(|(path, ..)| path == "demo-main/link.md")
+            .expect("the symlink is missing from the archive");
+        assert_eq!(link.2, b'2');
+        assert_eq!(link.3.as_deref(), Some(target.as_str()));
     }
 
     /// The whole point of the mode normalisation, the global header and the
