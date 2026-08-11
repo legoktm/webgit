@@ -3,10 +3,9 @@ use accessory::Accessors;
 use gib_parse::{ParseError, ParseResult, SubsliceRange};
 use nom::{
     Parser,
-    branch::alt,
-    bytes::complete::{tag, take, take_till},
+    bytes::complete::{take, take_till, take_while1},
     character::complete::char,
-    combinator::all_consuming,
+    combinator::{all_consuming, map_opt},
     multi::many,
     sequence::terminated,
 };
@@ -58,16 +57,44 @@ struct RangeTreeEntry {
     id: ObjectId,
 }
 
+/// Interpret a tree entry's octal mode, the way git canonicalizes modes when
+/// it reads a tree.
+///
+/// Only the five modes git writes today are truly canonical, but old (and
+/// `--literally`-written) trees carry variations that every git command still
+/// reads: group-writable `100664` from pre-2008 git, `100640`, or a
+/// zero-padded `040000` for a subdirectory. Rejecting those would make the
+/// whole tree — and every diff touching it — unreadable, so take the object
+/// type from the high bits and normalize the permission bits away. Modes whose
+/// high bits name no object type at all are still an error.
+fn entry_type_from_mode(mode: &[u8]) -> Option<TreeEntryType> {
+    let mut value: u32 = 0;
+    for digit in mode {
+        value = value
+            .checked_mul(8)?
+            .checked_add(char::from(*digit).to_digit(8)?)?;
+    }
+    // The octal file type (`S_IFMT`) and permission bits of stat(2).
+    match value & 0o170000 {
+        0o100000 => Some(if value & 0o100 == 0 {
+            TreeEntryType::File
+        } else {
+            TreeEntryType::Executable
+        }),
+        0o120000 => Some(TreeEntryType::Symlink),
+        0o040000 => Some(TreeEntryType::Tree),
+        0o160000 => Some(TreeEntryType::Commit),
+        _ => None,
+    }
+}
+
 impl RangeTreeEntry {
     fn parser(body: &[u8]) -> impl Fn(&[u8]) -> ParseResult<&[u8], Self> {
         |input: &[u8]| {
-            let entry_type_parser = alt((
-                tag("40000").map(|_| TreeEntryType::Tree),
-                tag("100644").map(|_| TreeEntryType::File),
-                tag("100755").map(|_| TreeEntryType::Executable),
-                tag("120000").map(|_| TreeEntryType::Symlink),
-                tag("160000").map(|_| TreeEntryType::Commit),
-            ));
+            let entry_type_parser = map_opt(
+                take_while1(|c: u8| c.is_ascii_digit()),
+                entry_type_from_mode,
+            );
             let mut p = (
                 terminated(entry_type_parser, char(' ')),
                 terminated(take_till(|c| c == b'\0'), char('\0')),
@@ -169,6 +196,7 @@ impl Tree {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gib_testkit::TestRepo;
     use hex_literal::hex;
 
     const ZERO_OID: ObjectId = ObjectId::from_bytes([0; 20]);
@@ -221,5 +249,136 @@ mod tests {
             assert_eq!(received.id(), id);
             assert_eq!(received.name(), name);
         }
+    }
+
+    /// A single legacy mode must not cost us the rest of the tree: the whole
+    /// object is parsed at once, so rejecting one entry loses every entry.
+    #[test]
+    fn parse_tree_with_legacy_modes() {
+        let mut data = Vec::new();
+        // Zero-padded, as `ls-tree` prints subdirectories.
+        data.extend_from_slice(b"040000 a-directory\0");
+        data.extend_from_slice(&hex!("3a4df67dd7fd7cb3ca82d9896dbdd28053d39bdb"));
+        // Group-writable, as git wrote before it narrowed the modes it honors.
+        data.extend_from_slice(b"100664 a-file\0");
+        data.extend_from_slice(&hex!("e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"));
+        data.extend_from_slice(b"100640 another-file\0");
+        data.extend_from_slice(&hex!("e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"));
+        data.extend_from_slice(b"100775 an-executable-file\0");
+        data.extend_from_slice(&hex!("e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"));
+        data.extend_from_slice(b"120777 a-symlink\0");
+        data.extend_from_slice(&hex!("7c35e066a9001b24677ae572214d292cebc55979"));
+        let tree = Tree::parse(ZERO_OID, data).unwrap();
+        let types: Vec<TreeEntryType> = tree.entries().map(|entry| entry.entry_type()).collect();
+        assert_eq!(
+            types,
+            [
+                TreeEntryType::Tree,
+                TreeEntryType::File,
+                TreeEntryType::File,
+                TreeEntryType::Executable,
+                TreeEntryType::Symlink,
+            ]
+        );
+    }
+
+    /// Tolerating legacy permission bits is not tolerating anything: a mode
+    /// whose high bits name no object type is still a broken tree.
+    #[test]
+    fn parse_tree_rejects_nonsense_modes() {
+        for mode in [
+            b"70000".as_slice(),    // No such file type.
+            b"0".as_slice(),        // Ditto, and what a truncated mode looks like.
+            b"100689".as_slice(),   // Not octal.
+            b"10064400".as_slice(), // Shifted past the file type bits.
+        ] {
+            let mut data = Vec::new();
+            data.extend_from_slice(mode);
+            data.extend_from_slice(b" a-file\0");
+            data.extend_from_slice(&hex!("e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"));
+            assert!(
+                Tree::parse(ZERO_OID, data).is_err(),
+                "mode {} should not parse",
+                str::from_utf8(mode).unwrap()
+            );
+        }
+    }
+
+    /// Legacy modes are worth accepting because git accepts them, so check the
+    /// mapping against what the host's `git ls-tree` reports for a tree
+    /// written with them.
+    #[test]
+    fn legacy_modes_match_ls_tree() {
+        let test_repo = TestRepo::new().unwrap();
+        let path = |name: &str| test_repo.location.path().join(name);
+        // `--literally` is the only way to get a legacy mode into a tree: git's
+        // own tree writers refuse to produce one. `hash-object` reads a path
+        // rather than stdin, which `run_git` closes.
+        let write_object = |object_type: &str, name: &str| {
+            ObjectId::from_hex(
+                test_repo
+                    .run_git([
+                        "hash-object",
+                        "-t",
+                        object_type,
+                        "-w",
+                        "--literally",
+                        path(name).to_str().unwrap(),
+                    ])
+                    .unwrap()
+                    .trim_ascii_end(),
+            )
+            .unwrap()
+        };
+        std::fs::write(path("empty"), b"").unwrap();
+        let blob = write_object("blob", "empty");
+        let subtree = write_object("tree", "empty");
+
+        let mut body = Vec::new();
+        // In tree order, which sorts a subdirectory as if its name ended in a
+        // slash.
+        for (mode, name, id) in [
+            (b"040000".as_slice(), "a-directory", subtree),
+            (b"100640".as_slice(), "a-group-readable-file", blob),
+            (b"100664".as_slice(), "a-group-writable-file", blob),
+            (b"120777".as_slice(), "a-symlink", blob),
+            (b"100775".as_slice(), "an-executable-file", blob),
+        ] {
+            body.extend_from_slice(mode);
+            body.push(b' ');
+            body.extend_from_slice(name.as_bytes());
+            body.push(0);
+            body.extend_from_slice(id.bytes());
+        }
+        std::fs::write(path("legacy-tree"), &body).unwrap();
+        let id = write_object("tree", "legacy-tree");
+
+        let tree = Tree::parse(
+            id,
+            test_repo
+                .run_git(["cat-file", "tree", &id.to_string()])
+                .unwrap(),
+        )
+        .unwrap();
+        let actual: Vec<String> = tree
+            .entries()
+            .map(|entry| {
+                let (mode, kind) = match entry.entry_type() {
+                    TreeEntryType::File => ("100644", "blob"),
+                    TreeEntryType::Executable => ("100755", "blob"),
+                    TreeEntryType::Symlink => ("120000", "blob"),
+                    TreeEntryType::Tree => ("040000", "tree"),
+                    TreeEntryType::Commit => ("160000", "commit"),
+                };
+                format!(
+                    "{mode} {kind} {}\t{}",
+                    entry.id(),
+                    str::from_utf8(entry.name()).unwrap()
+                )
+            })
+            .collect();
+        let expected =
+            String::from_utf8(test_repo.run_git(["ls-tree", &id.to_string()]).unwrap()).unwrap();
+        assert_eq!(actual, expected.lines().collect::<Vec<&str>>());
     }
 }
