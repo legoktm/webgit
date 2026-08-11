@@ -162,10 +162,21 @@ impl<F: FileSystem> Repo<F> {
             let target = match target {
                 RefTarget::Direct(oid) => oid,
                 RefTarget::Symbolic(next) => {
-                    self.lookup_ref(&next)
-                        .await?
-                        .resolve_object_id(self)
-                        .await?
+                    let resolved =
+                        async { self.lookup_ref(&next).await?.resolve_object_id(self).await }.await;
+                    match resolved {
+                        Ok(oid) => oid,
+                        // A symbolic ref that dangles or loops is one broken
+                        // ref, not a broken repository — a mirror's
+                        // `refs/remotes/origin/HEAD` naming a since-deleted
+                        // branch is the common case. Listing everything else is
+                        // what `git for-each-ref` does; failing here would
+                        // instead empty every branches, tags and refs page.
+                        // Only resolution failures are skipped: an I/O error
+                        // reading the ref still propagates.
+                        Err(Error::RefNotFound(_) | Error::SymrefTooDeep(_)) => continue,
+                        Err(e) => return Err(e),
+                    }
                 }
             };
             out.insert(
@@ -334,6 +345,34 @@ mod tests {
         assert_eq!(fat_tag.peeled(), None);
         assert_ne!(fat_tag.target(), head);
         assert!(!refs.contains_key(&RefName::Head));
+    }
+
+    /// A symbolic ref that resolves nowhere costs only itself. Mirrors
+    /// routinely carry a `refs/remotes/origin/HEAD` naming a branch that has
+    /// since been deleted, and `git for-each-ref` lists the rest without
+    /// complaint; erroring instead would empty every refs page in the app.
+    #[test]
+    fn all_refs_skips_broken_symbolic_refs() {
+        let test_repo = make_basic_repo().unwrap();
+        let symref = |name: &str, target: &str| {
+            test_repo.run_git(["symbolic-ref", name, target]).unwrap();
+        };
+        symref("refs/remotes/origin/HEAD", "refs/remotes/origin/gone");
+        // A loop resolves no better than a dangling target, and is skipped for
+        // the same reason.
+        symref("refs/heads/loop-a", "refs/heads/loop-b");
+        symref("refs/heads/loop-b", "refs/heads/loop-a");
+
+        let repo = open_test_repo(&test_repo);
+        let refs = block_on(repo.all_refs()).unwrap();
+        let main = refs.get(&RefName::Ref(b"heads/main".to_vec())).unwrap();
+        assert_eq!(main.target(), head_oid(&test_repo));
+        for broken in ["remotes/origin/HEAD", "heads/loop-a", "heads/loop-b"] {
+            assert!(
+                !refs.contains_key(&RefName::Ref(broken.as_bytes().to_vec())),
+                "{broken} resolves to nothing and should have been skipped"
+            );
+        }
     }
 
     /// `git gc` (via repack) runs `update-server-info`, so repos that have
