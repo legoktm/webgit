@@ -32,5 +32,7 @@ Where possible, we lazily render data instead of requiring every lookup to be co
 
 We set as strict a CSP as possible, banning inline CSS and JS.
 
-We mostly assume that the Git repository is not malicious. But we still take some precautions where
-we can, such as rendering markdown in an iframe.
+We mostly assume that the Git repository is not malicious and doesn't contain corrupt objects, is out
+of sync, etc. (Network errors or hangups do need to be handled correctly.)
+
+But we still take some precautions where we can, such as rendering markdown in an iframe.
