@@ -25,7 +25,6 @@
 
 #![deny(clippy::all)]
 
-use accessory::Accessors;
 use gib_fs::FileSystem;
 use gib_hash::ObjectId;
 use gib_object::{
@@ -180,10 +179,8 @@ impl<Content> DiffEntry<Content> {
 }
 
 /// A diff of git trees, holding the [`ObjectId`]s of differing files
-#[derive(Accessors)]
 pub struct TreeDiff {
     /// The entries of the diff, one per differing path in the tree
-    #[access(get(ty(&[DiffEntry<(ObjectId, ObjectId)>])))]
     entries: Vec<DiffEntry<(ObjectId, ObjectId)>>,
 }
 
@@ -321,6 +318,11 @@ async fn tree_diff_impl<E: From<DiffError>>(
 }
 
 impl TreeDiff {
+    /// The entries of the diff, one per differing path in the tree
+    pub fn entries(&self) -> &[DiffEntry<(ObjectId, ObjectId)>] {
+        &self.entries
+    }
+
     /// Construct a [`TreeDiff`] by diffing two trees
     pub async fn new<F: FileSystem>(
         odb: &ObjectDb<F>,

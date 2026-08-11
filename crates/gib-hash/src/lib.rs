@@ -4,7 +4,6 @@
 
 #![deny(clippy::all)]
 
-use accessory::Accessors;
 use gib_parse::ParseResult;
 use nom::{
     Parser, bytes::complete::take, character::complete::hex_digit0, combinator::all_consuming,
@@ -14,10 +13,9 @@ use nom::{
 ///
 /// `gib` only supports SHA-1 repositories, so this is always 20 bytes or
 /// 40 hex characters
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Accessors)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ObjectId {
     /// The object ID as an array of bytes
-    #[access(get)]
     pub(crate) bytes: [u8; 20],
 }
 
@@ -36,6 +34,11 @@ impl std::fmt::Debug for ObjectId {
 }
 
 impl ObjectId {
+    /// The object ID as an array of bytes
+    pub fn bytes(&self) -> &[u8; 20] {
+        &self.bytes
+    }
+
     /// Construct an [`ObjectId`] from an array of bytes.
     pub const fn from_bytes(id: [u8; 20]) -> Self {
         Self { bytes: id }

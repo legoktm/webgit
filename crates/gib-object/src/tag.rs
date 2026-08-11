@@ -3,7 +3,6 @@ use crate::{
     header::{ObjectHeaderIter, RangeObjectHeader},
     parse_author_committer_tagger,
 };
-use accessory::Accessors;
 use gib_parse::{ParseError, SubsliceRange};
 use jiff::Zoned;
 use nom::{Parser, combinator::all_consuming};
@@ -12,23 +11,19 @@ use std::ops::Range;
 /// A tag object
 ///
 /// Git tags can be ref tags or tag objects; this is the latter.
-#[derive(Accessors, Clone)]
+#[derive(Clone)]
 pub struct Tag {
     /// The [`ObjectId`] of the tag
-    #[access(get(cp))]
     id: ObjectId,
 
     /// The raw data in the object
-    #[access(get(ty(&[u8])))]
     body: Vec<u8>,
 
     /// The [`ObjectId`] the object pointed to by the tag
-    #[access(get(cp))]
     target: ObjectId,
 
     /// The type of the object pointed to by the tag
     #[allow(clippy::struct_field_names)]
-    #[access(get(cp))]
     tag_type: ObjectType,
 
     name: Range<usize>,
@@ -37,7 +32,6 @@ pub struct Tag {
     message: Range<usize>,
 
     /// The tag date, if it exists
-    #[access(get(as_ref, ty(Option<&Zoned>)))]
     date: Option<Zoned>,
 
     additional_headers: Vec<RangeObjectHeader>,
@@ -61,6 +55,31 @@ impl Ord for Tag {
 }
 
 impl Tag {
+    /// The [`ObjectId`] of the tag
+    pub fn id(&self) -> ObjectId {
+        self.id
+    }
+
+    /// The raw data in the object
+    pub fn body(&self) -> &[u8] {
+        &self.body
+    }
+
+    /// The [`ObjectId`] the object pointed to by the tag
+    pub fn target(&self) -> ObjectId {
+        self.target
+    }
+
+    /// The type of the object pointed to by the tag
+    pub fn tag_type(&self) -> ObjectType {
+        self.tag_type
+    }
+
+    /// The tag date, if it exists
+    pub fn date(&self) -> Option<&Zoned> {
+        self.date.as_ref()
+    }
+
     /// The name of the tag
     pub fn name(&self) -> &[u8] {
         &self.body[self.name.clone()]

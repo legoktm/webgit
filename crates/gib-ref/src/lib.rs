@@ -9,7 +9,6 @@
 
 #![deny(clippy::all)]
 
-use accessory::Accessors;
 use gib_hash::ObjectId;
 use gib_parse::ParseResult;
 use nom::{
@@ -41,19 +40,28 @@ pub enum RefName {
 }
 
 /// A ref resolved during bulk listing, as returned by `Repo::all_refs`
-#[derive(Accessors, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RefEntry {
     /// The object the ref points to directly
-    #[access(get(cp))]
     pub target: ObjectId,
 
     /// For annotated tags, the commit the tag object points to, when the
     /// source (`info/refs` or `packed-refs`) recorded a peeled entry
-    #[access(get(cp))]
     pub peeled: Option<ObjectId>,
 }
 
 impl RefEntry {
+    /// The object the ref points to directly
+    pub fn target(&self) -> ObjectId {
+        self.target
+    }
+
+    /// For annotated tags, the commit the tag object points to, when the
+    /// source (`info/refs` or `packed-refs`) recorded a peeled entry
+    pub fn peeled(&self) -> Option<ObjectId> {
+        self.peeled
+    }
+
     /// The object ID to use when treating this ref as a commit: the peeled
     /// target if one was recorded, otherwise the direct target.
     pub fn commit_target(&self) -> ObjectId {
@@ -62,21 +70,32 @@ impl RefEntry {
 }
 
 /// The contents of a git ref
-#[derive(Accessors, Clone)]
+#[derive(Clone)]
 pub struct Ref {
     /// The name of the ref
-    #[access(get)]
     name: RefName,
 
     /// The target of the ref
     ///
     /// Refs can be either direct (pointing to an object) or symbolic (pointing
     /// to another ref).
-    #[access(get)]
     target: RefTarget,
 }
 
 impl Ref {
+    /// The name of the ref
+    pub fn name(&self) -> &RefName {
+        &self.name
+    }
+
+    /// The target of the ref
+    ///
+    /// Refs can be either direct (pointing to an object) or symbolic (pointing
+    /// to another ref).
+    pub fn target(&self) -> &RefTarget {
+        &self.target
+    }
+
     /// Build a ref from a name and the target it was found to have.
     ///
     /// Finding that target is the caller's job: it means reading a loose ref

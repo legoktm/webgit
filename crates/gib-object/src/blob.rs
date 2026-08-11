@@ -1,18 +1,27 @@
 use crate::ObjectId;
-use accessory::Accessors;
 
 /// A blob object
 ///
 /// Represents arbitrary data, e.g. the contents of a file
-#[derive(Debug, Clone, Accessors)]
+#[derive(Debug, Clone)]
 pub struct Blob {
     /// The [`ObjectId`] of the blob object
-    #[access(get(cp))]
     id: ObjectId,
 
     /// The data that the blob contains
-    #[access(get(ty(&[u8])))]
     data: Vec<u8>,
+}
+
+impl Blob {
+    /// The [`ObjectId`] of the blob object
+    pub fn id(&self) -> ObjectId {
+        self.id
+    }
+
+    /// The data that the blob contains
+    pub fn data(&self) -> &[u8] {
+        &self.data
+    }
 }
 
 impl PartialEq for Blob {

@@ -1,4 +1,3 @@
-use accessory::Accessors;
 use gib_parse::{ParseResult, SubsliceRange};
 use nom::{
     Parser,
@@ -12,16 +11,28 @@ use std::iter::FusedIterator;
 use std::ops::Range;
 
 /// An arbitrary object header, with a name and a value
-#[derive(Clone, PartialEq, Eq, Accessors)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ObjectHeader<'a> {
     /// The name of the header
-    #[access(get(cp))]
     name: &'a [u8],
     /// The value of the header
     ///
     /// Multi-line values (using wrapped lines) are not decoded.
-    #[access(get(cp))]
     value: &'a [u8],
+}
+
+impl<'a> ObjectHeader<'a> {
+    /// The name of the header
+    pub fn name(&self) -> &'a [u8] {
+        self.name
+    }
+
+    /// The value of the header
+    ///
+    /// Multi-line values (using wrapped lines) are not decoded.
+    pub fn value(&self) -> &'a [u8] {
+        self.value
+    }
 }
 
 #[derive(Clone)]

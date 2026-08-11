@@ -1,5 +1,4 @@
 use crate::ObjectId;
-use accessory::Accessors;
 use gib_parse::{ParseError, ParseResult, SubsliceRange};
 use nom::{
     Parser,
@@ -35,19 +34,33 @@ pub enum TreeEntryType {
 /// An entry in a tree object
 ///
 /// It holds a reference to the data in the [`Tree`].
-#[derive(Accessors, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct TreeEntry<'a> {
     /// The name of the tree entry
-    #[access(get(cp))]
     name: &'a [u8],
 
     /// The type of the tree entry
-    #[access(get(cp))]
     entry_type: TreeEntryType,
 
     /// The [`ObjectId`] that the entry points to
-    #[access(get(cp))]
     id: ObjectId,
+}
+
+impl<'a> TreeEntry<'a> {
+    /// The name of the tree entry
+    pub fn name(&self) -> &'a [u8] {
+        self.name
+    }
+
+    /// The type of the tree entry
+    pub fn entry_type(&self) -> TreeEntryType {
+        self.entry_type
+    }
+
+    /// The [`ObjectId`] that the entry points to
+    pub fn id(&self) -> ObjectId {
+        self.id
+    }
 }
 
 #[derive(Clone)]
@@ -146,14 +159,12 @@ impl FusedIterator for TreeEntryIter<'_> {}
 impl ExactSizeIterator for TreeEntryIter<'_> {}
 
 /// A tree object
-#[derive(Accessors, Clone)]
+#[derive(Clone)]
 pub struct Tree {
     /// The [`ObjectId`] of the tree
-    #[access(get(cp))]
     id: ObjectId,
 
     /// The raw data in the object
-    #[access(get(ty(&[u8])))]
     body: Vec<u8>,
 
     entries: Vec<RangeTreeEntry>,
@@ -177,6 +188,16 @@ impl Ord for Tree {
 }
 
 impl Tree {
+    /// The [`ObjectId`] of the tree
+    pub fn id(&self) -> ObjectId {
+        self.id
+    }
+
+    /// The raw data in the object
+    pub fn body(&self) -> &[u8] {
+        &self.body
+    }
+
     /// Get an iterator over the entries in the tree.
     pub fn entries(&self) -> TreeEntryIter<'_> {
         TreeEntryIter {

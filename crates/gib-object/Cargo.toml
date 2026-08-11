@@ -5,7 +5,6 @@ edition = "2024"
 publish = false
 
 [dependencies]
-accessory.workspace = true
 gib-hash.workspace = true
 gib-parse.workspace = true
 jiff.workspace = true

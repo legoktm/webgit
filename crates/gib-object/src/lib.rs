@@ -7,7 +7,6 @@
 
 #![deny(clippy::all)]
 
-use accessory::Accessors;
 use gib_parse::{ParseError, ParseResult};
 use jiff::{
     Timestamp, Zoned,
@@ -64,7 +63,7 @@ pub struct RawObject {
 
 /// An object turned out to be of a different type than the caller required.
 #[expect(missing_docs)]
-#[derive(Debug, Accessors)]
+#[derive(Debug)]
 pub struct UnexpectedObjectType {
     pub id: ObjectId,
     pub expected: ObjectType,

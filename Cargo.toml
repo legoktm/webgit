@@ -21,7 +21,6 @@ default-members = [
 ]
 
 [workspace.dependencies]
-accessory = "2.1.0"
 anyhow = "1"
 comrak = { version = "0.54.0", default-features = false }
 console_error_panic_hook = "0.1"

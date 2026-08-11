@@ -3,29 +3,24 @@ use crate::{
     header::{ObjectHeaderIter, RangeObjectHeader},
     parse_author_committer_tagger,
 };
-use accessory::Accessors;
 use gib_parse::{ParseError, SubsliceRange};
 use jiff::Zoned;
 use nom::{Parser, combinator::all_consuming};
 use std::ops::Range;
 
 /// A commit object
-#[derive(Accessors, Clone)]
+#[derive(Clone)]
 pub struct Commit {
     /// The [`ObjectId`] of the commit
-    #[access(get(cp))]
     id: ObjectId,
 
     /// The raw data in the object
-    #[access(get(ty(&[u8])))]
     body: Vec<u8>,
 
     /// The [`ObjectId`] of the tree that the commit points to
-    #[access(get(cp))]
     tree: ObjectId,
 
     /// The [`ObjectId`]s of all of the parents of the commit
-    #[access(get(ty(&[ObjectId])))]
     parents: Vec<ObjectId>,
 
     author_name: Range<usize>,
@@ -35,12 +30,10 @@ pub struct Commit {
     message: Range<usize>,
 
     /// The author date of the commit
-    #[access(get)]
     author_date: Zoned,
 
     /// The commit date of the commit
     #[expect(clippy::struct_field_names)]
-    #[access(get)]
     commit_date: Zoned,
 
     additional_headers: Vec<RangeObjectHeader>,
@@ -64,6 +57,36 @@ impl Ord for Commit {
 }
 
 impl Commit {
+    /// The [`ObjectId`] of the commit
+    pub fn id(&self) -> ObjectId {
+        self.id
+    }
+
+    /// The raw data in the object
+    pub fn body(&self) -> &[u8] {
+        &self.body
+    }
+
+    /// The [`ObjectId`] of the tree that the commit points to
+    pub fn tree(&self) -> ObjectId {
+        self.tree
+    }
+
+    /// The [`ObjectId`]s of all of the parents of the commit
+    pub fn parents(&self) -> &[ObjectId] {
+        &self.parents
+    }
+
+    /// The author date of the commit
+    pub fn author_date(&self) -> &Zoned {
+        &self.author_date
+    }
+
+    /// The commit date of the commit
+    pub fn commit_date(&self) -> &Zoned {
+        &self.commit_date
+    }
+
     /// The name of the commit author
     pub fn author_name(&self) -> &[u8] {
         &self.body[self.author_name.clone()]
