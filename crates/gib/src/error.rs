@@ -46,6 +46,7 @@ pub enum Error {
     MalformedInfoPacks,
     MalformedRef(RefName),
     RefNotFound(RefName),
+    SymrefTooDeep(RefName),
     MalformedPackObject(ObjectId),
     MalformedObject(ObjectId),
     ObjectParseError {
