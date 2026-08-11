@@ -214,16 +214,20 @@ fn strip_route_prefix<'a>(hash: &'a str, prefix: &str, seps: &[char]) -> Option<
 /// (empty) | #  | #!/summary        the summary
 /// #!/about                         the about page
 /// #!/readme                        the README at HEAD
-/// #!/log[/<path>][?…]              the log; query: h=<ref>, offset=<n>
+/// #!/log[/<path>][?…]              the log; query: h=<rev>, offset=<n>
 /// #!/commit[/]                     HEAD's commit
 /// #!/commit/<sha>                  one commit
 /// #!/refs[/]                       all refs
 /// #!/refs/heads[/]                 the branch list
 /// #!/refs/tags[/]                  the tag list
 /// #!/refs/tags/<tag>               one tag
-/// #!/tree[/<path>][?…]             the tree, or a blob; query: h=<ref>, render=1
-/// #!/snapshot[/…][?h=<ref>]        a .tar.gz of a ref's tree (path ignored)
+/// #!/tree[/<path>][?…]             the tree, or a blob; query: h=<rev>, render=1
+/// #!/snapshot[/…][?h=<ref>]        a .tar.gz of a revision's tree (path ignored)
 /// ```
+///
+/// `h=<rev>` is a branch, a tag, or a full 40-character commit hash; see
+/// [`resolve_revision`], which is where the distinction is drawn. To the grammar
+/// it is one opaque string either way.
 ///
 /// Anything else falls back to the summary, so a hand-edited or stale URL lands
 /// on a real page rather than an error.
@@ -332,6 +336,20 @@ fn parse_log_query(query_string: &str) -> (usize, Option<String>) {
 pub(crate) enum RefKind {
     Tag,
     Branch,
+    /// A commit named directly by its hash in `?h=`, belonging to no branch or
+    /// tag we resolved it through.
+    Commit,
+}
+
+/// The abbreviated form of a hash, as shown wherever a full one would crowd out
+/// what surrounds it. Eight characters, matching the commit view's parent links
+/// and the snapshot of a detached HEAD.
+///
+/// Truncation is by character, not by byte slice: every hash reaching this is 40
+/// hex digits, but a helper that panics on a short input is a trap for the next
+/// caller.
+fn short_hash(hash: &str) -> String {
+    hash.chars().take(8).collect()
 }
 
 /// The nav tab a route lives under, used for the `active` highlight.
@@ -349,7 +367,25 @@ pub(crate) fn active_tab(route: &Route) -> &'static str {
     }
 }
 
-async fn resolve_ref_to_commit(
+/// Resolve a `?h=` value to the commit it names: a tag, a branch, or a commit
+/// given as a full 40-character hash.
+///
+/// Refs are consulted first, and cost nothing to consult — the ref snapshot is
+/// fetched once per session and this is a lookup in it — so every link the app
+/// writes for itself resolves without a request of its own. Only a value naming
+/// no ref is read as an object id.
+///
+/// Full hashes only. Expanding an abbreviation means searching every pack index
+/// and can come back ambiguous ([`CachingRepo::resolve_prefix`]), which is a
+/// different failure to report and a different label for the path bar to carry;
+/// `#!/commit/<sha>` takes that on because commit messages quote abbreviations,
+/// and `?h=` has no such source of them.
+///
+/// The ref-before-hash order is the reverse of `git rev-parse`, which reads a
+/// full hash as an object before it consults refs. It matters only for a ref
+/// whose own name is 40 hex digits, and this way every `?h=` URL that resolved
+/// before still resolves to exactly what it did.
+async fn resolve_revision(
     repo: &CachingRepo,
     name: &str,
 ) -> anyhow::Result<(gib::object::Commit, RefKind)> {
@@ -361,27 +397,53 @@ async fn resolve_ref_to_commit(
         return Ok((commit, RefKind::Tag));
     }
     let heads_ref = RefName::Ref(format!("heads/{name}").into_bytes());
-    let entry = refs
-        .get(&heads_ref)
-        .ok_or_else(|| anyhow::anyhow!("ref not found: {name}"))?;
-    let commit = commit_for_entry(entry, repo)
+    if let Some(entry) = refs.get(&heads_ref) {
+        let commit = commit_for_entry(entry, repo)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("ref {name} does not point to a commit"))?;
+        return Ok((commit, RefKind::Branch));
+    }
+
+    let oid = ObjectId::from_hex(name.as_bytes()).ok_or_else(|| {
+        anyhow::anyhow!("not a branch, a tag, or a full 40-character commit hash: {name}")
+    })?;
+    let object = repo
+        .lookup_object(oid)
         .await
-        .ok_or_else(|| anyhow::anyhow!("ref {name} does not point to a commit"))?;
-    Ok((commit, RefKind::Branch))
+        .context(format!("lookup {name}"))?;
+    // A hash may name an annotated tag object as readily as a commit — the tag
+    // pages link to tags by name, but a hash copied out of the refs listing is
+    // whatever that row pointed at — so peel before deciding it isn't a commit.
+    let commit = repo
+        .peel_to_commit(&object)
+        .await
+        .context(format!("peel {name}"))?
+        .ok_or_else(|| anyhow::anyhow!("{name} is not a commit"))?;
+    Ok((commit, RefKind::Commit))
 }
 
-/// The ref name + kind shown in the path bar / log header: the explicit `?h=`
-/// ref (with its resolved kind), or the implicit HEAD branch. `None` if it
-/// can't be resolved — the content view reports the real error.
+/// The label + kind shown in the path bar / log header: the explicit `?h=`
+/// revision, or the implicit HEAD branch. `None` if it can't be resolved — the
+/// content view reports the real error.
+///
+/// A ref is labelled by the name that was asked for. A commit is labelled by the
+/// short hash of what it resolved *to*, which is the same thing for a hash that
+/// named a commit and the more useful one for a hash that named a tag object.
+/// The URL keeps all 40 characters either way: they are what makes the link
+/// stable, but spelled out in the path bar they crowd out the breadcrumb.
 pub(crate) async fn resolve_display_head(
     repo: &CachingRepo,
     head: Option<&str>,
 ) -> Option<(String, RefKind)> {
     match head {
-        Some(name) => resolve_ref_to_commit(repo, name)
-            .await
-            .ok()
-            .map(|(_, kind)| (name.to_string(), kind)),
+        Some(name) => {
+            let (commit, kind) = resolve_revision(repo, name).await.ok()?;
+            let label = match kind {
+                RefKind::Tag | RefKind::Branch => name.to_string(),
+                RefKind::Commit => short_hash(&format!("{}", commit.id())),
+            };
+            Some((label, kind))
+        }
         None => head_branch_name(repo).await.map(|n| (n, RefKind::Branch)),
     }
 }
@@ -430,7 +492,7 @@ pub(crate) async fn build_route(
             let resolved;
             let log_commit: &gib::object::Commit = match &head {
                 Some(name) => {
-                    resolved = resolve_ref_to_commit(repo, name).await?.0;
+                    resolved = resolve_revision(repo, name).await?.0;
                     &resolved
                 }
                 None => head_commit,
@@ -464,7 +526,7 @@ pub(crate) async fn build_route(
         Route::Tree { path, head, render } => {
             let resolved_tree;
             let tree: &Tree = if let Some(ref ref_name) = head {
-                let (commit, _kind) = resolve_ref_to_commit(repo, ref_name).await?;
+                let (commit, _kind) = resolve_revision(repo, ref_name).await?;
                 resolved_tree = repo
                     .lookup_object(commit.tree())
                     .await
@@ -499,9 +561,12 @@ pub(crate) async fn build_route(
             // Both the commit and its tree, where the tree route needs only the
             // tree: the commit's id and date go into the archive itself.
             let resolved_commit;
+            let mut resolved_kind = None;
             let commit: &gib::object::Commit = match &head {
                 Some(name) => {
-                    resolved_commit = resolve_ref_to_commit(repo, name).await?.0;
+                    let (commit, kind) = resolve_revision(repo, name).await?;
+                    resolved_commit = commit;
+                    resolved_kind = Some(kind);
                     &resolved_commit
                 }
                 None => head_commit,
@@ -521,12 +586,15 @@ pub(crate) async fn build_route(
             };
 
             // What the archive is named after: the ref asked for, the branch
-            // HEAD is on, or — if HEAD is detached — the commit itself.
-            let ref_label = match &head {
-                Some(name) => name.clone(),
-                None => match head_branch_name(repo).await {
+            // HEAD is on, or — for a `?h=` that named a commit outright, and for
+            // a detached HEAD — the commit itself, abbreviated. All 40 digits in
+            // a filename tell the reader nothing the first eight don't.
+            let ref_label = match (&head, resolved_kind) {
+                (Some(_), Some(RefKind::Commit)) => short_hash(&format!("{}", commit.id())),
+                (Some(name), _) => name.clone(),
+                (None, _) => match head_branch_name(repo).await {
                     Some(name) => name,
-                    None => commit.id().to_string()[..8].to_string(),
+                    None => short_hash(&format!("{}", commit.id())),
                 },
             };
             Ok(LoadedView::Snapshot(
@@ -846,6 +914,39 @@ mod tests {
             parse_tree_rest("/a.md?render=1"),
             ("a.md".into(), None, true)
         );
+    }
+
+    #[test]
+    fn test_short_hash() {
+        assert_eq!(
+            short_hash("6121d0b97779278fcc32cc8a02754e7c588d9c18"),
+            "6121d0b9"
+        );
+        // Shorter than the abbreviation: itself, not a panic.
+        assert_eq!(short_hash("abc"), "abc");
+        assert_eq!(short_hash(""), "");
+    }
+
+    /// A full hash in `?h=` is 40 hex digits, none of which the encoder touches,
+    /// so it reaches the router as itself and the URL stays readable. The router
+    /// draws no distinction between a hash and a ref name — `resolve_revision`
+    /// is where that is decided — and this pins that it doesn't have to.
+    #[test]
+    fn test_h_takes_a_full_hash_verbatim() {
+        let sha = "6121d0b97779278fcc32cc8a02754e7c588d9c18";
+        assert_eq!(
+            tree_url("src", Some(sha), false),
+            format!("#!/tree/src?h={sha}")
+        );
+        assert_eq!(log_url("", 0, Some(sha)), format!("#!/log?h={sha}"));
+        assert_eq!(snapshot_url(sha), format!("#!/snapshot?h={sha}"));
+        match parse_hash(&tree_url("src", Some(sha), false)) {
+            Route::Tree { path, head, .. } => {
+                assert_eq!(path, "src");
+                assert_eq!(head.as_deref(), Some(sha));
+            }
+            _ => panic!("expected a tree route"),
+        }
     }
 
     #[test]

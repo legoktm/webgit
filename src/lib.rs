@@ -536,6 +536,7 @@ fn ref_label(kind: &RefKind) -> &'static str {
     match kind {
         RefKind::Tag => "tag",
         RefKind::Branch => "branch",
+        RefKind::Commit => "commit",
     }
 }
 
@@ -797,6 +798,26 @@ mod tests {
         insta::assert_snapshot!(render_pb(PathBar::RefOnly {
             name: "v1.0.0".to_string(),
             kind: RefKind::Tag,
+        }));
+    }
+
+    /// A `?h=` that named a commit outright: labelled "commit", and by the short
+    /// hash — the full 40 characters stay in the hrefs, which is where they are
+    /// load-bearing.
+    #[test]
+    fn path_bar_crumbs_on_commit() {
+        insta::assert_snapshot!(render_pb(PathBar::Crumbs {
+            display: Some(("6121d0b9".to_string(), RefKind::Commit)),
+            path: "src".to_string(),
+            head: Some("6121d0b97779278fcc32cc8a02754e7c588d9c18".to_string()),
+        }));
+    }
+
+    #[test]
+    fn path_bar_ref_only_on_commit() {
+        insta::assert_snapshot!(render_pb(PathBar::RefOnly {
+            name: "6121d0b9".to_string(),
+            kind: RefKind::Commit,
         }));
     }
 }

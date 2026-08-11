@@ -1,0 +1,6 @@
+---
+source: src/lib.rs
+expression: "render_pb(PathBar::Crumbs\n{\n    display: Some((\"6121d0b9\".to_string(), RefKind::Commit)), path:\n    \"src\".to_string(), head:\n    Some(\"6121d0b97779278fcc32cc8a02754e7c588d9c18\".to_string()),\n})"
+---
+<div id="path-bar">commit: 6121d0b9 | path: <a href="#!/tree?h=6121d0b97779278fcc32cc8a02754e7c588d9c18">root</a> / <a href="#!/tree/src?h=6121d0b97779278fcc32cc8a02754e7c588d9c18">src</a>
+</div>

@@ -1,0 +1,5 @@
+---
+source: src/lib.rs
+expression: "render_pb(PathBar::RefOnly\n{ name: \"6121d0b9\".to_string(), kind: RefKind::Commit, })"
+---
+<div id="path-bar">commit: 6121d0b9</div>
