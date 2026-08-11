@@ -240,6 +240,23 @@ Merge branch 'branch'
         assert_eq!(commit.parents.len(), 2);
     }
 
+    /// Empty fields are legal in real objects: `git commit
+    /// --allow-empty-message` writes a commit with no message at all, and an
+    /// author line may carry an email with no name in front of it.
+    #[test]
+    fn parse_commit_empty_fields() {
+        let data = b"tree 3a4df67dd7fd7cb3ca82d9896dbdd28053d39bdb
+author  <an-email-address> 1774735018 +0530
+committer another-user <another-email-address> 1774735019 -0800
+
+";
+        let commit = Commit::parse(ZERO_OID, data.to_vec()).unwrap();
+        assert_eq!(commit.author_name(), b"".as_slice());
+        assert_eq!(commit.author_email(), b"an-email-address".as_slice());
+        assert_eq!(commit.committer_name(), b"another-user".as_slice());
+        assert_eq!(commit.message(), b"".as_slice());
+    }
+
     #[test]
     fn parse_commit_additional_headers() {
         let data = b"tree bfb6d701e108f3be27395bd60c3417b47ffbe7d9

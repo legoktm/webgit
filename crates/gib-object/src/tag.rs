@@ -212,6 +212,21 @@ a tree
         assert_eq!(tag.tag_type, ObjectType::Tree);
     }
 
+    /// `git tag -a -m ""` leaves the tag message empty; an empty field is not
+    /// a parse failure.
+    #[test]
+    fn parse_tag_empty_message() {
+        let data = b"object eedeffb6da16ddc3fb61b2255a8259cacc045691
+type commit
+tag annotated-tag
+tagger a-user <an-email-address> 1774822895 +0100
+
+";
+        let tag = Tag::parse(ZERO_OID, data.to_vec()).unwrap();
+        assert_eq!(tag.name(), b"annotated-tag".as_slice());
+        assert_eq!(tag.message(), b"".as_slice());
+    }
+
     #[test]
     fn parse_nested_tag() {
         let data = b"object 1c8bf8368bc9b1fd14227c6c1a0b0f30a1812e70

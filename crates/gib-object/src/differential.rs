@@ -97,6 +97,55 @@ fn commit_fields_match_git_log() {
     }
 }
 
+/// Fields that are legitimately empty. `git commit --allow-empty-message`
+/// writes a commit whose message is zero bytes long, and git tolerates an
+/// author line with no name before the email (`git fsck` only warns about it),
+/// so both have to parse rather than blow up on the empty slice.
+#[test]
+fn empty_commit_fields_match_git() {
+    let test_repo = make_basic_repo().unwrap();
+    test_repo
+        .run_git(["commit", "--allow-empty", "--allow-empty-message", "-m", ""])
+        .unwrap();
+    let id = git_oid(&test_repo, "HEAD");
+    let commit = read(&test_repo, id, ObjectType::Commit).commit().unwrap();
+    assert!(commit.message().is_empty());
+    assert_eq!(commit.author_name(), b"a user".as_slice());
+
+    // Porcelain refuses to commit with an empty author name, so write the
+    // object git would have stored for one directly.
+    let body = format!(
+        "tree {}\nauthor  <an-email-address> 1774735018 +0530\n\
+         committer  <an-email-address> 1774735018 +0530\n\na commit\n",
+        git_oid(&test_repo, "HEAD^{tree}")
+    );
+    let path = test_repo.location.path().join("nameless-commit");
+    std::fs::write(&path, body).unwrap();
+    let id = ObjectId::from_hex(
+        git(
+            &test_repo,
+            &[
+                "hash-object",
+                "-t",
+                "commit",
+                "-w",
+                "--literally",
+                path.to_str().unwrap(),
+            ],
+        )
+        .trim_ascii_end(),
+    )
+    .unwrap();
+    let commit = read(&test_repo, id, ObjectType::Commit).commit().unwrap();
+    assert_eq!(
+        commit.author_name(),
+        git_text(&test_repo, &["log", "-1", "--format=%an", &id.to_string()]).as_bytes()
+    );
+    assert!(commit.author_name().is_empty());
+    assert_eq!(commit.author_email(), b"an-email-address".as_slice());
+    assert_eq!(commit.message(), b"a commit\n".as_slice());
+}
+
 #[test]
 fn tag_fields_match_for_each_ref() {
     let test_repo = fixture();
