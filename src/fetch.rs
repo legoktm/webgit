@@ -100,6 +100,38 @@ fn fire(req_delta: u32, byte_delta: u64, cache_delta: u64) {
     });
 }
 
+/// Describe a rejected promise or a failed constructor, prefixed with the
+/// operation that failed.
+///
+/// A deliberate twin of `archive::js_error`: that one produces an
+/// `anyhow::Error` for the archive plumbing while these paths must produce a
+/// `FileSystemError`, so only the message handling can be shared, and it is
+/// short enough to state twice rather than route through a third module.
+fn js_error(what: &str, e: &JsValue) -> FileSystemError {
+    FileSystemError::Other(Box::new(format!(
+        "Failed to {what}: {}",
+        js_message(e.as_string(), || format!("{e:?}"))
+    )))
+}
+
+/// Choose the text describing a rejection value.
+///
+/// A `JsValue` is only sometimes a string, and the ones that matter here are
+/// not: `fetch` rejects with a `TypeError` object for an unreachable server, a
+/// CORS refusal or an offline browser, so taking `as_string()` and defaulting
+/// left the user with an empty message exactly when the network broke. The
+/// debug form at least names the exception and its message.
+///
+/// Split out from [`js_error`] because `JsValue`'s accessors panic off wasm: a
+/// host test can't build a rejection, only decide what to say about one.
+fn js_message(as_string: Option<String>, debug: impl FnOnce() -> String) -> String {
+    match as_string {
+        // A rejection thrown as a string is already the message.
+        Some(s) if !s.trim().is_empty() => s,
+        _ => debug(),
+    }
+}
+
 async fn send(url: &str, headers: &Headers) -> Result<Response, FileSystemError> {
     let window = web_sys::window()
         .ok_or_else(|| FileSystemError::Other(Box::new("no window".to_string())))?;
@@ -113,10 +145,10 @@ async fn send(url: &str, headers: &Headers) -> Result<Response, FileSystemError>
         opts.set_cache(RequestCache::NoCache);
     }
     let request = Request::new_with_str_and_init(url, &opts)
-        .map_err(|e| FileSystemError::Other(Box::new(e.as_string().unwrap_or_default())))?;
+        .map_err(|e| js_error(&format!("build a request for {url}"), &e))?;
     let resp_value = JsFuture::from(window.fetch_with_request(&request))
         .await
-        .map_err(|e| FileSystemError::Other(Box::new(e.as_string().unwrap_or_default())))?;
+        .map_err(|e| js_error(&format!("fetch {url}"), &e))?;
     resp_value
         .dyn_into::<Response>()
         .map_err(|_| FileSystemError::Other(Box::new("not a Response".to_string())))
@@ -239,10 +271,10 @@ fn warn_range_ignored_once(url: &str) {
 async fn read_body(resp: &Response) -> Result<Vec<u8>, FileSystemError> {
     let array_buffer = JsFuture::from(
         resp.array_buffer()
-            .map_err(|e| FileSystemError::Other(Box::new(e.as_string().unwrap_or_default())))?,
+            .map_err(|e| js_error("read the response body", &e))?,
     )
     .await
-    .map_err(|e| FileSystemError::Other(Box::new(e.as_string().unwrap_or_default())))?;
+    .map_err(|e| js_error("read the response body", &e))?;
     Ok(js_sys::Uint8Array::new(&array_buffer).to_vec())
 }
 
@@ -285,7 +317,7 @@ async fn read_body_streaming(resp: &Response) -> Result<Vec<u8>, FileSystemError
     loop {
         let result = JsFuture::from(reader.read())
             .await
-            .map_err(|e| FileSystemError::Other(Box::new(e.as_string().unwrap_or_default())))?;
+            .map_err(|e| js_error("read the response stream", &e))?;
         // `{ done, value }`: `value` is absent on the final `done` read.
         let done = js_sys::Reflect::get(&result, &JsValue::from_str("done"))
             .ok()
@@ -295,7 +327,7 @@ async fn read_body_streaming(resp: &Response) -> Result<Vec<u8>, FileSystemError
             break;
         }
         let chunk = js_sys::Reflect::get(&result, &JsValue::from_str("value"))
-            .map_err(|e| FileSystemError::Other(Box::new(e.as_string().unwrap_or_default())))?
+            .map_err(|e| js_error("read a chunk from the response stream", &e))?
             .dyn_into::<js_sys::Uint8Array>()
             .map_err(|_| {
                 FileSystemError::Other(Box::new("stream chunk is not bytes".to_string()))
@@ -385,7 +417,36 @@ pub(crate) async fn fetch_text(url: &str) -> Result<String, FileSystemError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ResponseAction, classify, is_volatile_metadata, parse_byte_range, slice_range};
+    use super::{
+        ResponseAction, classify, is_volatile_metadata, js_message, parse_byte_range, slice_range,
+    };
+
+    #[test]
+    fn a_rejection_thrown_as_a_string_is_the_message() {
+        assert_eq!(
+            js_message(Some("boom".to_string()), || unreachable!(
+                "the string is the message"
+            )),
+            "boom"
+        );
+    }
+
+    #[test]
+    fn a_rejection_that_is_not_a_string_still_says_something() {
+        // The case that matters: `fetch` rejects with a `TypeError` object when
+        // the server is unreachable, CORS refuses, or the browser is offline.
+        // `as_string()` is `None` for it, and defaulting to "" reported every
+        // one of those as a blank error.
+        let debug = "JsValue(TypeError: Failed to fetch)";
+        assert_eq!(js_message(None, || debug.to_string()), debug);
+        // An empty (or blank) string rejection is just as unhelpful, so it too
+        // falls back to something a reader can act on.
+        assert_eq!(js_message(Some(String::new()), || debug.to_string()), debug);
+        assert_eq!(
+            js_message(Some("  \n".to_string()), || debug.to_string()),
+            debug
+        );
+    }
 
     #[test]
     fn ranged_success_returns_the_body_verbatim() {
