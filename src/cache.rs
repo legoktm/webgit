@@ -54,6 +54,11 @@ pub(crate) struct CachingRepo {
     /// IndexedDB (or, on an empty cache, from a single bulk fetch of the file).
     graph: RefCell<BTreeMap<ObjectId, Rc<GraphRecord>>>,
     graph_loaded: RefCell<bool>,
+    /// Whether the persisted graph store holds a *complete* set of this repo's
+    /// records: true once a bulk load has succeeded, or once a non-empty store
+    /// was read back (which implies an earlier one did). Per-commit writes are
+    /// suppressed until then — see [`idb_set_graph`](Self::idb_set_graph).
+    graph_seeded: RefCell<bool>,
 }
 
 impl CachingRepo {
@@ -78,6 +83,7 @@ impl CachingRepo {
             graph_tag,
             graph: RefCell::new(BTreeMap::new()),
             graph_loaded: RefCell::new(false),
+            graph_seeded: RefCell::new(false),
         }
     }
 
@@ -209,9 +215,13 @@ impl CachingRepo {
     /// Populate the in-memory graph map once per session. Prefers the persisted
     /// per-commit records; if there are none (cold cache), bulk-loads the whole
     /// commit-graph in one request and persists every commit for next time.
-    /// Individual records are only ever written *after* this has run (by
-    /// [`graph_record`](Self::graph_record)'s miss path), so a non-empty store
-    /// always implies a completed bulk load — no separate "seeded" flag needed.
+    ///
+    /// A non-empty store has to mean "a bulk load finished", since that is
+    /// exactly what the check below reads it as. Only a completed load may
+    /// therefore leave records behind: a failed one must write nothing at all,
+    /// or the stray records left by [`graph_record`](Self::graph_record)'s miss
+    /// path would read as a finished load next session and suppress the bulk
+    /// fetch forever. `graph_seeded` is what holds that line.
     async fn ensure_graph_loaded(&self) {
         if *self.graph_loaded.borrow() {
             return;
@@ -234,6 +244,7 @@ impl CachingRepo {
             for (id, rec) in cached {
                 map.insert(id, Rc::new(rec));
             }
+            *self.graph_seeded.borrow_mut() = true;
             return;
         }
 
@@ -245,6 +256,12 @@ impl CachingRepo {
             cg.num_commits()
         ));
         let Ok(records) = cg.all_records().await else {
+            // A transient failure here (a dropped connection, say) must leave
+            // the store exactly as empty as it found it, so the next session
+            // tries the bulk load again instead of inheriting a partial one.
+            crate::console_log(
+                "webgit: commit-graph: bulk load failed; this session will not persist records",
+            );
             return;
         };
         {
@@ -262,6 +279,7 @@ impl CachingRepo {
             }
         }
         self.idb_bulk_put_graph(&records);
+        *self.graph_seeded.borrow_mut() = true;
     }
 
     pub(crate) async fn lookup_parents(&self, commit: &Commit) -> GResult<Vec<Commit>> {
@@ -483,8 +501,19 @@ impl CachingRepo {
         })
     }
 
-    /// Queue a single graph record write (fire-and-forget, like [`Self::idb_set`]).
+    /// Queue a single graph record write (fire-and-forget, like [`Self::idb_set`]),
+    /// but only into a store a bulk load has already filled.
+    ///
+    /// Writing single records into a store whose bulk load never completed
+    /// would leave it non-empty but incomplete, and
+    /// [`ensure_graph_loaded`](Self::ensure_graph_loaded) reads any non-empty
+    /// store as a finished load — so those few records would suppress the bulk
+    /// fetch in every future session, permanently costing one ranged request
+    /// per commit walked.
     fn idb_set_graph(&self, id: ObjectId, rec: &GraphRecord) {
+        if !*self.graph_seeded.borrow() {
+            return;
+        }
         let Some(db) = self.db.as_ref() else { return };
         let Ok(tx) = db.transaction_with_str_and_mode(STORE_GRAPH, IdbTransactionMode::Readwrite)
         else {
@@ -653,6 +682,11 @@ fn u8_to_object_type(n: u8) -> Option<ObjectType> {
 // IndexedDB open
 // ---------------------------------------------------------------------------
 
+/// Why the open failed when another tab pins the database at an older version.
+/// Worth spelling out: it is the one cache failure the user can actually fix.
+const BLOCKED_MESSAGE: &str = "upgrade blocked by another webgit tab holding an older version of the database; \
+     close that tab and reload to re-enable caching";
+
 async fn open_db() -> Result<IdbDatabase, JsValue> {
     let window = web_sys::window().ok_or_else(|| JsValue::from_str("no window"))?;
     let factory = window
@@ -713,7 +747,29 @@ async fn open_db() -> Result<IdbDatabase, JsValue> {
     upgrade_cb.forget();
 
     let result = await_request(open_req.as_ref()).await?;
-    result.dyn_into::<IdbDatabase>()
+    let db: IdbDatabase = result.dyn_into()?;
+
+    // Give up the connection as soon as another tab wants to upgrade the
+    // schema. A connection held at the old version blocks that upgrade (see
+    // the `blocked` arm of `await_request`) for as long as this page stays
+    // open, and the other tab has no way to make us let go. Closing costs this
+    // tab its cache — later transactions fail and every lookup falls through
+    // to the network — which is far cheaper than stalling the other one.
+    let on_version_change = Closure::<dyn FnMut()>::new({
+        let db = db.clone();
+        move || {
+            web_sys::console::warn_1(
+                &"webgit: another tab is upgrading the cache database; closing this connection"
+                    .into(),
+            );
+            db.close();
+        }
+    });
+    db.set_onversionchange(Some(on_version_change.as_ref().unchecked_ref()));
+    // Outlives this function by design: it stays armed for the page's lifetime.
+    on_version_change.forget();
+
+    Ok(db)
 }
 
 /// Self-referential slot holding a cursor's `onsuccess` closure so it can re-arm
@@ -765,11 +821,11 @@ fn migrate_objects_drop_prefix(store: web_sys::IdbObjectStore) {
 // Async wrapper for IdbRequest
 // ---------------------------------------------------------------------------
 
-/// Slot holding an in-flight request's `onsuccess`/`onerror` closures, cleared
-/// by whichever one fires. Same self-referential trick as [`CursorCallbackSlot`].
-type RequestCallbackSlot = Rc<RefCell<Option<(Closure<dyn FnMut()>, Closure<dyn FnMut()>)>>>;
+/// Slot holding an in-flight request's handler closures, cleared by whichever
+/// one fires. Same self-referential trick as [`CursorCallbackSlot`].
+type RequestCallbackSlot = Rc<RefCell<Vec<Closure<dyn FnMut()>>>>;
 
-/// Detach both handlers from a settled request and drop them. Clearing the slot
+/// Detach every handler from a settled request and drop them. Clearing the slot
 /// breaks the cycle that kept the closures alive; unregistering first means the
 /// request never holds a reference to a freed closure. Dropping the closure that
 /// is currently running is fine — wasm-bindgen defers the actual free until the
@@ -777,19 +833,22 @@ type RequestCallbackSlot = Rc<RefCell<Option<(Closure<dyn FnMut()>, Closure<dyn 
 fn finish_request(req: &IdbRequest, slot: &RequestCallbackSlot) {
     req.set_onsuccess(None);
     req.set_onerror(None);
-    slot.borrow_mut().take();
+    if let Some(open_req) = req.dyn_ref::<IdbOpenDbRequest>() {
+        open_req.set_onblocked(None);
+    }
+    slot.borrow_mut().clear();
 }
 
 async fn await_request(req: &IdbRequest) -> Result<JsValue, JsValue> {
     let req = req.clone();
     let promise = js_sys::Promise::new(&mut |resolve, reject| {
-        // A request fires exactly one of onsuccess/onerror, so the handler that
-        // runs can tear down both. Park them in a cell that both closures also
+        // A request fires exactly one of its outcomes, so the handler that runs
+        // can tear all of them down. Park them in a cell that the closures also
         // hold (through clones), forming a cycle that keeps them alive while the
-        // request is in flight; whichever fires clears the cell, freeing both.
-        // Anything less leaks two closures per request, and there is one request
-        // per object lookup.
-        let slot: RequestCallbackSlot = Rc::new(RefCell::new(None));
+        // request is in flight; whichever fires clears the cell, freeing them
+        // all. Anything less leaks a closure per request, and there is one
+        // request per object lookup.
+        let slot: RequestCallbackSlot = Rc::new(RefCell::new(Vec::new()));
         let on_success = {
             let req = req.clone();
             let slot = Rc::clone(&slot);
@@ -802,6 +861,7 @@ async fn await_request(req: &IdbRequest) -> Result<JsValue, JsValue> {
         let on_error = {
             let req = req.clone();
             let slot = Rc::clone(&slot);
+            let reject = reject.clone();
             Closure::<dyn FnMut()>::new(move || {
                 reject.call0(&JsValue::UNDEFINED).ok();
                 finish_request(&req, &slot);
@@ -809,7 +869,29 @@ async fn await_request(req: &IdbRequest) -> Result<JsValue, JsValue> {
         };
         req.set_onsuccess(Some(on_success.as_ref().unchecked_ref()));
         req.set_onerror(Some(on_error.as_ref().unchecked_ref()));
-        *slot.borrow_mut() = Some((on_success, on_error));
+        slot.borrow_mut().extend([on_success, on_error]);
+
+        // Opening the database has a third outcome the others don't: `blocked`,
+        // fired when another tab still holds a connection at the previous
+        // `DB_VERSION`. The upgrade then waits for that tab to go away, firing
+        // neither success nor error however long that takes, so waiting on
+        // those two alone leaves the app hanging on a blank page indefinitely.
+        // Fail the open instead: `CachingRepo::open` warns and runs uncached,
+        // which is slower but is a working page.
+        if let Some(open_req) = req.dyn_ref::<IdbOpenDbRequest>() {
+            let on_blocked = {
+                let req = req.clone();
+                let slot = Rc::clone(&slot);
+                Closure::<dyn FnMut()>::new(move || {
+                    reject
+                        .call1(&JsValue::UNDEFINED, &JsValue::from_str(BLOCKED_MESSAGE))
+                        .ok();
+                    finish_request(&req, &slot);
+                })
+            };
+            open_req.set_onblocked(Some(on_blocked.as_ref().unchecked_ref()));
+            slot.borrow_mut().push(on_blocked);
+        }
     });
     JsFuture::from(promise).await
 }
