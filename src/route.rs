@@ -186,6 +186,44 @@ fn decode_path(path: &str) -> String {
         .join("/")
 }
 
+/// Strip `prefix` off `hash`, but only when the prefix ends where a route name
+/// is allowed to end: at one of `seps`, or at the end of the hash.
+///
+/// A plain `strip_prefix` matches mid-word, so `#!/logout` would parse as the
+/// log of a path named `out` and `#!/treex` as the tree of `x`, each rendering
+/// an empty page for a route nobody asked for. Requiring the boundary is what
+/// lets an unrecognised route reach the summary fallback instead.
+fn strip_route_prefix<'a>(hash: &'a str, prefix: &str, seps: &[char]) -> Option<&'a str> {
+    let rest = hash.strip_prefix(prefix)?;
+    match rest.chars().next() {
+        None => Some(rest),
+        Some(c) if seps.contains(&c) => Some(rest),
+        _ => None,
+    }
+}
+
+/// Parse `location.hash` into the route it names.
+///
+/// The grammar, where `<…>` is percent-encoded ([`encode_component`]) and every
+/// route name must be followed by `/`, `?` or the end of the hash:
+///
+/// ```text
+/// (empty) | #  | #!/summary        the summary
+/// #!/about                         the about page
+/// #!/readme                        the README at HEAD
+/// #!/log[/<path>][?…]              the log; query: h=<ref>, offset=<n>
+/// #!/commit[/]                     HEAD's commit
+/// #!/commit/<sha>                  one commit
+/// #!/refs[/]                       all refs
+/// #!/refs/heads[/]                 the branch list
+/// #!/refs/tags[/]                  the tag list
+/// #!/refs/tags/<tag>               one tag
+/// #!/tree[/<path>][?h=<ref>]
+/// #!/snapshot[/…][?h=<ref>]        a .tar.gz of a ref's tree (path ignored)
+/// ```
+///
+/// Anything else falls back to the summary, so a hand-edited or stale URL lands
+/// on a real page rather than an error.
 pub(crate) fn parse_hash(hash: &str) -> Route {
     // most likely scenario
     if hash == "#!/summary" || hash.is_empty() || hash == "#" {
@@ -198,7 +236,7 @@ pub(crate) fn parse_hash(hash: &str) -> Route {
         return Route::Readme;
     }
 
-    if let Some(rest) = hash.strip_prefix("#!/log") {
+    if let Some(rest) = strip_route_prefix(hash, "#!/log", &['/', '?']) {
         // rest is one of: "", "?query", "/path", or "/path?query".
         let (path_part, query_string) = match rest.find('?') {
             Some(i) => (&rest[..i], &rest[i + 1..]),
@@ -209,36 +247,43 @@ pub(crate) fn parse_hash(hash: &str) -> Route {
         return Route::Log { offset, head, path };
     }
 
-    if hash == "#!/commit" {
-        return Route::CommitHead;
-    }
-    if let Some(sha) = hash.strip_prefix("#!/commit/") {
-        return Route::Commit(sha.to_string());
+    // No query on this route, so the whole remainder is the id; an empty one
+    // (`#!/commit` or `#!/commit/`) means HEAD's commit.
+    if let Some(rest) = strip_route_prefix(hash, "#!/commit", &['/']) {
+        let sha = rest.trim_start_matches('/');
+        return if sha.is_empty() {
+            Route::CommitHead
+        } else {
+            Route::Commit(sha.to_string())
+        };
     }
 
-    if let Some(rest) = hash.strip_prefix("#!/tree") {
+    if let Some(rest) = strip_route_prefix(hash, "#!/tree", &['/', '?']) {
         let (path, head) = parse_tree_rest(rest);
         return Route::Tree { path, head };
     }
 
-    if let Some(rest) = hash.strip_prefix("#!/snapshot") {
+    if let Some(rest) = strip_route_prefix(hash, "#!/snapshot", &['/', '?']) {
         // Only the ref matters here: a snapshot is always of a whole tree, so
         // anything in the path position is ignored rather than 404'd.
         let (_, head) = parse_tree_rest(rest);
         return Route::Snapshot { head };
     }
 
-    if hash.starts_with("#!/refs") {
-        let subroute = if hash == "#!/refs/tags" {
-            RefsRoute::Tags
-        } else if hash == "#!/refs/heads" {
-            RefsRoute::Heads
-        } else if let Some(tag) = hash.strip_prefix("#!/refs/tags/") {
+    if let Some(rest) = strip_route_prefix(hash, "#!/refs", &['/']) {
+        // A listing prefix with nothing left after it names the listing, with
+        // or without the trailing slash a browser or a hand-typed URL may leave
+        // behind: `#!/refs/tags/` is the tag list, not a tag with no name.
+        let subroute = match rest {
+            "" | "/" => RefsRoute::All,
+            "/heads" | "/heads/" => RefsRoute::Heads,
+            "/tags" | "/tags/" => RefsRoute::Tags,
             // A tag name may contain '/', so the whole remainder is the name;
             // it's decoded as one component, not split into path segments.
-            RefsRoute::Tag(decode_component(tag))
-        } else {
-            RefsRoute::All
+            _ => match rest.strip_prefix("/tags/") {
+                Some(tag) => RefsRoute::Tag(decode_component(tag)),
+                None => RefsRoute::All,
+            },
         };
         return Route::Refs(subroute);
     }
@@ -640,6 +685,13 @@ mod tests {
         assert!(matches!(parse_hash("#!/commit/abc123"), Route::Commit(_)));
     }
 
+    /// An empty id is not a commit to look up, so the bare route's meaning
+    /// (HEAD's commit) survives a trailing slash.
+    #[test]
+    fn test_parse_hash_commit_trailing_slash() {
+        assert!(matches!(parse_hash("#!/commit/"), Route::CommitHead));
+    }
+
     #[test]
     fn test_parse_hash_tree() {
         assert!(matches!(
@@ -706,6 +758,77 @@ mod tests {
             parse_hash("#!/refs/tags/v1.0"),
             Route::Refs(RefsRoute::Tag(_))
         ));
+    }
+
+    /// A listing prefix with an empty remainder is still the listing: the
+    /// trailing slash must not turn `#!/refs/tags/` into a tag with no name,
+    /// which resolves to nothing and renders an error page.
+    #[test]
+    fn test_parse_hash_refs_listings_tolerate_a_trailing_slash() {
+        assert!(
+            matches!(parse_hash("#!/refs/tags/"), Route::Refs(RefsRoute::Tags)),
+            "#!/refs/tags/"
+        );
+        assert!(
+            matches!(parse_hash("#!/refs/heads/"), Route::Refs(RefsRoute::Heads)),
+            "#!/refs/heads/"
+        );
+        assert!(
+            matches!(parse_hash("#!/refs/"), Route::Refs(RefsRoute::All)),
+            "#!/refs/"
+        );
+    }
+
+    /// Everything under `#!/refs` that names no listing we have — including a
+    /// branch, which has no page of its own — is the combined listing.
+    #[test]
+    fn test_parse_hash_refs_unknown_subroute_is_the_all_listing() {
+        for hash in ["#!/refs/bogus", "#!/refs/heads/main", "#!/refs/tagsy"] {
+            assert!(
+                matches!(parse_hash(hash), Route::Refs(RefsRoute::All)),
+                "{hash}"
+            );
+        }
+    }
+
+    /// A route name only matches when it ends at a separator or at the end of
+    /// the hash. Without that check `#!/logout` is the log of a path named
+    /// `out` and `#!/treex` the tree of `x`, both empty pages for a route that
+    /// was never requested; the grammar says they are unknown routes.
+    #[test]
+    fn test_parse_hash_prefix_needs_a_separator() {
+        for hash in [
+            "#!/logout",
+            "#!/logs",
+            "#!/treex",
+            "#!/trees",
+            "#!/snapshots",
+            "#!/commits",
+            "#!/commitment",
+            "#!/refsall",
+            "#!/summaryx",
+            "#!/aboutus",
+            "#!/readmes",
+            "#!/nonsense",
+        ] {
+            assert!(matches!(parse_hash(hash), Route::Summary), "{hash}");
+        }
+    }
+
+    /// The boundary check must not cost the routes that legitimately continue
+    /// with a path or a query.
+    #[test]
+    fn test_parse_hash_prefix_matches_at_a_separator() {
+        assert!(matches!(parse_hash("#!/log/src"), Route::Log { .. }));
+        assert!(matches!(parse_hash("#!/log?h=main"), Route::Log { .. }));
+        assert!(matches!(parse_hash("#!/tree/src"), Route::Tree { .. }));
+        assert!(matches!(parse_hash("#!/tree?h=main"), Route::Tree { .. }));
+        assert!(matches!(
+            parse_hash("#!/snapshot?h=v1"),
+            Route::Snapshot { head: Some(_) }
+        ));
+        assert!(matches!(parse_hash("#!/commit/abc"), Route::Commit(_)));
+        assert!(matches!(parse_hash("#!/refs/tags"), Route::Refs(_)));
     }
 
     #[test]
