@@ -56,6 +56,30 @@ fn mixed_repo() -> TestRepo {
     test_repo
 }
 
+/// A history where file names collide with a directory's. Git orders tree
+/// entries as if directory names ended in `/`, so `a!d`, `a-c` and `a.b` are
+/// all stored *before* the directory `a` — the opposite of their raw byte
+/// order. A walk that misorders one side against the other reports the
+/// untouched parts of `a/` as deleted and re-added.
+fn name_collision_repo() -> TestRepo {
+    let test_repo = make_basic_repo().unwrap();
+    let root = test_repo.location.path();
+
+    std::fs::create_dir(root.join("a")).unwrap();
+    std::fs::write(root.join("a").join("stable"), b"unchanged\n").unwrap();
+    std::fs::write(root.join("a").join("changing"), b"before\n").unwrap();
+    std::fs::write(root.join("a.b"), b"a dotted sibling\n").unwrap();
+    std::fs::write(root.join("a-c"), b"a dashed sibling\n").unwrap();
+    commit(&test_repo, "before");
+
+    std::fs::remove_file(root.join("a.b")).unwrap();
+    std::fs::write(root.join("a").join("changing"), b"after\n").unwrap();
+    std::fs::write(root.join("a!d"), b"a banged sibling\n").unwrap();
+    commit(&test_repo, "after");
+
+    test_repo
+}
+
 fn set_mode(path: std::path::PathBuf, mode: u32) {
     std::fs::set_permissions(path, std::os::unix::fs::PermissionsExt::from_mode(mode)).unwrap();
 }
@@ -187,6 +211,13 @@ fn diff_loose() {
     check(&test_repo, "HEAD", "HEAD~1");
     // A wider span, crossing the commits that delete files.
     check(&test_repo, "HEAD~4", "HEAD");
+}
+
+#[test]
+fn diff_name_collisions() {
+    let test_repo = name_collision_repo();
+    check(&test_repo, "HEAD~1", "HEAD");
+    check(&test_repo, "HEAD", "HEAD~1");
 }
 
 #[test]

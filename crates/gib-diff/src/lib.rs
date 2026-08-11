@@ -108,6 +108,32 @@ fn join(path: Option<&Path>, component: &[u8]) -> Path {
     }
 }
 
+/// Compare two tree entries by name the way git orders them within a tree.
+///
+/// Git sorts entries as if every directory name ended in a `/`, so the file
+/// `a.b` sorts *before* the directory `a` — `"a.b" < "a/"` — even though the
+/// raw bytes say the opposite. The merge walk below advances two trees in
+/// lockstep and so has to order them by the same rule git wrote them with;
+/// comparing raw bytes misaligns the walk wherever a file and a directory
+/// share a prefix, spuriously reporting the directory as deleted and re-added.
+fn entry_name_cmp(left: &TreeEntry<'_>, right: &TreeEntry<'_>) -> Ordering {
+    /// The byte that follows a name at index `at` for ordering purposes:
+    /// a real name byte, else `/` for a directory, else nothing — the end of
+    /// a name sorts before every byte a name may contain.
+    fn byte_at(entry: &TreeEntry<'_>, at: usize) -> Option<u8> {
+        entry
+            .name()
+            .get(at)
+            .copied()
+            .or_else(|| (entry.entry_type() == TreeEntryType::Tree).then_some(b'/'))
+    }
+
+    let common = left.name().len().min(right.name().len());
+    left.name()[..common]
+        .cmp(&right.name()[..common])
+        .then_with(|| byte_at(left, common).cmp(&byte_at(right, common)))
+}
+
 /// Represents a diff of a single file
 ///
 /// It is generic over the content of the file diff. For tree diffs, `Content`
@@ -197,7 +223,7 @@ async fn tree_diff_impl<E: From<DiffError>>(
                 (None, None) => Ordering::Equal,
                 (None, Some(_)) => Ordering::Greater,
                 (Some(_), None) => Ordering::Less,
-                (Some(l), Some(r)) => l.name().cmp(r.name()),
+                (Some(l), Some(r)) => entry_name_cmp(l, r),
             };
             // Skip entries that are identical on both sides. The mode is part
             // of that, not just the object: a file that only gained the
@@ -606,6 +632,31 @@ mod tests {
             .into_iter()
             .collect()
         );
+    }
+
+    /// Git writes tree entries as if directory names ended in `/`, so the file
+    /// `a.b` is stored *before* the directory `a`. A walk that orders the two
+    /// sides by raw bytes disagrees, falls out of step, and reports the
+    /// untouched `a/` as wholly deleted and re-added.
+    #[test]
+    fn file_and_directory_name_collision() {
+        let test_repo = make_basic_repo().unwrap();
+        create_dir(test_repo.location.path().join("a")).unwrap();
+        make_file(&test_repo, PathBuf::from("a").join("inside")).unwrap();
+        make_file(&test_repo, "a.b").unwrap();
+        make_file(&test_repo, "a-c").unwrap();
+        commit(&test_repo);
+        remove_file(test_repo.location.path().join("a.b")).unwrap();
+        commit(&test_repo);
+
+        let expected: BTreeSet<_> = vec![DiffEntry::LeftOnly {
+            path: Path(b"a.b".to_vec()),
+            entry_type: TreeEntryType::File,
+            content: (oid(EMPTY), ObjectId::zero()),
+        }]
+        .into_iter()
+        .collect();
+        assert_eq!(diff(&test_repo, "HEAD~1", "HEAD"), expected);
     }
 
     /// A `cancel` callback that fires immediately stops the walk.
