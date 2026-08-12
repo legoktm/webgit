@@ -1,4 +1,10 @@
-# Routes
+# Test map
+
+As changes are made, ensure that new **features** are added to this list. It is important that
+this list focuses on features from a user perspective rather than working backwards from the list
+of tests.
+
+
 
 - legend
   - variations are enumerated from the implementation, then cross-linked to tests

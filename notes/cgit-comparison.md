@@ -5,6 +5,8 @@ A gap list against cgit, based on the routes in `src/route.rs` and the views in
 cgit deployment concern (caching, `virtual-root`, the dumb-HTTP `objects`/`info`
 endpoints) that doesn't apply to a client-side viewer.
 
+As things are implemented, remove them from this list.
+
 ## Whole cgit commands that have no route at all
 
 | cgit URL | What it does | webgit |
