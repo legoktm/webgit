@@ -48,15 +48,99 @@ impl Harness {
 
     /// Navigate to a route within a fixture repository, e.g. `"#!/log"`.
     pub async fn open(&self, repo: &RepoFixture, route: &str) -> Result<()> {
-        let url = self.server.url(&format!("{}{}", repo.url_path(), route));
+        let path = repo.url_path();
+        let url = self.server.url(&format!("{path}{route}"));
         self.client.goto(&url).await?;
-        Ok(())
+        self.await_url(&path, route).await
     }
 
     /// Navigate to the repository index — the URL that names no repository.
     pub async fn open_index(&self) -> Result<()> {
         self.client.goto(&self.server.url("/")).await?;
-        Ok(())
+        self.await_url("/", "").await
+    }
+
+    /// Block until the browser is showing the URL we asked for, loaded.
+    async fn await_url(&self, path: &str, hash: &str) -> Result<()> {
+        let deadline = std::time::Instant::now() + SETTLE;
+        let mut last = String::from("(never probed)");
+        loop {
+            // A probe issued mid-navigation can fail outright or come back a
+            // shape this doesn't recognise. That is "not yet", not an error.
+            if let Some((at_path, at_hash, ready)) = self.location().await {
+                if ready == "complete" && at_path == path && at_hash == hash {
+                    return Ok(());
+                }
+                last = format!("{at_path}{at_hash} ({ready})");
+            }
+            if std::time::Instant::now() >= deadline {
+                bail!("still showing {last} after {SETTLE:?}, waiting for {path}{hash}");
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    }
+
+    /// The browser's current path, fragment and readiness, or `None` if it could
+    /// not be read — which is what a probe issued mid-navigation looks like.
+    async fn location(&self) -> Option<(String, String, String)> {
+        let value = self
+            .client
+            .execute(
+                "return [location.pathname, location.hash, document.readyState];",
+                vec![],
+            )
+            .await
+            .ok()?;
+        let parts = value.as_array()?;
+        let get = |i: usize| parts.get(i)?.as_str().map(str::to_string);
+        Some((get(0)?, get(1)?, get(2)?))
+    }
+
+    /// Reload the current page, as a reader pressing refresh would.
+    pub async fn reload(&self) -> Result<()> {
+        self.stamp().await;
+        self.client.refresh().await?;
+        self.await_fresh_document().await
+    }
+
+    /// Tag the document that is on screen now, so the next one can be told
+    /// apart from it. A global set here dies with the document it was set on.
+    async fn stamp(&self) {
+        // Errors are not interesting: on the first navigation there is only
+        // about:blank to stamp, and failing to stamp only costs the check below
+        // its early exit.
+        let _ = self
+            .client
+            .execute("window.__webgit_test_previous = true;", vec![])
+            .await;
+    }
+
+    /// Block until the browser has replaced the stamped document with a loaded
+    /// one.
+    async fn await_fresh_document(&self) -> Result<()> {
+        let deadline = std::time::Instant::now() + SETTLE;
+        loop {
+            // A probe issued mid-navigation can fail outright or come back a
+            // shape this doesn't recognise. That is "not yet", not an error.
+            let fresh = self
+                .client
+                .execute(
+                    "return !window.__webgit_test_previous \
+                     && document.readyState === 'complete';",
+                    vec![],
+                )
+                .await
+                .ok()
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if fresh {
+                return Ok(());
+            }
+            if std::time::Instant::now() >= deadline {
+                bail!("the browser never loaded a new document within {SETTLE:?}");
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
     }
 
     /// Wait for an element to exist, then return it.

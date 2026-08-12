@@ -52,24 +52,26 @@ fn fixture_server_answers_range_requests_with_206() -> Result<()> {
     Ok(())
 }
 
-/// Every route renders content from the fixture, for all three on-disk shapes:
-/// loose objects, a packfile read over `Range`, and a commit-graph.
-#[tokio::test]
-async fn core_routes_render_real_content() -> Result<()> {
-    let h = Harness::start().await?;
-
-    for repo in h.fixtures.all() {
-        check_summary(&h, repo).await?;
-        check_log(&h, repo).await?;
-        check_tree(&h, repo).await?;
-        check_blob(&h, repo).await?;
-        check_commit(&h, repo).await?;
-        check_refs(&h, repo).await?;
-        check_about(&h, repo).await?;
-    }
-
-    h.finish().await
+macro_rules! route_test {
+    ($name:ident, $check:ident) => {
+        #[tokio::test]
+        async fn $name() -> Result<()> {
+            let h = Harness::start().await?;
+            for repo in h.fixtures.all() {
+                $check(&h, repo).await?;
+            }
+            h.finish().await
+        }
+    };
 }
+
+route_test!(summary_renders_real_content, check_summary);
+route_test!(log_renders_real_content, check_log);
+route_test!(tree_renders_real_content, check_tree);
+route_test!(blob_renders_real_content, check_blob);
+route_test!(commit_renders_real_content, check_commit);
+route_test!(refs_render_real_content, check_refs);
+route_test!(about_renders_real_content, check_about);
 
 async fn check_summary(h: &Harness, repo: &RepoFixture) -> Result<()> {
     h.open(repo, "#!/summary").await?;
@@ -354,7 +356,7 @@ async fn indexeddb_cache_removes_object_fetches_on_reload() -> Result<()> {
         "IndexedDB was unavailable in this session, so caching could not be tested"
     );
 
-    h.client.refresh().await?;
+    h.reload().await?;
     h.wait_for(".summary-table").await?;
     let second = h.fetched_object_urls(repo).await?;
 
