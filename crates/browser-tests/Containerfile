@@ -1,0 +1,91 @@
+# Image for the browser test suite: a real Firefox, geckodriver to drive it,
+# miniserve to serve the build, and the Rust toolchain to produce that build.
+#
+# Built and run by scripts/browser-tests.sh.
+FROM registry.fedoraproject.org/fedora:44
+
+ARG GECKODRIVER_VERSION=0.37.1
+ARG MINISERVE_VERSION=0.35.0
+ARG TRUNK_VERSION=0.21.14
+ARG RUST_VERSION=1.97.1
+
+# Published sha256 for the geckodriver tarball. The other two are checked the
+# same way below where their URLs are constructed.
+ARG GECKODRIVER_SHA256=e815130ea95983e162ae91843b48d3a3ce991735635fce83a647afde21e09f7e
+
+# firefox        — the browser under test
+# git            — gib-testkit builds every fixture by shelling out to it
+# python3        — scripts/postbuild.py, the trunk post-build hook
+# gcc/openssl    — native-tls links the system OpenSSL (see the fantoccini
+#                  comment in the root Cargo.toml)
+# dbus-glib etc. — Firefox refuses to start headless without these
+RUN dnf install -y --setopt=install_weak_deps=False \
+        ca-certificates \
+        curl \
+        dbus-glib \
+        findutils \
+        firefox \
+        gcc \
+        git \
+        gzip \
+        openssl-devel \
+        pkgconf-pkg-config \
+        python3 \
+        rustup \
+        tar \
+        xz \
+    && dnf clean all \
+    && rm -rf /var/cache/dnf
+
+# geckodriver
+RUN curl -fsSL -o /tmp/geckodriver.tar.gz \
+        "https://github.com/mozilla/geckodriver/releases/download/v${GECKODRIVER_VERSION}/geckodriver-v${GECKODRIVER_VERSION}-linux64.tar.gz" \
+    && echo "${GECKODRIVER_SHA256}  /tmp/geckodriver.tar.gz" | sha256sum -c - \
+    && tar -xzf /tmp/geckodriver.tar.gz -C /usr/local/bin geckodriver \
+    && chmod +x /usr/local/bin/geckodriver \
+    && rm /tmp/geckodriver.tar.gz
+
+# miniserve: a bare binary, not a tarball.
+RUN curl -fsSL -o /usr/local/bin/miniserve \
+        "https://github.com/svenstaro/miniserve/releases/download/v${MINISERVE_VERSION}/miniserve-${MINISERVE_VERSION}-x86_64-unknown-linux-musl" \
+    && chmod +x /usr/local/bin/miniserve
+
+# trunk ships a .sha256 next to each artifact, so verify against that rather
+# than pinning a second copy of the digest here.
+RUN curl -fsSL -o /tmp/trunk.tar.gz \
+        "https://github.com/trunk-rs/trunk/releases/download/v${TRUNK_VERSION}/trunk-x86_64-unknown-linux-gnu.tar.gz" \
+    && curl -fsSL -o /tmp/trunk.sha256 \
+        "https://github.com/trunk-rs/trunk/releases/download/v${TRUNK_VERSION}/trunk-x86_64-unknown-linux-gnu.tar.gz.sha256" \
+    && echo "$(cat /tmp/trunk.sha256 | tr -d '\n' | awk '{print $1}')  /tmp/trunk.tar.gz" | sha256sum -c - \
+    && tar -xzf /tmp/trunk.tar.gz -C /usr/local/bin trunk \
+    && chmod +x /usr/local/bin/trunk \
+    && rm /tmp/trunk.tar.gz /tmp/trunk.sha256
+
+# Run as a normal user: Firefox is happier this way.
+RUN useradd --create-home --uid 1000 runner
+
+# Every byte this container writes goes under /cache, which the runner script
+# backs with named volumes. The source tree is mounted read-only, so a rootless
+# run cannot leave files the host user is unable to delete.
+RUN mkdir -p /cache/target /cache/dist && chown -R runner:runner /cache
+
+USER runner
+ENV HOME=/home/runner
+
+ENV RUSTUP_HOME=/home/runner/.rustup \
+    CARGO_HOME=/home/runner/.cargo \
+    PATH=/home/runner/.cargo/bin:$PATH
+RUN rustup-init -y --profile minimal --default-toolchain "${RUST_VERSION}" \
+        --target wasm32-unknown-unknown
+
+# Where scripts/browser-tests.sh mounts the source (read-only) and the cache.
+WORKDIR /src
+ENV CARGO_TARGET_DIR=/cache/target \
+    WEBGIT_DIST=/cache/dist
+
+# geckodriver and miniserve are found on PATH; the harness honours these if a
+# caller wants to point at something else.
+ENV GECKODRIVER=/usr/local/bin/geckodriver \
+    MINISERVE=/usr/local/bin/miniserve
+
+CMD ["/src/scripts/browser-tests-entrypoint.sh"]

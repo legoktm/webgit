@@ -1,0 +1,38 @@
+[package]
+name = "browser-tests"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Everything lives in the test target, and every dependency it needs is
+# optional. That keeps `cargo test --workspace` — which does reach this crate —
+# from compiling tokio and fantoccini, or from trying to launch a browser, on a
+# machine that has neither Firefox nor geckodriver. The suite is run explicitly:
+#
+#   cargo test -p browser-tests --features browser -- --test-threads=1
+#
+# which is what scripts/browser-tests.sh does inside the container.
+[dependencies]
+anyhow = { workspace = true, optional = true }
+fantoccini = { workspace = true, optional = true }
+gib-testkit = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true, features = [
+    "rt-multi-thread",
+    "macros",
+    "time",
+] }
+
+[features]
+browser = [
+    "dep:anyhow",
+    "dep:fantoccini",
+    "dep:gib-testkit",
+    "dep:serde_json",
+    "dep:tokio",
+]
+
+[[test]]
+name = "browser"
+path = "tests/browser.rs"
+required-features = ["browser"]
