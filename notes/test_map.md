@@ -1,0 +1,471 @@
+# Routes
+
+- legend
+  - variations are enumerated from the implementation, then cross-linked to tests
+  - `snapshot:` — insta snapshot tests in `src/render/*` and `src/lib.rs`
+  - `browser:` — headless Firefox tests in `crates/browser-tests/tests/browser.rs`
+  - a variation with neither key is not covered by either suite
+- page modes
+  - repository mode — URL path ends `.git` or `.git/`, trailing slash trimmed
+    - browser:
+      - summary_renders_real_content
+  - `?url=` override — any repository URL, for local development
+    - honoured on `127.0.0.1` and `localhost`
+    - ignored on every other host
+    - percent-decoded before use
+    - empty value falls through to index mode
+  - repository index — URL names no repository, `/listing.json` is fetched
+  - repository display name — URL path minus scheme and host
+  - repository short name — last path component minus `.git`
+  - short name is empty — falls back to "repository"
+  - document title — display name, "repositories" for the index, em dash while loading
+  - loading — the animated ellipsis, before repo or listing resolves
+  - load failure — bad HEAD, HEAD not a commit, root object not a tree, unreachable server
+  - IndexedDB available — `#idb-warning` hidden, objects cached
+    - browser:
+      - indexeddb_cache_removes_object_fetches_on_reload
+  - IndexedDB unavailable — banner shown, caching disabled
+    - snapshot:
+      - test_about_html_without_idb
+- repository index page
+  - sections rendered in the file's order, not sorted
+  - a section prefix that is empty — repositories sit at the top level, no header row
+  - the same prefix appearing more than once — kept as separate sections
+  - one JSON object carrying several sections
+  - leading and trailing slashes trimmed from prefixes and names
+  - a section whose repositories all dropped out — omitted, no dangling header
+  - no groups at all — "No repositories found."
+    - snapshot:
+      - test_listing_html_empty
+  - populated listing with headers and rows
+    - snapshot:
+      - test_listing_html
+    - browser:
+      - repository_index_lists_the_fixtures
+  - row links are root-absolute and resolve to a repository
+    - browser:
+      - repository_index_lists_the_fixtures
+  - the old flat-array format is rejected rather than half-read
+  - `listing.json` missing, unfetchable, or malformed — error in the content area
+- nav bar
+  - seven tabs — readme, summary, refs, log, tree, commit, about
+  - active tab derived from the route
+    - snapshot:
+      - nav_summary
+    - browser:
+      - nav_clicks_and_history_drive_routing
+  - the log tab keeps both the current path and `?h=`
+    - snapshot:
+      - nav_tree_scoped
+  - the tree tab keeps `?h=` but drops the path, returning to the root
+    - snapshot:
+      - nav_tree_scoped
+  - a tag in `?h=` keeps the log tab scoped to it
+    - snapshot:
+      - nav_log_on_tag
+  - the snapshot route lights the tree tab, not one of its own
+  - hidden entirely in repository-index mode
+- path bar
+  - hidden — summary, refs, commit, about, readme, snapshot
+    - snapshot:
+      - path_bar_hidden
+  - breadcrumbs on a branch
+    - snapshot:
+      - path_bar_crumbs_on_branch
+  - breadcrumbs when the ref could not be resolved — no label, crumbs still shown
+    - snapshot:
+      - path_bar_crumbs_no_ref
+  - breadcrumbs on a commit named by hash, labelled with the abbreviation
+    - snapshot:
+      - path_bar_crumbs_on_commit
+  - ref label only — whole-history log on a branch or tag
+    - snapshot:
+      - path_bar_ref_only
+  - ref label only — on a commit named by hash
+    - snapshot:
+      - path_bar_ref_only_on_commit
+  - the kind word is tag, branch or commit
+    - snapshot:
+      - path_bar_ref_only
+      - path_bar_ref_only_on_commit
+  - crumb links are cumulative, and each segment is encoded in the href only
+  - the root crumb carries the same `?h=` suffix
+  - an async ref lookup that lands after the route changed is discarded
+- fetch stats
+  - request count and byte totals, live
+  - "Loading…" relabelled "Loaded" after 200ms with no new fetch
+  - cache hits counted separately from network bytes
+- `#!/summary`
+  - reached by `#!/summary`, the empty hash, and `#`
+  - reached as the fallback from any unrecognised route
+  - the `git clone` line, showing the full repository URL
+    - snapshot:
+      - test_summary_html
+    - browser:
+      - summary_renders_real_content
+  - HEAD's branch sorted first, the rest alphabetically
+  - branches capped at ten, with a "more" link to the full list
+  - the cap is nine others when a HEAD branch took the first slot
+  - tags sorted reverse-alphabetically, capped at ten, with a "more" link
+  - no tags at all — "No tags."
+  - ref rows render name-first with the message cell showing the ellipsis
+    - snapshot:
+      - test_summary_html_loading
+  - ref rows backfill strictly top-down however the fetches resolve
+  - a ref row whose commit never resolves does not stall the rows behind it
+  - recent commits absent — the ellipsis, since there is no up-front list
+    - snapshot:
+      - test_summary_html_loading
+  - recent commits present, newest first, capped at ten
+    - snapshot:
+      - test_summary_html
+  - branch and tag decorations folded in after the walk
+    - browser:
+      - summary_renders_real_content
+  - each tag row carries a snapshot download link named after the file
+- `#!/about`
+  - exact match only — anything after `#!/about` is a different route
+  - clone URL, HEAD branch, branch count, tag count
+    - snapshot:
+      - test_about_html_with_idb
+    - browser:
+      - about_renders_real_content
+  - detached HEAD — the branch row reads "(detached)"
+  - IndexedDB available — cached object count, size in MB, and a "(clear)" button
+    - snapshot:
+      - test_about_html_with_idb
+  - IndexedDB unavailable — a single "IndexedDB unavailable" row, no button
+    - snapshot:
+      - test_about_html_without_idb
+  - clicking "(clear)" empties the store and optimistically shows 0 / 0.00 MB
+  - the build commit, from `git_version!()` at compile time
+- `#!/readme`
+  - exact match only — `#!/readme?h=…` is a different route and lands on summary
+  - always HEAD's tree; there is no way to ask for another ref
+  - the candidate names are tried in order — README.md, README, README.txt, README.rst
+  - only `.md` is treated as markdown; `.rst` and `.txt` are shown verbatim
+  - a candidate that is a directory, symlink or submodule is skipped, not matched
+  - a candidate whose blob will not load is skipped and the search continues
+  - none of the candidates present — "No README found."
+    - snapshot:
+      - readme_html_missing
+  - plain README rendered in a `<pre>`
+    - snapshot:
+      - readme_html_plain
+  - plain README containing markup, escaped rather than interpreted
+    - snapshot:
+      - readme_html_plain_escapes_markup
+  - markdown README rendered into the sandboxed frame
+    - snapshot:
+      - readme_html_markdown_frame
+    - browser:
+      - readme_renders_in_a_sandboxed_frame_with_hashed_css
+  - the frame is not granted `allow-scripts`
+    - browser:
+      - readme_renders_in_a_sandboxed_frame_with_hashed_css
+  - the frame's stylesheet is the hashed `markdown-*.css` the post-build hook emitted
+    - browser:
+      - readme_renders_in_a_sandboxed_frame_with_hashed_css
+  - the frame document carries the body and the stylesheet link
+  - the frame is measured after load and resized to its content
+- markdown rendering (shared by the readme and rendered blobs)
+  - GFM tables, strikethrough, task lists and footnotes
+  - raw HTML in the document is dropped, not emitted
+  - relative links become in-app tree URLs
+  - relative links resolve against the document's own directory
+  - a leading `/` means the repository root, not the document's directory
+  - `.` and `..` segments resolved; a `..` past the root is discarded
+  - a query or fragment on a relative link is dropped
+  - absolute and protocol-relative URLs are left alone
+  - a `:` belonging to the path, not a scheme — `docs/a:b.md`
+  - a bare `#fragment` points back at the document's own URL
+  - script-bearing schemes are dropped by comrak before rewriting
+  - bare URLs and `www.` hosts are autolinked
+  - autolinking skips code spans and existing links
+  - a rewritten link's segments are encoded, so `?` or `#` in a filename survives
+  - the ref being viewed is deliberately not carried into rewritten links
+- `#!/log[/<path>][?h=<rev>][&offset=<n>]`
+  - bare log on HEAD's branch
+    - browser:
+      - log_renders_real_content
+  - fifty commits to a page
+  - first page — no "newer" link
+    - snapshot:
+      - test_log_html_first_page_no_nav
+  - a further page — both "newer" and "older"
+    - snapshot:
+      - test_log_html_with_pagination
+  - last page — no "older" link, and the nav block is omitted when neither exists
+  - partial renders suppress "older", which is unknown until the walk finishes
+  - an `?offset=` past the end of history — arithmetic saturates rather than wrapping
+  - `?offset=` that is not a number — treated as zero
+  - `?h=<branch>`
+  - `?h=<tag>` — resolved through the tag object
+    - snapshot:
+      - nav_log_on_tag
+  - `?h=<40-char sha>` — a commit named directly
+  - `?h=` empty — ignored, falls back to HEAD
+  - `?h=` containing `&`, which must not inject a second parameter
+  - `?h=` naming nothing resolvable — the error reaches the content area
+  - `/<path>` — only commits touching that path
+  - path-scoped log accelerated by commit-graph changed-path filters
+  - path-scoped log with no commit-graph, walking commit objects directly
+  - ref decorations beside each subject
+    - browser:
+      - log_renders_real_content
+  - decorations resolve concurrently with the walk, so rows are not held back
+  - commit ages shown relative under two weeks, absolute beyond
+  - rows sort by recency regardless of how the age is displayed
+- `#!/commit` and `#!/commit/<sha>`
+  - `#!/commit` and `#!/commit/` — HEAD's commit
+  - a full 40-character hash — resolved with no I/O
+    - browser:
+      - commit_renders_real_content
+  - a 7-to-40-character abbreviation — expanded against the pack indexes
+  - an abbreviation shared by several objects — refused as ambiguous
+  - an abbreviation naming nothing, including loose-only objects — "unknown SHA"
+  - a string that is not hex at all — "invalid SHA"
+  - the object is not a commit — reported rather than rendered
+  - metadata table — author, committer, parents, commit, tree
+    - browser:
+      - commit_renders_real_content
+  - only the first parent row is labelled; the rest have a blank label cell
+    - snapshot:
+      - test_commit_html_merge_with_diff
+  - root commit — no parent row, and no diff at all
+    - snapshot:
+      - test_commit_html_root_commit
+  - merge commit — several parents, diffed against the first
+    - snapshot:
+      - test_commit_html_merge_with_diff
+  - the header paints before the diff, with the file list still empty
+    - snapshot:
+      - test_commit_html_diff_pending
+  - a file whose blobs have not loaded — name shown, stats cell showing the ellipsis
+    - snapshot:
+      - test_commit_html_diff_pending
+  - hex-shaped runs of 7-40 characters in the message become commit links
+  - all-digit runs are linkified too, since abbreviations may contain no letters
+  - a hex run inside a longer word is not linkified
+  - diffstat bars scale to the widest file, 0-40 columns
+  - bars re-normalise as larger files arrive mid-stream
+  - bar widths use `bar-w-N` classes, since the CSP forbids inline styles
+  - the `+N` and `-N` counts are each omitted when zero
+  - the summary line pluralises file, insertion and deletion independently
+  - a modified file — a normal hunk
+  - a pure addition and a pure deletion
+  - a binary file — "Binary files … differ" and zero counts
+  - output matches what a unified diff would have printed
+  - a file with no trailing newline — the "\ No newline" marker
+  - CRLF line endings — the `\r` stripped so each row is one line
+  - the `---`/`+++` headers are emitted but excluded from the counts
+  - a null object id on one side — treated as an empty file
+- `#!/refs`
+  - `#!/refs` and `#!/refs/` — branches and tags together, each sorted by recency
+    - snapshot:
+      - test_refs_all_html
+    - browser:
+      - refs_render_real_content
+  - `#!/refs/heads` and `#!/refs/heads/` — every branch, never a "more" link
+    - snapshot:
+      - test_refs_heads_html
+  - `#!/refs/tags` and `#!/refs/tags/` — every tag, sorted by recency
+    - snapshot:
+      - test_refs_tags_html
+  - no tags — "No tags." rather than an empty table
+    - snapshot:
+      - test_refs_tags_html_empty
+  - an unknown subroute, including a branch name, falls back to the combined listing
+  - refs read from loose files
+    - browser:
+      - refs_render_real_content
+  - refs read from `packed-refs`
+    - browser:
+      - refs_render_real_content
+  - `#!/refs/tags/<tag>` — annotated tag, with its own tagger, date and message
+    - snapshot:
+      - tag_html_annotated
+  - `#!/refs/tags/<tag>` — lightweight tag, falling back to the commit's date, no tagger row, no message
+    - snapshot:
+      - tag_html_lightweight
+  - a tag name containing `/`, carried as one component rather than split
+  - a tag that does not exist — "tag not found"
+  - an annotated tag missing its date or tagger — reported rather than rendered
+  - a tag ref pointing at no commit — reported
+  - the tag page links to the tree, the log and the snapshot for that ref
+- `#!/tree[/<path>][?h=<rev>][&render=1]`
+  - the path resolves to a directory, to a blob, or to neither
+  - a path or ref containing route syntax survives the round trip
+  - directory listing
+    - root tree
+      - snapshot:
+        - test_tree_html
+      - browser:
+        - tree_renders_real_content
+    - a subdirectory, reached by URL and by clicking a row
+      - browser:
+        - tree_renders_real_content
+        - nav_clicks_and_history_drive_routing
+    - `?h=<rev>` — every row's link carries the ref forward
+      - snapshot:
+        - test_tree_html_with_head
+    - the five entry modes — directory, file, executable, symlink, submodule
+    - directories and files are linked with different classes
+      - snapshot:
+        - test_tree_html
+    - an empty tree
+  - blob
+    - a recognised image wins over every other classification
+      - snapshot:
+        - test_blob_html_image_with_url
+    - binary is decided before the size caps, so a large archive reads as binary
+    - the byte cap is checked before the line cap
+    - text file, one numbered and anchored row per line
+      - snapshot:
+        - test_blob_html
+      - browser:
+        - blob_renders_real_content
+    - contents containing markup, escaped
+      - snapshot:
+        - test_blob_html_escapes_markup
+    - an empty file
+      - snapshot:
+        - test_blob_html_empty
+    - a file with no trailing newline — the last line is kept
+    - a file ending in a newline — no spurious blank final row
+    - binary — the byte count, no content
+      - snapshot:
+        - test_blob_html_binary
+    - over 1 MiB — the size and the limit
+      - snapshot:
+        - test_blob_html_too_many_bytes
+    - over 20 000 lines — the line count and the limit
+      - snapshot:
+        - test_blob_html_too_many_lines
+    - PNG, JPEG and GIF recognised by extension and signature together
+    - `.jpg` and `.jpeg` both accepted, and the extension is case-insensitive
+    - an extension whose signature disagrees — reported as binary, not decoded
+    - a signature with no matching extension — not promoted out of the text view
+    - other image extensions are not recognised
+    - SVG is text, and stays text
+    - images are deliberately exempt from the size caps
+    - no object URL — under SSR, or when the browser refuses
+      - snapshot:
+        - test_blob_html_image_ssr_omits_img
+    - the download link is omitted rather than emitted with an empty href
+      - snapshot:
+        - test_blob_html_image_ssr_omits_img
+    - the download link, for text and for binary
+      - snapshot:
+        - test_blob_html_text_download_link
+        - test_blob_html_binary_download_link
+    - a download filename containing markup, escaped
+    - the object URL's MIME type — the image's, or octet-stream for everything else
+    - `.md` and `.markdown` are the markdown extensions
+    - markdown as source by default
+      - snapshot:
+        - test_blob_html_markdown_source
+    - markdown with `?render=1`, rendered into the frame
+      - snapshot:
+        - test_blob_html_markdown_rendered
+    - only the exact `render=1` spelling asks for it
+    - `?render=1` on a file that is not markdown — classified as it would have been
+    - `?render=1` on an over-cap markdown file — refused like any over-cap file
+    - the source view of a markdown file offers a "rendered" link
+    - the rendered view offers a "source" link back
+      - snapshot:
+        - test_blob_html_markdown_rendered
+    - the toggle carries the current `?h=` across
+    - no toggle on anything that is not renderable markdown
+    - the bytes are retained for the download link whatever the classification
+    - the filename comes from the path's last component
+  - neither a subtree nor a blob — "Not found: <path>"
+  - `?h=` naming nothing resolvable — the error reaches the content area
+  - `?h=` naming a ref whose object is not a tree — reported
+- `#!/snapshot[?h=<rev>]`
+  - a path component in the route is ignored
+  - `render=1` is ignored
+  - bare `#!/snapshot` — HEAD's tree, named after HEAD's branch
+  - detached HEAD — named after the abbreviated commit instead
+  - `?h=<branch>` — named after the branch
+  - `?h=<tag>` — named after the tag
+    - browser:
+      - snapshot_route_downloads_a_tarball
+  - `?h=<40-char sha>` — named after the abbreviated commit, not the full hash
+  - `/` and `\` in the repository name or ref are flattened to `-` for the filename
+  - an empty progress bar before the first object lands
+    - snapshot:
+      - test_snapshot_html_building_empty
+  - fetching objects — a denominator that grows as the walk uncovers the tree
+    - snapshot:
+      - test_snapshot_html_building
+  - progress repaints rate-limited to every 50ms
+  - compressing — a denominator known before the phase starts
+    - snapshot:
+      - test_snapshot_html_compressing
+  - finished — the file count, the archive size, and the download link
+    - snapshot:
+      - test_snapshot_html
+    - browser:
+      - snapshot_route_downloads_a_tarball
+  - exactly one file — "1 file", not "1 files"
+    - snapshot:
+      - test_snapshot_html_single_file
+  - the download starts on its own, with the visible link as the fallback
+    - browser:
+      - snapshot_route_downloads_a_tarball
+  - no object URL — an error instead of a link pointing at the page
+    - snapshot:
+      - test_snapshot_html_no_url
+  - the walk is depth-first, and its entry kinds and contents match git's
+  - submodules are skipped rather than followed
+  - object fetches overlap, bounded in flight
+  - a missing subtree is reported with the path that was missing
+  - over the archive size cap — refused
+  - the archive's bytes match what `git archive` produces
+  - a path too long for a tar header
+  - a symlink target too long for a tar header
+  - streamed and whole-archive output are identical
+  - a commit dated before the epoch — the tar mtime is clamped rather than wrapped
+  - navigating away mid-build cancels it
+- unrecognised routes
+  - `#!/logout`, `#!/treex`, `#!/commits`, `#!/nonsense` fall back to the summary
+  - a route name matches only at `/`, `?`, or the end of the hash
+  - percent-escapes decode, including multi-byte UTF-8 split across escapes
+  - a stray `%` that begins no valid escape is passed through as itself
+- transport and caching
+  - a range request answered `206` — the body is used as-is
+    - browser:
+      - fixture_server_answers_range_requests_with_206
+  - a range request answered `200` — the server ignored `Range`, sliced client-side
+  - the fallback slice is clamped at end of file
+  - a range spec that cannot be honoured locally — refused rather than guessed
+  - the ranges webgit emits round-trip through its own parser
+  - `404` and `416` are ordinary outcomes, not errors
+  - any other status surfaces as an HTTP error
+  - a server that ignores `Range` is warned about once, not once per pack
+  - mutable manifests are fetched no-cache; immutable objects are not
+  - a rejected fetch reports its message, whatever shape the rejection took
+  - large bodies are streamed, with progress every 32 KiB
+  - loose objects
+    - browser:
+      - log_renders_real_content
+      - blob_renders_real_content
+  - packfile and `.idx` read over byte ranges
+    - browser:
+      - log_renders_real_content
+      - blob_renders_real_content
+  - a commit-graph with changed-path Bloom filters
+    - browser:
+      - log_renders_real_content
+      - blob_renders_real_content
+  - a second visit served from IndexedDB rather than the network
+    - browser:
+      - indexeddb_cache_removes_object_fetches_on_reload
+  - the cache is keyed so one repository cannot read another's objects
+  - `hashchange` routing — nav clicks, in-page links, back and forward
+    - browser:
+      - nav_clicks_and_history_drive_routing
+  - the hashed asset map, written by the post-build hook and read at startup
+    - browser:
+      - readme_renders_in_a_sandboxed_frame_with_hashed_css
