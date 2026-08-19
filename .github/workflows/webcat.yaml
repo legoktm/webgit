@@ -142,9 +142,10 @@ jobs:
 
       # Catches a manifest the enrollment can't actually validate — a wrong
       # signer identity, or a threshold no longer met — before it ships.
-      - name: Verify the bundle
-        if: startsWith(github.ref, 'refs/tags/')
-        run: webcat manifest verify webcat/bundle.json
+      # TODO: only works for sigsum
+      #- name: Verify the bundle
+      #  if: startsWith(github.ref, 'refs/tags/')
+      #  run: webcat manifest verify webcat/bundle.json
 
       - name: Copy the WEBCAT metadata into dist/
         if: startsWith(github.ref, 'refs/tags/')
