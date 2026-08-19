@@ -1,0 +1,169 @@
+name: Build + WEBCAT
+
+# Builds dist/ and, on a tag, signs a WEBCAT manifest for it with Sigstore
+# using this workflow's OIDC identity, then publishes the built site plus its
+# WEBCAT metadata as a release archive.
+#
+# The manifest commits to the exact bytes in dist/, so whatever serves webgit
+# has to serve *this* archive, unpacked as-is, and send the Content-Security-
+# Policy header from webcat/webcat.config.json on every response, byte for
+# byte — the extension compares it against the signed manifest.
+#
+# One-time setup, before the first tag:
+#   1. Serve enrollment.json, manifest.json and bundle.json from
+#      /.well-known/webcat/ on the deployment domain.
+#   2. Enroll the domain at https://enroll.webcat.tech/.
+#
+# webcat/enrollment.json carries a snapshot of the Sigstore community trusted
+# root and pins the signing identity to tagged runs of this workflow. It has to
+# be regenerated (and re-enrolled, with a cooldown) when that root rotates.
+
+on:
+  push:
+    branches: [main]
+    tags: ["*"]
+  workflow_dispatch:
+
+env:
+  # Pinned so that rebuilding a tag reproduces the bytes the manifest was
+  # signed over. Bumping this changes every hash in dist/. The Rust toolchain
+  # is whatever the runner ships, so reproducing a release means matching that
+  # too — the release archive, not a rebuild, is what gets deployed.
+  TRUNK_VERSION: v0.21.14
+  TRUNK_SHA256: f2b4680cd239693a646a2795e4633c625328d7b2a044fbe749fa3a2fe9e7036b
+  # Bumping this can change the enrollment and manifest formats; regenerate
+  # webcat/enrollment.json from the same commit when it moves.
+  WEBCAT_CLI_COMMIT: c40cb1d21461fde60a2e042551d31340a96c8046
+  # The manifest's version field: the tag for a release, the commit otherwise.
+  VERSION: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || github.sha }}
+
+jobs:
+  webcat:
+    runs-on: ubuntu-latest
+    permissions:
+      # Sigstore signs against the workflow's OIDC identity, which is what
+      # webcat/enrollment.json pins.
+      id-token: write
+      # Publishing the release archive.
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # `git_version!()` in src/render/about.rs bakes `git describe` into
+          # the wasm, so the build needs the full history and its tags.
+          fetch-depth: 0
+
+      - name: Install the wasm target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Install trunk
+        run: |
+          set -euo pipefail
+          curl -sSfL -o trunk.tar.gz \
+            "https://github.com/trunk-rs/trunk/releases/download/${TRUNK_VERSION}/trunk-x86_64-unknown-linux-gnu.tar.gz"
+          echo "${TRUNK_SHA256}  trunk.tar.gz" | sha256sum -c -
+          mkdir -p "$HOME/.local/bin"
+          tar -xzf trunk.tar.gz -C "$HOME/.local/bin" trunk
+          rm trunk.tar.gz
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Build
+        run: trunk build --release
+
+      # Pinned to the commit webcat/enrollment.json was generated with. Not
+      # the npm release: 0.1.2 still writes the legacy identity/issuer
+      # enrollment shape that the extension no longer accepts. Not `npx tsx
+      # src/cli.ts` either, which is how the upstream workflows invoke it —
+      # that fails at this commit on an ESM named export — so build the
+      # bundled CLI and run that.
+      - name: Build the WEBCAT CLI
+        run: |
+          set -euo pipefail
+          git clone -q https://github.com/freedomofpress/webcat-cli "$RUNNER_TEMP/webcat-cli"
+          cd "$RUNNER_TEMP/webcat-cli"
+          git checkout -q "$WEBCAT_CLI_COMMIT"
+          npm ci --no-audit --no-fund
+          npm run build
+          mkdir -p "$HOME/.local/bin"
+          printf '#!/bin/sh\nexec node "%s/dist/cli.cjs" "$@"\n' "$RUNNER_TEMP/webcat-cli" \
+            > "$HOME/.local/bin/webcat"
+          chmod +x "$HOME/.local/bin/webcat"
+
+      - name: Populate the version in webcat.config.json
+        run: |
+          set -euo pipefail
+          jq --arg v "$VERSION" '.version = $v' webcat/webcat.config.json > webcat.config.tmp
+          mv webcat.config.tmp webcat/webcat.config.json
+
+      # Hashes every file in dist/. `.well-known/` is a dot-directory, so the
+      # scan skips it and the metadata copied there below never has to hash
+      # itself. The wasm goes to the manifest's `wasm` list rather than
+      # `files`: it is checked where it is instantiated, not where it is
+      # fetched.
+      - name: Generate the WEBCAT manifest
+        run: |
+          webcat manifest generate \
+            --type sigstore \
+            --config webcat/webcat.config.json \
+            --directory dist \
+            --output webcat/manifest_unsigned.json
+
+      # Everything below runs for releases only. A push to main gets as far as
+      # generating the manifest, which is enough to catch a broken config or an
+      # unexpected file in dist/ without spending a transparency log entry.
+      - name: Get the GitHub OIDC token
+        id: oidc
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          set -euo pipefail
+          TOKEN="$(curl -sS \
+            -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sigstore" \
+            | jq -r .value)"
+          echo "::add-mask::$TOKEN"
+          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
+
+      - name: Sign the manifest with Sigstore
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          webcat manifest sign \
+            --type sigstore \
+            --input webcat/manifest_unsigned.json \
+            --output webcat/manifest.json \
+            --oidc-token "${{ steps.oidc.outputs.token }}"
+
+      - name: Assemble the WEBCAT bundle
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          webcat bundle create \
+            -e webcat/enrollment.json \
+            -m webcat/manifest.json \
+            -o webcat/bundle.json
+
+      # Catches a manifest the enrollment can't actually validate — a wrong
+      # signer identity, or a threshold no longer met — before it ships.
+      - name: Verify the bundle
+        if: startsWith(github.ref, 'refs/tags/')
+        run: webcat manifest verify webcat/bundle.json
+
+      - name: Copy the WEBCAT metadata into dist/
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          set -euo pipefail
+          mkdir -p dist/.well-known/webcat
+          cp webcat/enrollment.json webcat/manifest.json webcat/bundle.json \
+            dist/.well-known/webcat/
+
+      - name: Create the release archive
+        if: startsWith(github.ref, 'refs/tags/')
+        run: tar -czf "webgit-${VERSION}.tar.gz" -C dist .
+
+      - name: Publish the GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            "webgit-${VERSION}.tar.gz" \
+            --title "webgit ${{ github.ref_name }}" \
+            --notes "Built site with WEBCAT metadata. Unpack at the web root and serve as-is: the signed manifest commits to these exact bytes."

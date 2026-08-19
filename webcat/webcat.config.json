@@ -1,0 +1,9 @@
+{
+    "app": "https://github.com/legoktm/webgit",
+    "version": "0.1.0",
+    "default_csp": "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src blob:; connect-src 'self'; base-uri 'none'; form-action 'none'",
+    "default_index": "index.html",
+    "default_fallback": "/index.html",
+    "wasm": [],
+    "extra_csp": {}
+}
