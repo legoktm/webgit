@@ -15,9 +15,7 @@ which is also available under the MIT or Apache 2.0 licenses.
 
 ### Set up
 
-* Install Rust for the `wasm32-unknown-unknown` target (e.g. `rustup target add wasm32-unknown-unknown`).
-* Install [`trunk`](https://trunk-rs.github.io/trunk/guide/getting-started/installation.html).
-* Clone this repository and run `trunk build --release`.
+* Download the latest signed release from [GitHub](https://github.com/legoktm/webgit/releases).
 * Copy the `dist/` directory to your web server, e.g. `/var/www/webgit/`.
 * You'll then need to set up your webserver to serve `index.html` in place of each repository. For Apache,
   my configuration looks like:
