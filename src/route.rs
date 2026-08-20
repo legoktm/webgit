@@ -225,9 +225,10 @@ fn strip_route_prefix<'a>(hash: &'a str, prefix: &str, seps: &[char]) -> Option<
 /// #!/snapshot[/…][?h=<ref>]        a .tar.gz of a revision's tree (path ignored)
 /// ```
 ///
-/// `h=<rev>` is a branch, a tag, or a full 40-character commit hash; see
-/// [`resolve_revision`], which is where the distinction is drawn. To the grammar
-/// it is one opaque string either way.
+/// `h=<rev>` is a branch, a tag, `HEAD`, or a commit hash whole or abbreviated;
+/// see [`effective_head`] and [`resolve_revision`], which are where the
+/// distinctions are drawn. To the grammar it is one opaque string whichever it
+/// is.
 ///
 /// Anything else falls back to the summary, so a hand-edited or stale URL lands
 /// on a real page rather than an error.
@@ -367,6 +368,25 @@ pub(crate) fn active_tab(route: &Route) -> &'static str {
     }
 }
 
+/// The `?h=` value to *load* from, with a literal `HEAD` folded away to `None`.
+async fn effective_head<'a>(repo: &CachingRepo, head: Option<&'a str>) -> Option<&'a str> {
+    let name = head?;
+    if name != "HEAD" || has_ref_named(repo, "HEAD").await {
+        return Some(name);
+    }
+    None
+}
+
+/// Whether the repository has a branch or a tag whose short name is `name`.
+async fn has_ref_named(repo: &CachingRepo, name: &str) -> bool {
+    let Ok(refs) = repo.all_refs().await else {
+        return false;
+    };
+    ["heads", "tags"]
+        .iter()
+        .any(|dir| refs.contains_key(&RefName::Ref(format!("{dir}/{name}").into_bytes())))
+}
+
 /// Resolve a `?h=` value to the commit it names: a tag, a branch, or a commit
 /// hash, whole or abbreviated to at least four characters.
 ///
@@ -405,7 +425,7 @@ async fn resolve_revision(
     // than a broken hash, so it gets the error naming everything `?h=` accepts
     // rather than `resolve_sha`'s "invalid SHA".
     if ObjectIdPrefix::from_hex(name.as_bytes()).is_none() {
-        anyhow::bail!("not a branch, a tag, or a commit hash: {name}");
+        anyhow::bail!("not a branch, a tag, HEAD, or a commit hash: {name}");
     }
     let oid = resolve_sha(repo, name).await?;
     let object = repo
@@ -436,7 +456,7 @@ pub(crate) async fn resolve_display_head(
     repo: &CachingRepo,
     head: Option<&str>,
 ) -> Option<(String, RefKind)> {
-    match head {
+    match effective_head(repo, head).await {
         Some(name) => {
             let (commit, kind) = resolve_revision(repo, name).await.ok()?;
             let label = match kind {
@@ -491,7 +511,8 @@ pub(crate) async fn build_route(
         )),
         Route::Log { offset, head, path } => {
             let resolved;
-            let log_commit: &gib::object::Commit = match &head {
+            let log_commit: &gib::object::Commit = match effective_head(repo, head.as_deref()).await
+            {
                 Some(name) => {
                     resolved = resolve_revision(repo, name).await?.0;
                     &resolved
@@ -526,7 +547,7 @@ pub(crate) async fn build_route(
         }
         Route::Tree { path, head, render } => {
             let resolved_tree;
-            let tree: &Tree = if let Some(ref ref_name) = head {
+            let tree: &Tree = if let Some(ref_name) = effective_head(repo, head.as_deref()).await {
                 let (commit, _kind) = resolve_revision(repo, ref_name).await?;
                 resolved_tree = repo
                     .lookup_object(commit.tree())
@@ -559,11 +580,13 @@ pub(crate) async fn build_route(
             }
         }
         Route::Snapshot { head } => {
+            let head = effective_head(repo, head.as_deref()).await;
+
             // Both the commit and its tree, where the tree route needs only the
             // tree: the commit's id and date go into the archive itself.
             let resolved_commit;
             let mut resolved_kind = None;
-            let commit: &gib::object::Commit = match &head {
+            let commit: &gib::object::Commit = match head {
                 Some(name) => {
                     let (commit, kind) = resolve_revision(repo, name).await?;
                     resolved_commit = commit;
@@ -590,9 +613,9 @@ pub(crate) async fn build_route(
             // HEAD is on, or — for a `?h=` that named a commit outright, and for
             // a detached HEAD — the commit itself, abbreviated. All 40 digits in
             // a filename tell the reader nothing the first eight don't.
-            let ref_label = match (&head, resolved_kind) {
+            let ref_label = match (head, resolved_kind) {
                 (Some(_), Some(RefKind::Commit)) => short_hash(&format!("{}", commit.id())),
-                (Some(name), _) => name.clone(),
+                (Some(name), _) => name.to_string(),
                 (None, _) => match head_branch_name(repo).await {
                     Some(name) => name,
                     None => short_hash(&format!("{}", commit.id())),

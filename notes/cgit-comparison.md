@@ -27,8 +27,8 @@ As things are implemented, remove them from this list.
 - **`?follow=1`** — follow renames when the log is path-scoped.
 - **Revision ranges** as a starting point.
 - **`?h=` spellings** — `resolve_revision` (`src/route.rs`) takes a branch, a
-  tag, or a commit hash whole or abbreviated. Still missing: a **remote
-  branch**, and **`HEAD`** spelled literally.
+  tag, `HEAD`, or a commit hash whole or abbreviated. Still missing: a **remote
+  branch**.
 - **Files/Lines columns** (`enable-log-filecount` / `enable-log-linecount`) —
   per-commit diffstat counts in the table. Current columns are
   Age/Commit/Message/Author.

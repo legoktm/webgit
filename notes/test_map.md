@@ -211,6 +211,12 @@ of tests.
       - nav_log_on_tag
   - `?h=<40-char sha>` — a commit named directly
   - `?h=<4-to-40-char abbreviation>` — expanded like `#!/commit/<sha>`
+  - `?h=HEAD` — folded into the bare route: the commit loaded with the
+    repository, and the same label
+    - browser:
+      - h_takes_literal_head
+  - `?h=HEAD` with a detached HEAD — no label, as the bare route shows none
+  - a ref really named `HEAD` or spelled like a hash — the ref still wins
   - `?h=` empty — ignored, falls back to HEAD
   - `?h=` containing `&`, which must not inject a second parameter
   - `?h=` naming nothing resolvable — the error reaches the content area
@@ -319,6 +325,10 @@ of tests.
     - `?h=<abbreviated sha>` — expanded, and the path bar shows what it resolved to
       - browser:
         - h_takes_an_abbreviated_commit
+    - `?h=HEAD` — the same tree and label as the bare route, and the rows still
+      carry `?h=HEAD` forward
+      - browser:
+        - h_takes_literal_head
     - the five entry modes — directory, file, executable, symlink, submodule
     - directories and files are linked with different classes
       - snapshot:
@@ -404,6 +414,7 @@ of tests.
     - browser:
       - snapshot_route_downloads_a_tarball
   - `?h=<40-char sha>` — named after the abbreviated commit, not the full hash
+  - `?h=HEAD` — named after HEAD's branch, as a bare `#!/snapshot` is
   - `/` and `\` in the repository name or ref are flattened to `-` for the filename
   - an empty progress bar before the first object lands
     - snapshot:

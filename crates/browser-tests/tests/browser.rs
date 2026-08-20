@@ -557,3 +557,59 @@ async fn h_reports_an_unknown_abbreviated_commit() -> Result<()> {
 
     h.finish().await
 }
+
+/// `?h=HEAD`, spelled literally, renders exactly what the bare route renders.
+/// No link here writes one, but every other git interface accepts the spelling
+/// and a hand-written link using it should keep following the default branch.
+#[tokio::test]
+async fn h_takes_literal_head() -> Result<()> {
+    let h = Harness::start().await?;
+
+    for repo in h.fixtures.all() {
+        h.open(repo, "#!/tree").await?;
+        h.wait_for(".tree-table").await?;
+        let bare_names = h.texts_of(".tree-table td.name").await?;
+        let bare_bar = h.text_of("#path-bar").await?;
+
+        h.open(repo, "#!/tree?h=HEAD").await?;
+        h.wait_for(".tree-table").await?;
+        h.assert_no_error().await?;
+        assert_eq!(
+            h.texts_of(".tree-table td.name").await?,
+            bare_names,
+            "[{}] ?h=HEAD listed a different tree than the bare route",
+            repo.name
+        );
+        // Including the ref label: HEAD's branch, not the word "HEAD".
+        assert_eq!(
+            h.text_of("#path-bar").await?,
+            bare_bar,
+            "[{}] ?h=HEAD carried a different path bar than the bare route",
+            repo.name
+        );
+
+        // What does differ, and should: the revision stays in the URL, so
+        // browsing on from this page keeps following HEAD rather than pinning
+        // the commit HEAD is on today.
+        h.client
+            .find(Locator::Css(".tree-table a[href='#!/tree/src?h=HEAD']"))
+            .await?
+            .click()
+            .await?;
+        h.wait_for(".tree-table").await?;
+        h.assert_no_error().await?;
+
+        // And on a route that renders nothing but the ref label.
+        h.open(repo, "#!/log?h=HEAD").await?;
+        h.wait_for(".summary-table").await?;
+        h.assert_no_error().await?;
+        assert_eq!(
+            h.text_of("#path-bar").await?,
+            "branch: main",
+            "[{}] the log's ref label did not follow HEAD",
+            repo.name
+        );
+    }
+
+    h.finish().await
+}
