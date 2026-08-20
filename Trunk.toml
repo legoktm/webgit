@@ -1,5 +1,7 @@
 [build]
 public_url = "/assets/"
+# Subresource integrity, temporarily disabled. Revert this commit to restore it.
+no_sri = true
 
 # Trunk emits hashed CSS/JS/WASM at the dist root (only the URL prefix is
 # rewritten, via public_url). This hook relocates those files into an `assets/`

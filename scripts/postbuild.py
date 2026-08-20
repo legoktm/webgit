@@ -12,8 +12,6 @@ Three steps, run in order:
    read its hashed URL at startup (see `assets::init`).
 """
 
-import base64
-import hashlib
 import os
 import re
 import shutil
@@ -48,27 +46,13 @@ with glue.open("a") as fh:
         'new URL(import.meta.url.replace(/\\.js$/, "_bg.wasm")) });\n'
     )
 
-# Recompute the subresource-integrity hash now that the file changed.
-digest = hashlib.sha384(glue.read_bytes()).digest()
-integrity = "sha384-" + base64.b64encode(digest).decode()
-
 index = dist / "index.html"
 html = index.read_text()
 
-# Refresh the modulepreload's integrity (scoped to that tag so the adjacent
-# wasm preload's integrity is left intact).
-html, n = re.subn(
-    r'(<link rel="modulepreload"[^>]*integrity=")sha384-[^"]*',
-    lambda m: m.group(1) + integrity,
-    html,
-)
-if n != 1:
-    sys.exit(f"postbuild: expected 1 modulepreload integrity, patched {n}")
-
 # Swap Trunk's inline loader for an executing external module script.
 external = (
-    f'<script type="module" src="/assets/{glue.name}" '
-    f'crossorigin="anonymous" integrity="{integrity}"></script>'
+    f'<script type="module" src="/assets/{glue.name}" crossorigin="anonymous">'
+    "</script>"
 )
 html, n = re.subn(
     r'<script type="module">.*?</script>', external, html, flags=re.DOTALL
@@ -79,8 +63,7 @@ if n != 1:
 # 3. Demote markdown.css from a stylesheet to a meta tag. It styles only the
 # readme frame's document, so applying it here would be wrong (and would fetch
 # it on every page load); a meta keeps the hashed URL readable from JS/wasm
-# without costing a request. Integrity is dropped with the <link> — the frame
-# loads it as an ordinary same-origin stylesheet.
+# without costing a request.
 html, n = re.subn(
     r'<link rel="stylesheet" href="(/assets/markdown-[^"]*\.css)"[^>]*/?>',
     lambda m: f'<meta name="markdown-css" content="{m.group(1)}">',
