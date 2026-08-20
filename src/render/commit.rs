@@ -160,7 +160,8 @@ pub(crate) async fn build_commit(
     })
 }
 
-/// Resolve the SHA from a `#!/commit/…` URL to the object it names.
+/// Resolve a SHA written into a URL — the one in `#!/commit/…`, or a `?h=`
+/// value that named no ref — to the object it names.
 ///
 /// A full 40-character hash decodes directly, with no I/O — the case every
 /// link this app generates itself takes. Anything shorter is one of git's
@@ -168,7 +169,7 @@ pub(crate) async fn build_commit(
 /// [`linkify_message`], and has to be expanded against the repository. Like
 /// git, we refuse to pick between objects that share an abbreviation rather
 /// than sending the reader to an arbitrary one.
-async fn resolve_sha(repo: &CachingRepo, sha: &str) -> anyhow::Result<ObjectId> {
+pub(crate) async fn resolve_sha(repo: &CachingRepo, sha: &str) -> anyhow::Result<ObjectId> {
     if let Some(oid) = ObjectId::from_hex(sha.as_bytes()) {
         return Ok(oid);
     }

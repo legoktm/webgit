@@ -210,6 +210,7 @@ of tests.
     - snapshot:
       - nav_log_on_tag
   - `?h=<40-char sha>` — a commit named directly
+  - `?h=<4-to-40-char abbreviation>` — expanded like `#!/commit/<sha>`
   - `?h=` empty — ignored, falls back to HEAD
   - `?h=` containing `&`, which must not inject a second parameter
   - `?h=` naming nothing resolvable — the error reaches the content area
@@ -315,6 +316,9 @@ of tests.
     - `?h=<rev>` — every row's link carries the ref forward
       - snapshot:
         - test_tree_html_with_head
+    - `?h=<abbreviated sha>` — expanded, and the path bar shows what it resolved to
+      - browser:
+        - h_takes_an_abbreviated_commit
     - the five entry modes — directory, file, executable, symlink, submodule
     - directories and files are linked with different classes
       - snapshot:
@@ -387,6 +391,8 @@ of tests.
     - the filename comes from the path's last component
   - neither a subtree nor a blob — "Not found: <path>"
   - `?h=` naming nothing resolvable — the error reaches the content area
+    - browser:
+      - h_reports_an_unknown_abbreviated_commit
   - `?h=` naming a ref whose object is not a tree — reported
 - `#!/snapshot[?h=<rev>]`
   - a path component in the route is ignored

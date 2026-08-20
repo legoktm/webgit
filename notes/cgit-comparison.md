@@ -26,9 +26,8 @@ As things are implemented, remove them from this list.
 - **`?showmsg=1`** — expand full commit bodies inline in the log table.
 - **`?follow=1`** — follow renames when the log is path-scoped.
 - **Revision ranges** as a starting point.
-- **`?h=` spellings** — `resolve_revision` (`src/route.rs:389-423`) takes a
-  branch, a tag or a full 40-character hash. Still missing: an **abbreviated**
-  hash (`#!/commit/<sha>` takes one, `?h=` deliberately doesn't), a **remote
+- **`?h=` spellings** — `resolve_revision` (`src/route.rs`) takes a branch, a
+  tag, or a commit hash whole or abbreviated. Still missing: a **remote
   branch**, and **`HEAD`** spelled literally.
 - **Files/Lines columns** (`enable-log-filecount` / `enable-log-linecount`) —
   per-commit diffstat counts in the table. Current columns are

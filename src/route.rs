@@ -2,7 +2,7 @@ use crate::cache::CachingRepo;
 use crate::error::GitContext;
 use crate::render::about::{AboutProps, build_about};
 use crate::render::blob::{BlobProps, build_blob_props};
-use crate::render::commit::{CommitProps, build_commit};
+use crate::render::commit::{CommitProps, build_commit, resolve_sha};
 use crate::render::log::{LogProps, build_log};
 use crate::render::readme::{ReadmeProps, build_readme};
 use crate::render::refs_all::{RefsAllProps, build_refs_all};
@@ -13,7 +13,7 @@ use crate::render::summary::{SummaryProps, build_summary};
 use crate::render::tag::{TagProps, build_tag};
 use crate::render::tree::{TreeProps, build_tree_props};
 use crate::render::{commit_for_entry, head_branch_name};
-use gib::object::{ObjectId, Tree, TreeEntryType};
+use gib::object::{ObjectId, ObjectIdPrefix, Tree, TreeEntryType};
 use gib::reference::RefName;
 use std::rc::Rc;
 
@@ -368,22 +368,19 @@ pub(crate) fn active_tab(route: &Route) -> &'static str {
 }
 
 /// Resolve a `?h=` value to the commit it names: a tag, a branch, or a commit
-/// given as a full 40-character hash.
+/// hash, whole or abbreviated to at least four characters.
 ///
 /// Refs are consulted first, and cost nothing to consult — the ref snapshot is
 /// fetched once per session and this is a lookup in it — so every link the app
 /// writes for itself resolves without a request of its own. Only a value naming
-/// no ref is read as an object id.
-///
-/// Full hashes only. Expanding an abbreviation means searching every pack index
-/// and can come back ambiguous ([`CachingRepo::resolve_prefix`]), which is a
-/// different failure to report and a different label for the path bar to carry;
-/// `#!/commit/<sha>` takes that on because commit messages quote abbreviations,
-/// and `?h=` has no such source of them.
+/// no ref is read as an object id, through the same [`resolve_sha`] that
+/// `#!/commit/<sha>` uses: a full hash decodes with no I/O, and an abbreviation
+/// is expanded against the commit-graph and the pack indexes, reporting an
+/// ambiguous prefix rather than picking between the objects that share it.
 ///
 /// The ref-before-hash order is the reverse of `git rev-parse`, which reads a
 /// full hash as an object before it consults refs. It matters only for a ref
-/// whose own name is 40 hex digits, and this way every `?h=` URL that resolved
+/// whose own name is hash-shaped, and this way every `?h=` URL that resolved
 /// before still resolves to exactly what it did.
 async fn resolve_revision(
     repo: &CachingRepo,
@@ -404,9 +401,13 @@ async fn resolve_revision(
         return Ok((commit, RefKind::Branch));
     }
 
-    let oid = ObjectId::from_hex(name.as_bytes()).ok_or_else(|| {
-        anyhow::anyhow!("not a branch, a tag, or a full 40-character commit hash: {name}")
-    })?;
+    // A value that isn't hash-shaped at all is a misspelled ref far more often
+    // than a broken hash, so it gets the error naming everything `?h=` accepts
+    // rather than `resolve_sha`'s "invalid SHA".
+    if ObjectIdPrefix::from_hex(name.as_bytes()).is_none() {
+        anyhow::bail!("not a branch, a tag, or a commit hash: {name}");
+    }
+    let oid = resolve_sha(repo, name).await?;
     let object = repo
         .lookup_object(oid)
         .await

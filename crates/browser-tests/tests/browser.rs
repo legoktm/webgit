@@ -504,3 +504,56 @@ fn wait_for_download(dir: &std::path::Path, timeout: Duration) -> Option<std::pa
     }
     None
 }
+
+/// `?h=` takes an abbreviated commit, not just a full 40-character hash — the
+/// form a reader copies out of a log row or a commit message.
+#[tokio::test]
+async fn h_takes_an_abbreviated_commit() -> Result<()> {
+    let h = Harness::start().await?;
+
+    for repo in [&h.fixtures.packed, &h.fixtures.graph] {
+        let head = repo.head();
+        let abbrev = &head.sha[..10];
+
+        h.open(repo, &format!("#!/tree?h={abbrev}")).await?;
+        h.wait_for(".tree-table").await?;
+        h.assert_no_error().await?;
+
+        let names = h.texts_of(".tree-table td.name").await?;
+        assert!(
+            names.iter().any(|n| n == "README.md"),
+            "[{}] ?h={abbrev} did not list HEAD's tree: {names:?}",
+            repo.name
+        );
+
+        // The abbreviation is expanded, not echoed: the path bar labels it a
+        // commit by the same eight characters the full hash would produce.
+        let bar = h.text_of("#path-bar").await?;
+        assert!(
+            bar.contains(&format!("commit: {}", head.short_sha())),
+            "[{}] path bar did not name the commit ?h={abbrev} resolved to: {bar:?}",
+            repo.name
+        );
+    }
+
+    h.finish().await
+}
+
+/// An abbreviation matching nothing is reported rather than silently falling
+/// back to HEAD, which would show a tree the URL never asked for.
+#[tokio::test]
+async fn h_reports_an_unknown_abbreviated_commit() -> Result<()> {
+    let h = Harness::start().await?;
+    let repo = &h.fixtures.packed;
+
+    h.open(repo, "#!/tree?h=deadbeef").await?;
+    h.wait_for(".msg.error").await?;
+
+    let msg = h.text_of(".msg.error").await?;
+    assert!(
+        msg.contains("deadbeef"),
+        "the error did not name the revision that failed: {msg:?}"
+    );
+
+    h.finish().await
+}
