@@ -24,9 +24,9 @@ which is also available under the MIT or Apache 2.0 licenses.
 Alias /assets     /var/www/webgit/dist/assets
 <Directory /var/www/webgit/dist/>
     Require all granted
+    AllowOverride None
+    AllowOverrideList Header
 </Directory>
-
-Header always set Content-Security-Policy "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src blob:; connect-src 'self'; base-uri 'none'; form-action 'none'"
 
 # Rewrite /public/foo.git/ + /mirrors/foo.git/ to the webgit index
 RewriteCond %{REQUEST_URI} ^/(public|mirrors)/[^/]+\.git/$

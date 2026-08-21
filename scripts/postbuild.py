@@ -1,6 +1,6 @@
 """Trunk post-build hook.
 
-Three steps, run in order:
+Four steps, run in order:
 
 1. Relocate the hashed CSS/JS/WASM that Trunk emits at the dist root into an
    `assets/` subdir, matching the `/assets/` prefix from `public_url`.
@@ -10,11 +10,15 @@ Three steps, run in order:
 3. Turn markdown.css's <link> into a <meta>, so the page doesn't apply a
    stylesheet meant only for the sandboxed readme frame while the app can still
    read its hashed URL at startup (see `assets::init`).
+4. Write dist/.htaccess, carrying the Content-Security-Policy from
+   webcat/webcat.config.json and an X-WEBCAT-Version header for this build.
 """
 
+import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -73,3 +77,35 @@ if n != 1:
     sys.exit(f"postbuild: expected 1 markdown.css link, rewrote {n}")
 
 index.write_text(html)
+
+# 4. Emit the .htaccess that sends the response headers WEBCAT checks, so a
+# deployment doesn't have to copy them into its webserver config by hand.
+#
+# The CSP is read from webcat/webcat.config.json, the same file the signed
+# manifest is generated from: the extension compares the header against the
+# manifest byte for byte, on every response from the domain, so the two must
+# never drift. Deliberately not wrapped in <IfModule mod_headers.c> — without
+# mod_headers the site would silently serve no CSP at all, and a 500 that says
+# so is the better failure.
+config = json.loads(Path("webcat/webcat.config.json").read_text())
+
+# The workflow exports VERSION (the tag for a release, the commit otherwise)
+# and stamps the same value into the manifest. Outside CI, fall back to the
+# same `git describe` that `git_version!()` bakes into the wasm, and to the
+# config's own version when there's no checkout to describe.
+version = os.environ.get("VERSION")
+if not version:
+    described = subprocess.run(
+        ["git", "describe", "--tags", "--always"], capture_output=True, text=True
+    )
+    version = described.stdout.strip() if described.returncode == 0 else config["version"]
+
+if '"' in config["default_csp"] or '"' in version:
+    sys.exit("postbuild: a header value contains a quote")
+
+(dist / ".htaccess").write_text(
+    f"""\
+Header always set Content-Security-Policy "{config["default_csp"]}"
+Header always set X-WEBCAT-Version "{version}"
+"""
+)
