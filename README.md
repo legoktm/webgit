@@ -78,3 +78,8 @@ so reorder it by hand (or generate it some other way) if you want something othe
 
 Then you can serve the same dist/index.html under your webroot and it will automatically render
 the listing instead.
+
+### WEBCAT
+
+[WEBCAT](https://webcat.tech/) allows users to verify the website in question is running a signed,
+non-tampered version of gib. WEBCAT is in alpha and support is still experimental.
