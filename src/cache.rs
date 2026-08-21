@@ -484,8 +484,10 @@ impl CachingRepo {
         let tree = oid_from_bytes(&get_bytes(record, "tree")?)?;
         let parents = get_bytes(record, "parents")
             .unwrap_or_default()
-            .chunks_exact(20)
-            .filter_map(oid_from_bytes)
+            .as_chunks::<20>()
+            .0
+            .iter()
+            .filter_map(|parent| oid_from_bytes(parent.as_slice()))
             .collect();
         let commit_time = get_number(record, "time")? as i64;
         let tag = get_number(record, "tag").unwrap_or(f64::NAN);

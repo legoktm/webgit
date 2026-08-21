@@ -151,7 +151,7 @@ impl<F: FileSystem> CommitGraph<F> {
         // The terminating TOC entry's offset marks the end of all chunk data
         // (the trailing checksum follows); it is the largest offset in the table.
         let mut data_end = 0u64;
-        for entry in table.chunks_exact(12) {
+        for entry in table.as_chunks::<12>().0 {
             let id: [u8; 4] = entry[0..4].try_into().unwrap();
             let offset = u64::from_be_bytes(entry[4..12].try_into().unwrap());
             data_end = data_end.max(offset);
@@ -172,8 +172,8 @@ impl<F: FileSystem> CommitGraph<F> {
         // Fanout: 256 big-endian u32 cumulative counts; the last is the total.
         let fanout_bytes = read_vec(&mut reader, oidf_offset, 256 * 4).await?;
         let mut fanout = [0u32; 256];
-        for (slot, chunk) in fanout.iter_mut().zip(fanout_bytes.chunks_exact(4)) {
-            *slot = u32::from_be_bytes(chunk.try_into().unwrap());
+        for (slot, chunk) in fanout.iter_mut().zip(fanout_bytes.as_chunks::<4>().0) {
+            *slot = u32::from_be_bytes(*chunk);
         }
         let num_commits = fanout[255];
 
