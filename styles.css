@@ -78,6 +78,10 @@ a:hover {
     margin: 0;
 }
 
+#repo-path-name > a {
+    color: var(--text);
+}
+
 #repo-desc {
     font-size: 0.85rem;
     color: var(--text-dim);

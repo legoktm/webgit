@@ -16,7 +16,7 @@ expression: "render(parse_listing(r#\"[{\"\": [\"top.git\"]}, {\"public\": [\"fo
 </td>
 </tr>
 <tr class="repo-section">
-<td>public</td>
+<td id="public">public</td>
 </tr>
 <tr>
 <td class="name">

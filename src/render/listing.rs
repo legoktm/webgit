@@ -132,7 +132,7 @@ fn repo_group_rows((i, g): (usize, &RepoGroup)) -> Html {
         <>
             if !g.section.is_empty() {
                 <tr class="repo-section" key={format!("{i}:section")}>
-                    <td>{ g.section.clone() }</td>
+                    <td id={g.section.clone()}>{ g.section.clone() }</td>
                 </tr>
             }
             { for g.repos.iter().enumerate().map(|(j, r)| repo_row(i, j, r)) }

@@ -220,6 +220,38 @@ fn app() -> Html {
         Content::Index(_) => Some("repositories".to_string()),
         Content::Loading | Content::Error(_) => None,
     };
+    // Native fragment navigation runs before the async listing has created its
+    // section elements. Repeat that navigation after Yew mounts the listing.
+    {
+        let listing_loaded = matches!(&*content, Content::Index(_));
+        let hash = (*hash).clone();
+        use_effect_with((listing_loaded, hash), move |(listing_loaded, hash)| {
+            if *listing_loaded
+                && let Some(anchor) = hash.strip_prefix('#').filter(|anchor| !anchor.is_empty())
+                && let Some(document) = web_sys::window().and_then(|window| window.document())
+                && let Some(target) = document.get_element_by_id(&route::decode_component(anchor))
+            {
+                target.scroll_into_view();
+            }
+            || ()
+        });
+    }
+
+    let doc_name_node = doc_name.clone().map(|name| {
+        if let Some((prefix, suffix)) = name.split_once("/") {
+            let prefix = prefix.to_owned();
+            let suffix = suffix.to_owned();
+            html! {
+                <>
+                    <a href={ format!("/#{prefix}") }>{ prefix }</a>
+                    { " / " }
+                    <span>{ suffix }</span>
+                </>
+            }
+        } else {
+            html! { name }
+        }
+    });
     // `<title>` lives in `<head>`, outside the Yew root, so it's the one thing
     // still set imperatively — but now declaratively, keyed off the name.
     {
@@ -246,7 +278,7 @@ fn app() -> Html {
                 <div id="header-sub">
                     <h1 id="repo-path">
                         <span id="repo-path-name">
-                            { doc_name.clone().unwrap_or_else(|| "\u{2014}".to_string()) }
+                            { doc_name_node.clone().unwrap_or_else(|| html!{ "\u{2014}" }) }
                         </span>
                     </h1>
                     <div id="repo-desc">{ "\u{00a0}" }</div>
