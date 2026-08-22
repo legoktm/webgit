@@ -60,6 +60,7 @@ rand_core = "0.10.0"
 rand_pcg = "0.10.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha1 = { version = "0.10.7", default-features = false }
 similar = { version = "3.1.1", features = ["bytes"] }
 tar = { version = "0.4.46", default-features = false }
 tempfile = "3.27.0"
@@ -147,6 +148,9 @@ lto = "fat"
 codegen-units = 1
 strip = true
 
-# except this is on the hot path, optimize for performance.
+# except these are on the hot path, optimize for performance.
 [profile.release.package.miniz_oxide]
+opt-level = 3
+
+[profile.release.package.sha1]
 opt-level = 3

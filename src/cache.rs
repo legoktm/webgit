@@ -98,6 +98,12 @@ impl CachingRepo {
             .lookup_raw(id)
             .await?
             .ok_or(GitError::MissingObject(id))?;
+        // Check the bytes against the ID we asked for before anything else
+        // sees them. This is the one path where an object enters the process,
+        // and it already costs a network round trip, so hashing is lost in the
+        // noise; a cache hit above needs no check of its own, because nothing
+        // that failed here was ever written to IndexedDB.
+        raw.verify(id)?;
         // Queue the cache write but don't await it: the returned object doesn't
         // depend on the write completing, and IndexedDB keeps the transaction
         // alive until the queued `put` finishes on its own. Awaiting here would

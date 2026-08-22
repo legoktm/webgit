@@ -56,6 +56,12 @@ pub enum Error {
         snippet: Vec<u8>,
     },
     ObjectMissingRequiredFields(ObjectId),
+    ObjectHashMismatch {
+        #[expect(missing_docs)]
+        expected: ObjectId,
+        #[expect(missing_docs)]
+        computed: ObjectId,
+    },
     MissingObject(ObjectId),
     ObjectTooLarge(ObjectId),
     UnexpectedThinPack,
@@ -90,6 +96,9 @@ impl From<ObjectError> for Error {
         match value {
             ObjectError::Parse { id, snippet } => Self::ObjectParseError { id, snippet },
             ObjectError::MissingFields(id) => Self::ObjectMissingRequiredFields(id),
+            ObjectError::HashMismatch { expected, computed } => {
+                Self::ObjectHashMismatch { expected, computed }
+            }
         }
     }
 }

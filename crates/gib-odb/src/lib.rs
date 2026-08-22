@@ -307,6 +307,45 @@ mod tests {
         ));
     }
 
+    /// Every object the odb hands back must hash to the ID it was asked for,
+    /// including the ones rebuilt from a delta chain — the only path where the
+    /// bytes are assembled rather than read straight out of the pack.
+    #[test]
+    fn packed_objects_hash_to_their_ids() {
+        let test_repo = gib_testkit::make_basic_repo().unwrap();
+        gib_testkit::make_similar_commits(&test_repo).unwrap();
+        test_repo.run_git(["gc", "--aggressive"]).unwrap();
+
+        let listing = test_repo
+            .run_git([
+                "cat-file",
+                "--batch-all-objects",
+                "--batch-check=%(objectname) %(deltabase)",
+            ])
+            .unwrap();
+
+        let odb = open_odb(&test_repo);
+        let (mut seen, mut deltified) = (0, 0);
+        for line in listing.split(|b| *b == b'\n') {
+            if line.is_empty() {
+                continue;
+            }
+            let (name, base) = line.split_at(40);
+            let id = ObjectId::from_hex(name).unwrap();
+            let raw = block_on(odb.lookup(id)).unwrap().unwrap();
+            raw.verify(id).unwrap();
+            seen += 1;
+            if base.trim_ascii() != b"0000000000000000000000000000000000000000" {
+                deltified += 1;
+            }
+        }
+
+        assert!(seen > 4, "expected a populated pack, saw {seen} objects");
+        // Without a delta in the pack this would only be testing the plain
+        // read path, which the loose-object tests already cover.
+        assert!(deltified > 0, "expected the pack to contain a delta chain");
+    }
+
     #[test]
     fn discover_packs_prefers_info_packs() {
         let test_repo = gib_testkit::make_packfile_repo().unwrap();

@@ -49,13 +49,10 @@ fn git_oid(test_repo: &TestRepo, rev: &str) -> ObjectId {
 
 /// Read an object's bytes with `git cat-file` and parse them.
 fn read(test_repo: &TestRepo, id: ObjectId, object_type: ObjectType) -> Object {
-    let type_name = match object_type {
-        ObjectType::Commit => "commit",
-        ObjectType::Tree => "tree",
-        ObjectType::Blob => "blob",
-        ObjectType::Tag => "tag",
-    };
-    let body = git(test_repo, &["cat-file", type_name, &id.to_string()]);
+    let body = git(
+        test_repo,
+        &["cat-file", object_type.name(), &id.to_string()],
+    );
     Object::from_raw(id, RawObject { object_type, body }).unwrap()
 }
 
@@ -246,4 +243,45 @@ fn loose_header_matches_cat_file_size() {
     assert_eq!(parsed_size.0, size);
     assert_eq!(object_type, ObjectType::Commit);
     assert_eq!(rest, body);
+}
+
+/// Every object in the repository must hash to the name git gave it. This is
+/// the property object verification rests on, checked against the real thing
+/// over a tree that carries all four object types.
+#[test]
+fn compute_id_names_every_object_as_git_does() {
+    let test_repo = fixture();
+    let listing = git_text(
+        &test_repo,
+        &[
+            "cat-file",
+            "--batch-all-objects",
+            "--batch-check=%(objectname) %(objecttype)",
+        ],
+    );
+
+    let mut seen = 0;
+    for line in listing.lines() {
+        let (name, type_name) = line.split_once(' ').unwrap();
+        let id = ObjectId::from_hex(name.as_bytes()).unwrap();
+        let object_type = match type_name {
+            "commit" => ObjectType::Commit,
+            "tree" => ObjectType::Tree,
+            "blob" => ObjectType::Blob,
+            "tag" => ObjectType::Tag,
+            other => panic!("unexpected object type {other}"),
+        };
+        let body = git(&test_repo, &["cat-file", object_type.name(), name]);
+        let object = RawObject { object_type, body };
+        assert_eq!(object.compute_id(), id, "wrong ID computed for {name}");
+        object.verify(id).unwrap();
+        seen += 1;
+    }
+
+    // The fixture has commits, trees, blobs, and an annotated tag; if the
+    // listing ever came back empty this test would otherwise pass vacuously.
+    assert!(
+        seen > 4,
+        "expected a populated repository, saw {seen} objects"
+    );
 }

@@ -20,6 +20,7 @@ use nom::{
     combinator::all_consuming,
     sequence::terminated,
 };
+use sha1::{Digest, Sha1};
 
 mod blob;
 mod commit;
@@ -48,6 +49,19 @@ pub enum ObjectType {
     Tree,
 }
 
+impl ObjectType {
+    /// The name git writes in a loose object's header, which is also the name
+    /// `git cat-file` answers to.
+    pub fn name(self) -> &'static str {
+        match self {
+            ObjectType::Commit => "commit",
+            ObjectType::Tag => "tag",
+            ObjectType::Tree => "tree",
+            ObjectType::Blob => "blob",
+        }
+    }
+}
+
 /// The size of a git object; a newtype wrapper around a [`u64`]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ObjectSize(pub u64);
@@ -59,6 +73,37 @@ pub struct RawObject {
     pub object_type: ObjectType,
     /// The raw decoded body bytes
     pub body: Vec<u8>,
+}
+
+impl RawObject {
+    /// The ID these bytes actually have: SHA-1 over the loose-object header
+    /// and the body, which is how git derives an object's name.
+    ///
+    /// The header hashed here is byte-for-byte the one [`parse_header`] reads,
+    /// so the two stay in step.
+    pub fn compute_id(&self) -> ObjectId {
+        let mut hasher = Sha1::new();
+        hasher.update(self.object_type.name().as_bytes());
+        hasher.update(b" ");
+        hasher.update(self.body.len().to_string().as_bytes());
+        hasher.update(b"\0");
+        hasher.update(&self.body);
+        ObjectId::from_bytes(hasher.finalize().into())
+    }
+
+    /// Check these bytes against the ID they were fetched under.
+    ///
+    /// A mismatch means the data is corrupt — a truncated range response, a
+    /// bad delta reconstruction, a damaged pack — since an honest repository
+    /// cannot name an object anything but its own hash.
+    pub fn verify(&self, expected: ObjectId) -> Result<(), ObjectError> {
+        let computed = self.compute_id();
+        if computed == expected {
+            Ok(())
+        } else {
+            Err(ObjectError::HashMismatch { expected, computed })
+        }
+    }
 }
 
 /// An object turned out to be of a different type than the caller required.
@@ -87,6 +132,13 @@ pub enum ObjectError {
     },
     /// A header the object type requires (e.g. a commit's `tree`) was absent.
     MissingFields(ObjectId),
+    /// The object's bytes do not hash to the ID it was fetched under.
+    HashMismatch {
+        /// The ID the object was asked for by.
+        expected: ObjectId,
+        /// The ID its bytes actually have.
+        computed: ObjectId,
+    },
 }
 
 impl ObjectError {
@@ -269,6 +321,71 @@ mod tests {
     fn parse_author_committer_line() {
         let example = "an author <an-email-address> 0 +0000";
         parse_author_committer_tagger(example.as_bytes()).unwrap();
+    }
+
+    fn raw(object_type: ObjectType, body: &[u8]) -> RawObject {
+        RawObject {
+            object_type,
+            body: body.to_vec(),
+        }
+    }
+
+    /// Vectors taken from `git hash-object`.
+    #[test]
+    fn compute_id_matches_git() {
+        let cases: [(ObjectType, &[u8], &str); 4] = [
+            (
+                ObjectType::Blob,
+                b"",
+                "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+            ),
+            (
+                ObjectType::Blob,
+                b"hello world\n",
+                "3b18e512dba79e4c8300dd08aeb37f8e728b8dad",
+            ),
+            (
+                ObjectType::Tree,
+                b"",
+                "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+            ),
+            (
+                ObjectType::Commit,
+                b"tree 3a4df67dd7fd7cb3ca82d9896dbdd28053d39bdb\n\
+                  author a user <an-email-address> 946684800 +0000\n\
+                  committer a user <an-email-address> 946684800 +0000\n\
+                  \n\
+                  a commit\n",
+                "78dc5b70bd81aa46ec7dfce87a69826e354a916b",
+            ),
+        ];
+        for (object_type, body, expected) in cases {
+            assert_eq!(raw(object_type, body).compute_id().to_string(), expected);
+        }
+    }
+
+    /// The type name is part of the hash, so the same bytes under a different
+    /// type must not produce the same ID.
+    #[test]
+    fn compute_id_covers_the_type() {
+        assert_ne!(
+            raw(ObjectType::Blob, b"").compute_id(),
+            raw(ObjectType::Tree, b"").compute_id()
+        );
+    }
+
+    #[test]
+    fn verify_accepts_and_rejects() {
+        let object = raw(ObjectType::Blob, b"hello world\n");
+        let id = object.compute_id();
+        assert!(object.verify(id).is_ok());
+
+        let corrupt = raw(ObjectType::Blob, b"hello w0rld\n");
+        let Err(ObjectError::HashMismatch { expected, computed }) = corrupt.verify(id) else {
+            panic!("a body that does not hash to `id` must not verify against it");
+        };
+        assert_eq!(expected, id);
+        assert_eq!(computed, corrupt.compute_id());
     }
 
     #[test]

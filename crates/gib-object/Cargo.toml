@@ -9,6 +9,7 @@ gib-hash.workspace = true
 gib-parse.workspace = true
 jiff.workspace = true
 nom.workspace = true
+sha1.workspace = true
 
 [dev-dependencies]
 gib-testkit.workspace = true
