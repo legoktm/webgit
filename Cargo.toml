@@ -31,7 +31,6 @@ default-members = [
 anyhow = "1"
 comrak = { version = "0.54.0", default-features = false }
 console_error_panic_hook = "0.1"
-crc32fast = { version = "1.5.0", default-features = false }
 fantoccini = "0.22.1"
 futures = { version = "0.3.32", default-features = false }
 gib = { path = "crates/gib" }
