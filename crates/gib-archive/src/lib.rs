@@ -43,8 +43,12 @@ pub const MAX_ARCHIVE_BYTES: usize = 256 * 1024 * 1024;
 
 /// One entry to write into the archive: a directory, a file, or a symlink.
 ///
-/// Submodules (gitlinks) have no content to archive and are skipped entirely,
-/// as `git archive` skips them.
+/// A submodule (gitlink) is a [`Directory`] like any other. It has no content
+/// to archive — the commit it names lives in a repository we don't have — but
+/// `git archive` still writes the empty directory, so the tarball has
+/// somewhere to check the submodule out into.
+///
+/// [`Directory`]: EntryKind::Directory
 #[derive(Debug, PartialEq, Eq)]
 pub enum EntryKind {
     Directory,
@@ -327,7 +331,14 @@ impl<'a, S: ObjectSource> Walk<'a, S> {
             } else {
                 format!("{prefix}/{name}")
             };
-            let is_dir = entry.entry_type() == TreeEntryType::Tree;
+            // A gitlink counts as a directory here: git appends the trailing
+            // slash before looking its attributes up (`archive.c`,
+            // `write_archive_entry`), exactly as it does for a real one, so a
+            // `vendor/` pattern has to find a submodule named `vendor` too.
+            let is_dir = matches!(
+                entry.entry_type(),
+                TreeEntryType::Tree | TreeEntryType::Commit
+            );
             // An ignored directory is pruned rather than walked: `git archive`
             // never looks inside one, and neither does this — which is the
             // point, since not fetching what won't be archived is the whole
@@ -355,9 +366,17 @@ impl<'a, S: ObjectSource> Walk<'a, S> {
                     self.progress.queued(1);
                 }
                 // A submodule is a commit id pointing into a repository we
-                // don't have; `git archive` leaves it out and so do we. It is
-                // never fetched, so it never counts towards the progress.
-                TreeEntryType::Commit => {}
+                // don't have, so there is nothing to walk into and nothing to
+                // fetch — it never counts towards the progress. git still
+                // writes the directory entry itself, with the same mode a real
+                // directory gets (`archive-tar.c`, `write_tar_entry`, where
+                // `S_ISGITLINK` shares the `TYPEFLAG_DIR` branch), so an empty
+                // frame stands in for the contents we can't have.
+                TreeEntryType::Commit => {
+                    let child = self.frames.len();
+                    self.frames.push(Vec::new());
+                    children.push(Node::Dir { path, frame: child });
+                }
                 TreeEntryType::Symlink | TreeEntryType::File | TreeEntryType::Executable => {
                     let slot = self.fetched.len();
                     self.fetched.push(None);
@@ -853,6 +872,7 @@ mod walk_tests {
                 "src/render/mod.rs",
                 "run.sh",
                 "link.md",
+                "vendor",
             ]
         );
     }
@@ -879,12 +899,23 @@ mod walk_tests {
         );
     }
 
-    /// A submodule points into a repository we don't have, so it is left out
-    /// entirely — and, unlike every other entry, never fetched.
+    /// A submodule is archived as an empty directory, the way `git archive`
+    /// writes one — and, unlike every other entry, is never fetched: the commit
+    /// it names lives in a repository this one doesn't have.
     #[test]
-    fn test_walk_skips_submodules() {
+    fn test_walk_emits_submodule_as_empty_directory() {
         let f = fixture();
-        assert!(collect(&f).iter().all(|e| e.path != "vendor"));
+        let entries = collect(&f);
+        let vendor = entries
+            .iter()
+            .find(|e| e.path == "vendor")
+            .expect("the submodule is archived");
+        assert_eq!(vendor.kind, EntryKind::Directory);
+        assert!(vendor.data.is_empty());
+        assert!(
+            !f.source.started.borrow().contains(&oid(13)),
+            "the submodule's commit must never be asked for"
+        );
     }
 
     /// The point of the whole arrangement: requests overlap. Sequentially this

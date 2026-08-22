@@ -11,7 +11,9 @@
 //! attribute the walk reads: a directory-only pattern, a bare name matching a
 //! directory, an unanchored pattern that reaches every depth, an anchored one
 //! that does not, a subdirectory file overriding its parent, and an attributes
-//! file that excludes itself.
+//! file that excludes itself. Two submodules ride along with it: git archives
+//! a gitlink as an empty directory, and looks its attributes up with the
+//! trailing slash a real directory gets, so a directory-only pattern drops one.
 
 use crate::{ArchiveEntry, ObjectSource, TarWriter, collect_entries};
 use futures::FutureExt;
@@ -41,6 +43,9 @@ impl ObjectSource for Odb {
     }
 }
 
+/// The commit a submodule entry points at. Nothing ever looks it up.
+const SUBMODULE_ID: &str = "1234567890123456789012345678901234567890";
+
 /// Files to write into the fixture, as `(path, contents)`. Directories are
 /// created as needed.
 const FILES: &[(&str, &str)] = &[
@@ -48,6 +53,7 @@ const FILES: &[(&str, &str)] = &[
         ".gitattributes",
         "\
 drop-dir/ export-ignore
+drop-sub/ export-ignore
 noslash export-ignore
 *.tmp export-ignore
 /root-only.txt export-ignore
@@ -115,6 +121,18 @@ fn fixture() -> TestRepo {
         std::fs::write(path, contents).unwrap();
     }
     repo.run_git(["add", "-A"]).unwrap();
+    // Gitlinks, staged directly: a real submodule would need a second
+    // repository, and `git archive` never resolves the commit anyway — it
+    // writes the directory entry and moves on, so any well-formed id will do.
+    for name in ["vendor", "drop-sub"] {
+        repo.run_git([
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("160000,{SUBMODULE_ID},{name}"),
+        ])
+        .unwrap();
+    }
     repo.commit("archive me", "a user", "an-email", "2023-11-14T17:13:20Z")
         .unwrap();
     repo
