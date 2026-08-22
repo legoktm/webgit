@@ -11,13 +11,10 @@
 //! commit objects, reading graph records, and skipping commits on a filter
 //! without reading a tree at all. All three must agree with git.
 //!
-//! What the fixture deliberately avoids is git's *parent pruning*: when a merge
-//! is TREESAME to one parent, `git log -- path` follows only that parent, while
-//! this walk follows every parent and merely declines to show commits that are
-//! TREESAME to one. The two agree except when a branch's changes to the path
-//! were undone by the merge, which the fixture does not do. See
-//! `merge_is_hidden_when_treesame_to_a_parent` for the merge behaviour that is
-//! pinned.
+//! Two behaviours get fixtures of their own, because the main one cannot show
+//! them: `equal_timestamps` pins the order of commits that share a second, and
+//! `pruning` pins that a branch whose changes the merge discarded is followed
+//! no further — git's parent rewriting.
 
 use crate::{CommitSource, GraphRecord, recent_commits, walk_commits};
 use futures::FutureExt;
@@ -325,28 +322,31 @@ fn test_filter_on_absent_path_is_empty() {
 }
 
 /// Paginating a *filtered* log matches git too — the window is over the
-/// matching commits, not over the ones traversed to find them.
+/// matching commits, not over the ones traversed to find them. Run over the
+/// pruning fixture as well, so the windowing is checked on a history where
+/// commits drop out because a merge pruned their branch away.
 #[test]
 fn test_filtered_pagination_matches_rev_list() {
-    let repo = fixture();
-    let source = open_source(&repo, Graph::Bloom);
-    let head = head_commit(&repo, &source);
-    let total = rev_list(&repo, &["HEAD", "--", "dir"]).len();
+    for (repo, path) in [(fixture(), "dir"), (pruning_fixture(), "p.txt")] {
+        let source = open_source(&repo, Graph::Bloom);
+        let head = head_commit(&repo, &source);
+        let total = rev_list(&repo, &["HEAD", "--", path]).len();
 
-    for skip in 0..=total {
-        let expected = rev_list(
-            &repo,
-            &[
-                "HEAD",
-                &format!("--skip={skip}"),
-                "--max-count=2",
-                "--",
-                "dir",
-            ],
-        );
-        let page = block_on(walk_commits(&head, &source, Some("dir"), skip, 2, |_| {}));
-        assert_eq!(ids(&page.commits), expected, "skip={skip}");
-        assert_eq!(page.has_more, skip + 2 < total, "skip={skip}");
+        for skip in 0..=total {
+            let expected = rev_list(
+                &repo,
+                &[
+                    "HEAD",
+                    &format!("--skip={skip}"),
+                    "--max-count=2",
+                    "--",
+                    path,
+                ],
+            );
+            let page = block_on(walk_commits(&head, &source, Some(path), skip, 2, |_| {}));
+            assert_eq!(ids(&page.commits), expected, "{path} skip={skip}");
+            assert_eq!(page.has_more, skip + 2 < total, "{path} skip={skip}");
+        }
     }
 }
 
@@ -471,4 +471,158 @@ fn assert_prefixes(batches: &[Vec<ObjectId>], full: &[ObjectId]) {
         last = batch.len();
     }
     assert_eq!(batches.last().unwrap().as_slice(), full);
+}
+
+/// A history in which *every* commit shares one timestamp, so nothing but the
+/// frontier's tie-break decides the order.
+///
+/// ```text
+///  root ── main-1 ── main-2 ── main-3 ─┐
+///             └───── side-1 ── side-2 ─┴─ merge
+/// ```
+fn equal_timestamp_fixture() -> TestRepo {
+    let repo = TestRepo::new().unwrap();
+    let commit = |msg: &str| {
+        repo.run_git(["add", "-A"]).unwrap();
+        // The same instant for all of them, author and committer alike.
+        repo.commit(msg, "a user", "an-email", &date(0)).unwrap();
+    };
+    write(&repo, "r.txt", "r\n");
+    commit("root");
+    for i in 1..=3 {
+        write(&repo, &format!("m{i}.txt"), "m\n");
+        commit(&format!("main-{i}"));
+    }
+    repo.run_git(["checkout", "-b", "side", "main~2"]).unwrap();
+    for i in 1..=2 {
+        write(&repo, &format!("s{i}.txt"), "s\n");
+        commit(&format!("side-{i}"));
+    }
+    repo.run_git(["checkout", "main"]).unwrap();
+    merge(&repo, "side", 0);
+    repo
+}
+
+/// Commits sharing a commit time come out in git's order, which is the order
+/// they were discovered in — not object-id order, which is what an unstable
+/// heap would give and what a reader would see as a parent listed above its
+/// own child.
+#[test]
+fn test_equal_timestamps_order_like_git() {
+    let repo = equal_timestamp_fixture();
+    let expected = rev_list(&repo, &["HEAD"]);
+
+    // Guard the fixture: if the timestamps ever stopped colliding, or if the
+    // ids happened to fall in descending order anyway, this would pass without
+    // testing anything.
+    let times = String::from_utf8(repo.run_git(["log", "--format=%ct"]).unwrap()).unwrap();
+    assert_eq!(
+        times
+            .lines()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        1,
+        "the fixture is supposed to share one timestamp"
+    );
+    let mut by_id = expected.clone();
+    by_id.sort_by(|a, b| b.cmp(a));
+    assert_ne!(by_id, expected, "git's order is object-id order here");
+
+    for graph in GRAPHS {
+        let source = open_source(&repo, graph);
+        let head = head_commit(&repo, &source);
+        let page = block_on(walk_commits(&head, &source, None, 0, 100, |_| {}));
+        assert_eq!(ids(&page.commits), expected, "{graph:?}");
+        let commits = block_on(recent_commits(&head, &source, 100, |_| {}));
+        assert_eq!(ids(&commits), expected, "recent_commits with {graph:?}");
+    }
+}
+
+/// A history where a merge throws away what the side branch did to `p.txt`:
+/// the merge keeps its first parent's version, so it is TREESAME to that
+/// parent and git follows only it, never reaching `side changes p`.
+///
+/// ```text
+///  root ── main changes p ─┐
+///     └─── side changes p ─┴─ merge (keeps main's p.txt)
+/// ```
+fn pruning_fixture() -> TestRepo {
+    let repo = TestRepo::new().unwrap();
+    write(&repo, "p.txt", "p0\n");
+    write(&repo, "x.txt", "x\n");
+    commit_at(&repo, "root", 1);
+
+    repo.run_git(["checkout", "-b", "side"]).unwrap();
+    write(&repo, "p.txt", "side\n");
+    commit_at(&repo, "side changes p", 2);
+
+    repo.run_git(["checkout", "main"]).unwrap();
+    write(&repo, "p.txt", "main\n");
+    commit_at(&repo, "main changes p", 3);
+
+    // `-X ours` resolves p.txt to main's version, which is what makes the
+    // merge TREESAME to its first parent.
+    let status = repo
+        .git_command()
+        .env("GIT_AUTHOR_DATE", date(4))
+        .env("GIT_COMMITTER_DATE", date(4))
+        .args(["merge", "--no-ff", "-X", "ours", "-m", "merge", "side"])
+        .stdout(Stdio::null())
+        .spawn()
+        .unwrap()
+        .wait()
+        .unwrap();
+    assert!(status.success(), "git merge failed");
+    assert_eq!(
+        std::fs::read_to_string(repo.location.path().join("p.txt")).unwrap(),
+        "main\n",
+        "the merge is supposed to keep main's p.txt"
+    );
+    repo
+}
+
+/// git rewrites a merge's parent list down to the first parent it is TREESAME
+/// to and follows only that one, so the side branch's change to `p.txt` — undone
+/// by the merge — is not in `git log -- p.txt`, and must not be here either.
+#[test]
+fn test_merge_prunes_the_parent_it_is_treesame_to() {
+    let repo = pruning_fixture();
+    let expected = rev_list(&repo, &["HEAD", "--", "p.txt"]);
+    let side = rev_parse(&repo, "side");
+    assert!(
+        !expected.contains(&side),
+        "the fixture is supposed to hide the side commit from git too"
+    );
+
+    for graph in GRAPHS {
+        let source = open_source(&repo, graph);
+        let head = head_commit(&repo, &source);
+        let page = block_on(walk_commits(&head, &source, Some("p.txt"), 0, 100, |_| {}));
+        assert_eq!(ids(&page.commits), expected, "{graph:?}");
+    }
+}
+
+/// Pruning is about traversal, not just display: the parents git drops are
+/// never visited at all, so a walk that reached the pruned branch would be
+/// visibly doing more work.
+///
+/// Both routes to the verdict are covered. With Bloom filters the merge is
+/// dismissed against its first parent without a diff, and the walk has to
+/// follow that parent alone off the filter's word; without them the same call
+/// has to be settled by real diffs first.
+#[test]
+fn test_pruning_stops_the_walk_from_visiting_the_branch() {
+    let repo = pruning_fixture();
+    for graph in GRAPHS {
+        let source = open_source(&repo, graph);
+        let head = head_commit(&repo, &source);
+        let filtered = block_on(walk_commits(&head, &source, Some("p.txt"), 0, 100, |_| {}));
+        let whole = block_on(walk_commits(&head, &source, None, 0, 100, |_| {}));
+        assert!(
+            filtered.stats.traversed < whole.stats.traversed,
+            "{graph:?}: filtered walk traversed {} of {} commits — nothing was pruned",
+            filtered.stats.traversed,
+            whole.stats.traversed,
+        );
+    }
 }

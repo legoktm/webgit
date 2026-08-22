@@ -24,6 +24,7 @@
 use futures::future::LocalBoxFuture;
 use gib_commitgraph::bloom::{BloomSettings, path_maybe_changed};
 use gib_object::{Commit, Object, ObjectId, Tree, TreeEntryType};
+use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
 use std::fmt;
 use std::rc::Rc;
@@ -206,6 +207,55 @@ pub struct LogPage {
     pub stats: WalkStats,
 }
 
+/// One commit's place in the frontier's ordering: newest commit time first
+/// and, among commits sharing a time, whichever was discovered first.
+///
+/// git's frontier is a `prio_queue` keyed on `compare_commits_by_commit_date`
+/// (newer first) and tie-broken on the queue's insertion counter, smaller
+/// first (`prio-queue.c`, `compare`). A `BinaryHeap` is not a stable queue, so
+/// the discovery counter is carried in the key to make it one. Without it,
+/// commits sharing a second — imports, scripted commits, rewritten history —
+/// come out in object-id order, which can list a parent above its own child.
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct FrontierKey {
+    /// Committer time. `BinaryHeap` is a max-heap, so the newest pops first.
+    time: i64,
+    /// Reversed, so that at equal times the *smaller* counter is the greater
+    /// key and therefore pops first.
+    discovered: Reverse<u64>,
+    id: ObjectId,
+}
+
+/// The commits a walk still has to visit, ordered as git orders them.
+struct Frontier {
+    heap: BinaryHeap<FrontierKey>,
+    discovered: u64,
+}
+
+impl Frontier {
+    fn new() -> Self {
+        Self {
+            heap: BinaryHeap::new(),
+            discovered: 0,
+        }
+    }
+
+    /// Add a commit, stamping it with the next discovery counter.
+    fn push(&mut self, time: i64, id: ObjectId) {
+        self.discovered += 1;
+        let discovered = Reverse(self.discovered);
+        self.heap.push(FrontierKey {
+            time,
+            discovered,
+            id,
+        });
+    }
+
+    fn pop(&mut self) -> Option<ObjectId> {
+        self.heap.pop().map(|key| key.id)
+    }
+}
+
 /// The traversal data a single commit contributes to a log walk: enough to
 /// order the frontier (`time`), continue it (`parents`), filter by path
 /// (`tree`, plus `bloom` for the Bloom filter), all without re-parsing objects.
@@ -261,37 +311,48 @@ async fn ensure_node<S: CommitSource>(
     Some(node)
 }
 
-/// A Bloom candidate awaiting confirmation by a real tree diff. It carries the
-/// commit's tree and its parents' trees (all resolved up front from the
-/// in-memory graph), so [`confirm_task`] touches no shared mutable state and a
-/// batch of them can run concurrently.
+/// What a candidate commit's tree is compared against to decide whether the
+/// filtered log shows it.
+enum Against {
+    /// A root commit's non-existent first parent, i.e. the empty tree: the
+    /// commit is shown when the path exists in it at all. git does the same
+    /// (`try_to_simplify_commit`'s `rev_same_tree_as_empty` on a parentless
+    /// commit).
+    EmptyTree,
+    /// The single parent's tree: shown when the path differs between the two.
+    Parent(ObjectId),
+    /// Nothing, because the commit's only parent could not be read. There is
+    /// no diff to do, so the commit is shown.
+    Nothing,
+}
+
+/// A candidate awaiting the tree diff that decides whether it is shown.
+///
+/// Only roots and single-parent commits reach here. A merge's *traversal*
+/// depends on its own diffs — see [`resolve_merge`] — so it can't be deferred
+/// into a batch like these can; it is settled the moment it is popped.
 struct ConfirmTask {
     id: ObjectId,
     tree: ObjectId,
-    parent_trees: Vec<ObjectId>,
-    root: bool,
+    against: Against,
 }
 
-/// Whether a candidate actually changed the path, mirroring git's default
-/// simplification: a root is shown when the path exists; otherwise a commit is
-/// shown unless it is TREESAME to (same object at the path as) some parent.
-/// Read-only, so many of these can be awaited together.
+/// Whether a candidate actually changed the path. Read-only, so many of these
+/// can be awaited together.
 async fn confirm_task<S: CommitSource>(
     source: &S,
     task: &ConfirmTask,
     components: &[&str],
 ) -> bool {
-    if task.root {
-        return path_object_id(task.tree, components, source)
+    match task.against {
+        Against::EmptyTree => path_object_id(task.tree, components, source)
             .await
-            .is_some();
-    }
-    for parent_tree in &task.parent_trees {
-        if !path_differs(task.tree, *parent_tree, components, source).await {
-            return false;
+            .is_some(),
+        Against::Parent(parent_tree) => {
+            path_differs(task.tree, parent_tree, components, source).await
         }
+        Against::Nothing => true,
     }
-    true
 }
 
 /// How many candidate tree-diffs to confirm concurrently. Traversal is in-memory
@@ -310,6 +371,42 @@ const CONFIRM_BATCH: usize = 64;
 /// page during a streamed walk. Small enough that the first rows paint quickly,
 /// large enough to keep the round-trips well overlapped.
 const STREAM_BATCH: usize = 10;
+
+/// Diff a merge against each of its parents and report the first parent it is
+/// TREESAME to — the parent git would rewrite its parent list down to, hiding
+/// the merge. `None` means it differs from every parent, so it is shown and
+/// every parent is followed.
+///
+/// Every parent's node is resolved first (cheap: the graph is in memory), then
+/// the diffs run in one concurrent wave. Diffing a later parent that git would
+/// never have looked at costs one extra read of an already-cached tree, and
+/// buys the whole answer in a single round-trip instead of one per parent.
+async fn resolve_merge<S: CommitSource>(
+    source: &S,
+    meta: &mut BTreeMap<ObjectId, Rc<WalkNode>>,
+    stats: &mut WalkStats,
+    node: &WalkNode,
+    components: &[&str],
+) -> Option<ObjectId> {
+    let mut parents: Vec<(ObjectId, ObjectId)> = Vec::with_capacity(node.parents.len());
+    for parent in node.parents.iter().copied() {
+        if let Some(parent_node) = ensure_node(source, meta, parent, None, stats).await {
+            parents.push((parent, parent_node.tree));
+        }
+    }
+    stats.tree_diffs += parents.len();
+    let differs = futures::future::join_all(
+        parents
+            .iter()
+            .map(|(_, tree)| path_differs(node.tree, *tree, components, source)),
+    )
+    .await;
+    parents
+        .iter()
+        .zip(differs)
+        .find(|(_, differs)| !differs)
+        .map(|((parent, _), _)| *parent)
+}
 
 /// Walk history a page at a time, calling `on_batch` with the commits gathered
 /// so far after each chunk of commit objects is fetched, so a log view can
@@ -331,9 +428,10 @@ pub async fn walk_commits<S: CommitSource>(
     let path_components: Option<Vec<&str>> =
         path.map(|p| p.split('/').filter(|s| !s.is_empty()).collect());
 
-    // The frontier is ordered by commit time (newest first), tie-broken by id;
-    // nodes carry only an id, with metadata memoised in `meta`.
-    let mut heap: BinaryHeap<(i64, ObjectId)> = BinaryHeap::new();
+    // The frontier is ordered by commit time (newest first), tie-broken by
+    // discovery order; entries carry only an id, with metadata memoised in
+    // `meta`.
+    let mut frontier = Frontier::new();
     let mut visited: BTreeSet<ObjectId> = BTreeSet::new();
     let mut meta: BTreeMap<ObjectId, Rc<WalkNode>> = BTreeMap::new();
     let mut stats = WalkStats::default();
@@ -347,7 +445,7 @@ pub async fn walk_commits<S: CommitSource>(
     )
     .await
     {
-        heap.push((node.time, head_commit.id()));
+        frontier.push(node.time, head_commit.id());
         visited.insert(head_commit.id());
     }
 
@@ -364,7 +462,7 @@ pub async fn walk_commits<S: CommitSource>(
     match &path_components {
         // Unfiltered: every traversed commit matches; pure in-memory traversal.
         None => {
-            while let Some((_, id)) = heap.pop() {
+            while let Some(id) = frontier.pop() {
                 stats.traversed += 1;
                 let node = meta.get(&id).map(Rc::clone).unwrap();
                 if matched.len() == want {
@@ -377,62 +475,101 @@ pub async fn walk_commits<S: CommitSource>(
                         && let Some(parent_node) =
                             ensure_node(source, &mut meta, parent, None, &mut stats).await
                     {
-                        heap.push((parent_node.time, parent));
+                        frontier.push(parent_node.time, parent);
                     }
                 }
             }
         }
-        // Filtered: traverse in memory to gather Bloom candidates in order, then
-        // confirm them with tree diffs in concurrent batches.
+        // Filtered: traverse in memory to gather candidates in order, then
+        // confirm them with tree diffs in concurrent batches. Merges are the
+        // exception — see `stalled` below.
         Some(components) => {
             let path_str = path.unwrap_or("");
             let bloom_settings = source.bloom_settings();
             let mut pending: Vec<ConfirmTask> = Vec::new();
+            // A merge whose parent diffs have to be resolved before the walk
+            // may go any further, because which of its parents reach the
+            // frontier depends on them.
+            let mut stalled: Option<(ObjectId, Rc<WalkNode>)> = None;
             'outer: loop {
-                // Refill the candidate buffer by traversing (in-memory) commits,
-                // enqueueing parents and Bloom-skipping non-matches as we go.
+                // Refill the candidate buffer by traversing (in-memory)
+                // commits, enqueueing parents and Bloom-skipping non-matches as
+                // we go.
                 while pending.len() < CONFIRM_BATCH {
-                    let Some((_, id)) = heap.pop() else { break };
+                    let Some(id) = frontier.pop() else { break };
                     stats.traversed += 1;
                     let node = meta.get(&id).map(Rc::clone).unwrap();
-                    let mut parent_trees = Vec::with_capacity(node.parents.len());
-                    for parent in node.parents.iter().copied() {
-                        if let Some(parent_node) =
-                            ensure_node(source, &mut meta, parent, None, &mut stats).await
-                        {
-                            if visited.insert(parent) {
-                                heap.push((parent_node.time, parent));
+                    match node.parents.as_slice() {
+                        // A root has no parent to diff against, and nothing to
+                        // put on the frontier.
+                        [] => pending.push(ConfirmTask {
+                            id,
+                            tree: node.tree,
+                            against: Against::EmptyTree,
+                        }),
+                        // One parent is followed whichever way the diff goes,
+                        // so the verdict can wait for the next batch.
+                        &[parent] => {
+                            let parent_node =
+                                ensure_node(source, &mut meta, parent, None, &mut stats).await;
+                            if let Some(parent_node) = &parent_node
+                                && visited.insert(parent)
+                            {
+                                frontier.push(parent_node.time, parent);
                             }
-                            parent_trees.push(parent_node.tree);
+                            if bloom_says_unchanged(
+                                bloom_settings.as_ref(),
+                                node.bloom.as_deref(),
+                                path_str,
+                            ) {
+                                stats.bloom_skips += 1;
+                            } else {
+                                pending.push(ConfirmTask {
+                                    id,
+                                    tree: node.tree,
+                                    against: match parent_node {
+                                        Some(parent_node) => Against::Parent(parent_node.tree),
+                                        None => Against::Nothing,
+                                    },
+                                });
+                            }
+                        }
+                        // A merge. Its changed-path filter is computed against
+                        // its *first* parent, so a conclusive "unchanged" is
+                        // TREESAME to that parent — which is the whole verdict:
+                        // hidden, and only the first parent is followed. git
+                        // takes the same shortcut, consulting the filter for
+                        // `nth_parent == 0` alone (`rev_compare_tree`).
+                        &[first, ..] => {
+                            if bloom_says_unchanged(
+                                bloom_settings.as_ref(),
+                                node.bloom.as_deref(),
+                                path_str,
+                            ) {
+                                stats.bloom_skips += 1;
+                                if let Some(parent_node) =
+                                    ensure_node(source, &mut meta, first, None, &mut stats).await
+                                    && visited.insert(first)
+                                {
+                                    frontier.push(parent_node.time, first);
+                                }
+                            } else {
+                                // Nothing beyond this merge may be popped until
+                                // its diffs say which parents to follow.
+                                stalled = Some((id, node));
+                                break;
+                            }
                         }
                     }
-                    if node.parents.is_empty() {
-                        pending.push(ConfirmTask {
-                            id,
-                            tree: node.tree,
-                            parent_trees,
-                            root: true,
-                        });
-                    } else if bloom_says_unchanged(
-                        bloom_settings.as_ref(),
-                        node.bloom.as_deref(),
-                        path_str,
-                    ) {
-                        stats.bloom_skips += 1;
-                    } else {
-                        pending.push(ConfirmTask {
-                            id,
-                            tree: node.tree,
-                            parent_trees,
-                            root: false,
-                        });
-                    }
                 }
-                if pending.is_empty() {
+
+                if pending.is_empty() && stalled.is_none() {
                     break;
                 }
-                let batch_len = pending.len().min(CONFIRM_BATCH);
-                let batch: Vec<ConfirmTask> = pending.drain(..batch_len).collect();
+
+                // Confirm the ordinary candidates, in the order they were
+                // popped, so `matched` stays in frontier order.
+                let batch: Vec<ConfirmTask> = std::mem::take(&mut pending);
                 stats.tree_diffs += batch.len();
                 let results = futures::future::join_all(
                     batch
@@ -447,6 +584,35 @@ pub async fn walk_commits<S: CommitSource>(
                             break 'outer;
                         }
                         matched.push(task.id);
+                    }
+                }
+
+                // Then the stalled merge, which was popped after all of them.
+                if let Some((id, node)) = stalled.take() {
+                    let treesame_parent =
+                        resolve_merge(source, &mut meta, &mut stats, &node, components).await;
+                    // TREESAME to no parent is what makes a merge worth showing.
+                    if treesame_parent.is_none() {
+                        if matched.len() == want {
+                            has_more = true;
+                            break 'outer;
+                        }
+                        matched.push(id);
+                    }
+                    // git rewrites a merge's parent list to the first parent it
+                    // is TREESAME to and follows only that one; a merge that
+                    // differs from every parent keeps them all
+                    // (`try_to_simplify_commit`).
+                    let follow: &[ObjectId] = match &treesame_parent {
+                        Some(parent) => std::slice::from_ref(parent),
+                        None => &node.parents,
+                    };
+                    for parent in follow.iter().copied() {
+                        if let Some(parent_node) = meta.get(&parent).map(Rc::clone)
+                            && visited.insert(parent)
+                        {
+                            frontier.push(parent_node.time, parent);
+                        }
                     }
                 }
             }
@@ -491,22 +657,22 @@ pub async fn recent_commits<S: CommitSource>(
     limit: usize,
     on_batch: impl Fn(&[Commit]),
 ) -> Vec<Commit> {
-    // Same frontier discipline as `walk_commits`'s unfiltered arm — a heap
-    // ordered by commit time (newest first), tie-broken by id — but we hold the
-    // resolved `Commit` for each frontier entry so popping a node both emits its
-    // row and yields its parents to fetch, with no commit-graph in the loop.
-    let mut heap: BinaryHeap<(i64, ObjectId)> = BinaryHeap::new();
+    // Same frontier discipline as `walk_commits`'s unfiltered arm — commit time
+    // newest first, tie-broken by discovery order — but we hold the resolved
+    // `Commit` for each frontier entry so popping a node both emits its row and
+    // yields its parents to fetch, with no commit-graph in the loop.
+    let mut frontier = Frontier::new();
     let mut visited: BTreeSet<ObjectId> = BTreeSet::new();
-    let mut frontier: BTreeMap<ObjectId, Commit> = BTreeMap::new();
+    let mut resolved: BTreeMap<ObjectId, Commit> = BTreeMap::new();
 
     let head_id = head_commit.id();
-    heap.push((head_commit.commit_date().timestamp().as_second(), head_id));
+    frontier.push(head_commit.commit_date().timestamp().as_second(), head_id);
     visited.insert(head_id);
-    frontier.insert(head_id, head_commit.clone());
+    resolved.insert(head_id, head_commit.clone());
 
     let mut commits: Vec<Commit> = Vec::with_capacity(limit);
-    while let Some((_, id)) = heap.pop() {
-        let commit = frontier.remove(&id).expect("frontier holds every heap id");
+    while let Some(id) = frontier.pop() {
+        let commit = resolved.remove(&id).expect("every frontier entry resolves");
         // Taken before the commit is moved into the page below.
         let parents: Vec<ObjectId> = commit.parents().to_vec();
         commits.push(commit);
@@ -519,8 +685,8 @@ pub async fn recent_commits<S: CommitSource>(
         let objects = futures::future::join_all(parents.iter().map(|p| source.object(*p))).await;
         for (pid, object) in parents.iter().zip(objects) {
             if let Some(parent) = object.ok().and_then(|o| o.commit().ok()) {
-                heap.push((parent.commit_date().timestamp().as_second(), *pid));
-                frontier.insert(*pid, parent);
+                frontier.push(parent.commit_date().timestamp().as_second(), *pid);
+                resolved.insert(*pid, parent);
             }
         }
     }
