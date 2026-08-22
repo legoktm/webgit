@@ -4,7 +4,7 @@ As changes are made, ensure that new **features** are added to this list. It is 
 this list focuses on features from a user perspective rather than working backwards from the list
 of tests.
 
-
+Do not add new kinds of tests, just focus on snapshot + browser.
 
 - legend
   - variations are enumerated from the implementation, then cross-linked to tests
@@ -22,6 +22,9 @@ of tests.
     - empty value falls through to index mode
   - repository index — URL names no repository, `/listing.json` is fetched
   - repository display name — URL path minus scheme and host
+    - a name carrying a section — the section is a link back to the index,
+      anchored at that section; the rest stays plain text
+    - a name with no `/` — plain text, no link
   - repository short name — last path component minus `.git`
   - short name is empty — falls back to "repository"
   - document title — display name, "repositories" for the index, em dash while loading
@@ -51,6 +54,13 @@ of tests.
   - row links are root-absolute and resolve to a repository
     - browser:
       - repository_index_lists_the_fixtures
+  - each section header carries its name as an `id`, so `/#<section>` addresses it
+    - snapshot:
+      - test_listing_html
+  - arriving with a `#<section>` fragment — scrolled to once the listing has
+    mounted, since the browser's own jump happens before any row exists
+  - a percent-encoded fragment is decoded before the element is looked up
+  - a fragment naming no section — nothing to scroll to, and no error
   - the old flat-array format is rejected rather than half-read
   - `listing.json` missing, unfetchable, or malformed — error in the content area
 - nav bar
@@ -349,6 +359,26 @@ of tests.
     - directories and files are linked with different classes
       - snapshot:
         - test_tree_html
+    - a submodule — the name unlinked, then `@ <abbreviated commit>`; the commit
+      lives in a repository this one doesn't have, so it links nowhere
+      - snapshot:
+        - test_tree_html_submodule_and_symlinks
+        - test_tree_html_submodule_and_symlinks_with_head
+    - a symlink — the name links to the link's own path, like any file, followed
+      by `-> ` and the target text as git stored it
+      - the target is a second fetch, so the row renders once without it and
+        again once it arrives
+      - a target resolving inside the repository — linked to its own `#!/tree`
+        path, carrying `?h=` forward
+        - snapshot:
+          - test_tree_html_submodule_and_symlinks
+          - test_tree_html_submodule_and_symlinks_with_head
+      - a target that climbs out of the repository, is absolute, or names the
+        root — shown as text, unlinked
+        - snapshot:
+          - test_tree_html_submodule_and_symlinks
+      - `.` and `..` fold away, and `..` may climb no higher than the root
+      - a target blob that can't be read — the row keeps the bare name
     - an empty tree
   - blob
     - a recognised image wins over every other classification
@@ -506,6 +536,12 @@ of tests.
     - browser:
       - log_renders_real_content
       - blob_renders_real_content
+  - every object is hashed on arrival and checked against the id it was fetched
+    under, before it is parsed or cached
+    - loose, packed, and rebuilt from a delta chain alike
+    - the hash matches `git hash-object`, and covers the object's type
+    - a mismatch is an error, not a wrong object shown
+    - a cache hit is not re-checked — nothing that failed was ever written
   - a second visit served from IndexedDB rather than the network
     - browser:
       - indexeddb_cache_removes_object_fetches_on_reload

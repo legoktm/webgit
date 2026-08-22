@@ -33,19 +33,15 @@ As things are implemented, remove them from this list.
 ## Tree (`#!/tree`)
 
 - **Size column** — cgit shows blob size; webgit shows only Mode and Name
-  (`src/render/tree.rs:74-84`).
+  (`src/render/tree.rs:171-175`).
 - **Per-file links** — cgit puts `log` / `plain` / `blame` links on every row.
-- **Submodules** — gitlink entries render as `m---------` and link to
-  `#!/tree/<path>`, which resolves to nothing. cgit shows the commit ID and
-  honours `repo.module-link`.
-- **Symlink targets** — shown as `l---------` with no target rendered or
-  followed.
+- **Submodule links** — no `repo.module-link` equivalent
 
 ## Blob
 
 - **Syntax highlighting** (cgit's `source-filter`, e.g. highlight/pygments).
 - **Line-range anchors** — `#n5-n10` style range selection; webgit has
-  single-line `#n<N>` anchors only (`src/render/blob.rs:278-288`).
+  single-line `#n<N>` anchors only (`src/render/blob.rs:355-364`).
 - **Mimetype-driven inline rendering** — cgit maps extensions to types
   generally; webgit inlines PNG/JPEG/GIF only, everything else is "binary".
 - **HTML serving** (`enable-html-serving`) — deliberately unsafe, probably a
@@ -60,7 +56,7 @@ As things are implemented, remove them from this list.
 - **`?id2=`** — diff this commit against something other than its first parent;
   on merges cgit offers a link per parent.
 - **Linked tree hash** — the `tree` row is plain text
-  (`src/render/commit.rs:437-440`), cgit links it to the tree view.
+  (`src/render/commit.rs:441-444`), cgit links it to the tree view.
 - **Notes** (`git notes`) display.
 
 ## Refs / tags
@@ -76,7 +72,7 @@ As things are implemented, remove them from this list.
 ## Index / repo listing
 
 Currently just section + name derived from the paths in `listing.json`
-(`src/render/listing.rs:31-58`). cgit additionally has:
+(`src/render/listing.rs:67-93`). cgit additionally has:
 
 - **Description, owner, homepage** per repo.
 - **Idle-time column** ("last commit" age).
