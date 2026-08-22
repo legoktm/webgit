@@ -1,0 +1,15 @@
+[package]
+name = "gib-archive"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+futures = { workspace = true, features = ["alloc", "async-await"] }
+gib-object.workspace = true
+tar.workspace = true
+
+[dev-dependencies]
+futures = { workspace = true, features = ["async-await", "executor"] }
+tempfile.workspace = true

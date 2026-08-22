@@ -510,6 +510,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "gib-archive"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "futures",
+ "gib-object",
+ "tar",
+ "tempfile",
+]
+
+[[package]]
 name = "gib-commitgraph"
 version = "0.0.0"
 dependencies = [
@@ -2358,6 +2369,7 @@ dependencies = [
  "console_error_panic_hook",
  "futures",
  "gib",
+ "gib-archive",
  "gib-patch",
  "git-version",
  "insta",
@@ -2365,8 +2377,6 @@ dependencies = [
  "js-sys",
  "serde",
  "serde_json",
- "tar",
- "tempfile",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",

@@ -8,11 +8,12 @@
 //! every request the page has ever made and can't say when this archive is
 //! done.
 
-use crate::archive::{ArchiveEntry, EntryKind, collect_entries, stream_tar_gz};
+use crate::archive::stream_tar_gz;
 use crate::cache::CachingRepo;
 use crate::render::{click_download, use_blob_url, yield_to_browser};
 use crate::stats::format_bytes;
 use gib::object::{Commit, Tree};
+use gib_archive::{ArchiveEntry, EntryKind, collect_entries};
 use std::cell::Cell;
 use web_sys::Blob;
 use yew::prelude::*;
@@ -307,7 +308,7 @@ fn use_auto_download(url: &str, name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::archive::EntryKind;
+    use gib_archive::EntryKind;
 
     #[test]
     fn test_snapshot_stem() {

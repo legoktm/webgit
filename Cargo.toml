@@ -12,6 +12,7 @@ members = ["crates/*"]
 default-members = [
     ".",
     "crates/gib",
+    "crates/gib-archive",
     "crates/gib-commitgraph",
     "crates/gib-diff",
     "crates/gib-fs",
@@ -32,6 +33,7 @@ crc32fast = { version = "1.5.0", default-features = false }
 fantoccini = "0.22.1"
 futures = { version = "0.3.32", default-features = false }
 gib = { path = "crates/gib" }
+gib-archive = { path = "crates/gib-archive" }
 gib-commitgraph = { path = "crates/gib-commitgraph" }
 gib-diff = { path = "crates/gib-diff" }
 gib-fs = { path = "crates/gib-fs" }
@@ -115,6 +117,7 @@ crate-type = ["cdylib"]
 anyhow.workspace = true
 futures = { workspace = true, features = ["alloc", "async-await"] }
 gib.workspace = true
+gib-archive.workspace = true
 gib-patch.workspace = true
 wasm-bindgen.workspace = true
 wasm-bindgen-futures.workspace = true
@@ -127,13 +130,11 @@ yew = { workspace = true, features = ["csr"] }
 git-version.workspace = true
 comrak.workspace = true
 jiff.workspace = true
-tar.workspace = true
 
 [dev-dependencies]
 insta.workspace = true
 futures = { workspace = true, features = ["async-await", "executor"] }
 yew = { workspace = true, features = ["ssr"] }
-tempfile.workspace = true
 
 # optimize for download bundle size
 [profile.release]
