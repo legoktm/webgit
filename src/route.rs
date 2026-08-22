@@ -562,11 +562,12 @@ pub(crate) async fn build_route(
             };
 
             if let Some(subtree) = walk_to_tree(tree, &path, repo).await {
-                Ok(LoadedView::Tree(build_tree_props(
-                    &subtree,
-                    &path,
-                    head.as_deref(),
-                )))
+                Ok(LoadedView::Tree(
+                    build_tree_props(&subtree, &path, head.as_deref(), repo, |p| {
+                        on_partial(LoadedView::Tree(p))
+                    })
+                    .await,
+                ))
             } else if let Some((id, data)) = walk_to_blob(tree, &path, repo).await {
                 Ok(LoadedView::Blob(build_blob_props(
                     id,

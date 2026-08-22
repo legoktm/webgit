@@ -1,0 +1,43 @@
+---
+source: src/render/tree.rs
+expression: "render(TreeProps\n{ entries: special_rows(), head_suffix: \"?h=stable\".to_string(), })"
+---
+<table class="tree-table">
+<thead>
+<tr>
+<th>Mode</th>
+<th>Name</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="mode">m---------</td>
+<td class="name">
+<span class="submodule">vendor</span>
+<span class="submodule-commit"> @ 1a3e64c6</span>
+</td>
+</tr>
+<tr>
+<td class="mode">l---------</td>
+<td class="name">
+<a href="#!/tree/src/pending?h=stable" class="file">pending</a>
+</td>
+</tr>
+<tr>
+<td class="mode">l---------</td>
+<td class="name">
+<a href="#!/tree/src/lib.rs?h=stable" class="file">lib.rs</a>
+<span class="symlink-arrow"> -&gt; </span>
+<a href="#!/tree/lib.rs?h=stable" class="file">../lib.rs</a>
+</td>
+</tr>
+<tr>
+<td class="mode">l---------</td>
+<td class="name">
+<a href="#!/tree/src/outside?h=stable" class="file">outside</a>
+<span class="symlink-arrow"> -&gt; </span>
+<span class="symlink-target">/etc/passwd</span>
+</td>
+</tr>
+</tbody>
+</table>

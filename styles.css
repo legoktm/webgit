@@ -158,6 +158,17 @@ a:hover {
     color: var(--text);
     font-weight: normal;
 }
+/* A submodule's name isn't a link (there is no page for it), so give it the
+   directory weight without the link colour, and dim the commit it pins. */
+.tree-table td.name .submodule {
+    font-weight: bold;
+}
+.tree-table td.name .submodule-commit,
+.tree-table td.name .symlink-arrow,
+.tree-table td.name .symlink-target {
+    color: var(--text-dim);
+    font-weight: normal;
+}
 .tree-table td.size {
     text-align: right;
     color: var(--text-dim);
