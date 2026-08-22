@@ -13,6 +13,7 @@ default-members = [
     ".",
     "crates/gib",
     "crates/gib-archive",
+    "crates/gib-attributes",
     "crates/gib-commitgraph",
     "crates/gib-diff",
     "crates/gib-fs",
@@ -34,6 +35,7 @@ fantoccini = "0.22.1"
 futures = { version = "0.3.32", default-features = false }
 gib = { path = "crates/gib" }
 gib-archive = { path = "crates/gib-archive" }
+gib-attributes = { path = "crates/gib-attributes" }
 gib-commitgraph = { path = "crates/gib-commitgraph" }
 gib-diff = { path = "crates/gib-diff" }
 gib-fs = { path = "crates/gib-fs" }

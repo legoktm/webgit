@@ -1,7 +1,8 @@
 //! Building the contents of a `git archive`, without a server to run it on.
 //!
 //! A tree is walked object by object — every blob fetched through whatever the
-//! caller supplies as an [`ObjectSource`] — and the entries that come out are
+//! caller supplies as an [`ObjectSource`], and every `.gitattributes` along the
+//! way consulted for `export-ignore` — and the entries that come out are
 //! written into a tar by [`TarWriter`]. The tar half is deliberately
 //! byte-for-byte what `git archive --format=tar` writes for the same commit:
 //! same mode normalisation, same `pax_global_header` carrying the commit id,
@@ -20,9 +21,12 @@
 use futures::FutureExt;
 use futures::future::{Either, LocalBoxFuture, select};
 use futures::stream::{FuturesUnordered, StreamExt};
+use gib_attributes::{AttributesFile, GITATTRIBUTES, Stack};
 use gib_object::{Object, ObjectId, Tree, TreeEntryType, UnexpectedObjectType};
 use std::collections::VecDeque;
 
+#[cfg(test)]
+mod differential;
 mod writer;
 
 pub use writer::TarWriter;
@@ -86,13 +90,32 @@ const MAX_IN_FLIGHT: usize = 48;
 /// one shared budget of 48 took ~8× as many round trips as two of 48.
 const MAX_TREES_IN_FLIGHT: usize = 48;
 
+/// The attribute that keeps a path out of an archive.
+///
+/// TODO: `export-subst`, the other attribute `git archive` reads, expands
+/// `$Format:...$` placeholders in a file's content as it writes it. Nothing
+/// here looks at it, so a file carrying one is archived with the placeholder
+/// still in it.
+const EXPORT_IGNORE: &str = "export-ignore";
+
+/// A directory the walk has discovered but not yet read.
+struct Pending {
+    /// Index into [`Walk::frames`] of the frame its contents belong in.
+    frame: usize,
+    /// The path it was reached by, which names it in errors and prefixes
+    /// everything inside it.
+    path: String,
+    /// The attributes files covering it: its parent's stack, plus its own
+    /// `.gitattributes` once that has been read.
+    attrs: Stack,
+}
+
 /// A blob fetch in flight: the slot its bytes belong in, and the result.
 type BlobFetch<'a> = LocalBoxFuture<'a, (usize, anyhow::Result<Vec<u8>>)>;
 /// Every directory's blob fetches, in one pool so they overlap across the tree.
 type BlobPool<'a> = FuturesUnordered<BlobFetch<'a>>;
-/// A subtree fetch in flight: the frame its contents belong in, the path it was
-/// reached by (for error messages), and the result.
-type TreeFetch<'a> = LocalBoxFuture<'a, (usize, String, anyhow::Result<Tree>)>;
+/// A subtree fetch in flight: the directory it will fill in, and the result.
+type TreeFetch<'a> = LocalBoxFuture<'a, (Pending, anyhow::Result<Tree>)>;
 /// Every directory's subtree fetches, in one pool: the walk expands whichever
 /// lands first, which is what keeps discovery ahead of the blob pool.
 type TreePool<'a> = FuturesUnordered<TreeFetch<'a>>;
@@ -178,11 +201,11 @@ struct Walk<'a, S: ObjectSource> {
     /// A backlog rather than a blocking queue because the only way to make room
     /// in the tree pool is to expand what is in it, which is the walk's job and
     /// not something a directory being read can do halfway through.
-    backlog: VecDeque<(usize, String, ObjectId)>,
+    backlog: VecDeque<(Pending, ObjectId)>,
     /// Subtrees that arrived while the walk was waiting on a blob. Expanding
     /// one means reading a directory, which is what the caller is already in
     /// the middle of, so they are set aside for the main loop to pick up.
-    landed: VecDeque<(usize, String, Tree)>,
+    landed: VecDeque<(Pending, Tree)>,
     /// One entry per directory: its children in tree order. `Node::Dir` names
     /// the frame holding its contents, so a directory can be filled in whenever
     /// its fetch happens to land, with no unwinding and no parent bookkeeping.
@@ -214,8 +237,16 @@ struct Walk<'a, S: ObjectSource> {
 /// node tree, not by completion or expansion order, which is what keeps the
 /// archive byte-identical to `git archive` regardless of what finishes when.
 ///
+/// A `.gitattributes` in any directory is read before that directory's entries
+/// are queued, and anything it marks `export-ignore` is left out — a file is
+/// never fetched, and a directory is never even walked into. That is one extra
+/// round trip in each directory carrying such a file, and the reason the check
+/// is not simply a filter over the finished entry list: the point of it is to
+/// not fetch what is not going to be archived.
+///
 /// `on_progress` is called with `(fetched, queued)` object counts as they
 /// change; see `Progress` for why the second number is not a fixed total.
+/// Attributes files count towards both, being objects the walk asks for.
 ///
 /// Errors if the accumulated file content exceeds [`MAX_ARCHIVE_BYTES`].
 ///
@@ -247,13 +278,14 @@ pub async fn collect_entries<'a, S: ObjectSource>(
         },
     };
 
-    walk.read_dir(tree, prefix, 0).await?;
+    walk.read_dir(tree, prefix, 0, Stack::new()).await?;
     loop {
         let next = walk.next_tree().await?;
-        let Some((frame, path, subtree)) = next else {
+        let Some((dir, subtree)) = next else {
             break;
         };
-        walk.read_dir(&subtree, &path, frame).await?;
+        walk.read_dir(&subtree, &dir.path, dir.frame, dir.attrs)
+            .await?;
     }
     walk.drain().await?;
 
@@ -271,11 +303,22 @@ impl<'a, S: ObjectSource> Walk<'a, S> {
     /// are issued from there as the tree budget allows. By the time this
     /// returns, all of the directory's work is either in flight or waiting its
     /// turn.
-    async fn read_dir(&mut self, tree: &Tree, prefix: &str, frame: usize) -> anyhow::Result<()> {
+    ///
+    /// `attrs` is the attributes stack the directory inherits; its own
+    /// `.gitattributes`, if it has one, is read before anything else here and
+    /// can keep entries out of the archive entirely.
+    async fn read_dir(
+        &mut self,
+        tree: &Tree,
+        prefix: &str,
+        frame: usize,
+        attrs: Stack,
+    ) -> anyhow::Result<()> {
         // Copied out so the futures pushed below borrow the source rather than
         // `self`, which the pools they go into are part of.
         let repo = self.repo;
         let mut children = Vec::new();
+        let (attrs, mut attributes_blob) = self.read_attributes(tree, prefix, attrs).await?;
 
         for entry in tree.entries() {
             let name = String::from_utf8_lossy(entry.name()).into_owned();
@@ -284,6 +327,14 @@ impl<'a, S: ObjectSource> Walk<'a, S> {
             } else {
                 format!("{prefix}/{name}")
             };
+            let is_dir = entry.entry_type() == TreeEntryType::Tree;
+            // An ignored directory is pruned rather than walked: `git archive`
+            // never looks inside one, and neither does this — which is the
+            // point, since not fetching what won't be archived is the whole
+            // reason to consult the attributes before queueing anything.
+            if attrs.check(&path, is_dir, EXPORT_IGNORE).is_set() {
+                continue;
+            }
             match entry.entry_type() {
                 TreeEntryType::Tree => {
                     let child = self.frames.len();
@@ -292,7 +343,14 @@ impl<'a, S: ObjectSource> Walk<'a, S> {
                         path: path.clone(),
                         frame: child,
                     });
-                    self.backlog.push_back((child, path, entry.id()));
+                    self.backlog.push_back((
+                        Pending {
+                            frame: child,
+                            path,
+                            attrs: attrs.clone(),
+                        },
+                        entry.id(),
+                    ));
                     self.issue_trees();
                     self.progress.queued(1);
                 }
@@ -311,13 +369,26 @@ impl<'a, S: ObjectSource> Walk<'a, S> {
                             slot,
                         },
                     });
+                    // The attributes file was fetched above to decide this
+                    // directory's entries, and is an entry itself: its bytes go
+                    // straight into their slot rather than being asked for a
+                    // second time.
+                    if entry.name() == GITATTRIBUTES.as_bytes()
+                        && let Some(data) = attributes_blob.take()
+                    {
+                        self.fill_slot(slot, data)?;
+                        continue;
+                    }
                     // Wait for room before adding to the pool, so the number of
                     // outstanding requests stays bounded however wide the tree
                     // is. This is also the walk's throttle: expanding stops
                     // here until blobs land, which is what stops discovery from
                     // running arbitrarily far ahead of the fetching.
+                    // Draining the tree pool as well as the blob pool is what
+                    // keeps freshly queued subtree fetches from sitting
+                    // unpolled — and so unsent — through the wait.
                     while self.blobs.len() >= MAX_IN_FLIGHT {
-                        self.await_blob().await?;
+                        self.drain_one().await?;
                     }
                     let id = entry.id();
                     self.blobs.push(
@@ -344,17 +415,138 @@ impl<'a, S: ObjectSource> Walk<'a, S> {
         Ok(())
     }
 
+    /// Read this directory's own `.gitattributes`, if it has one, and return
+    /// the stack that applies inside it along with the file's bytes.
+    ///
+    /// The bytes come back because the attributes file is also an ordinary file
+    /// in the archive, and fetching it twice would be silly.
+    ///
+    /// A `.gitattributes` that is a symlink is left alone, as git leaves it
+    /// alone: it reads the file, not what it might point at.
+    async fn read_attributes(
+        &mut self,
+        tree: &Tree,
+        prefix: &str,
+        attrs: Stack,
+    ) -> anyhow::Result<(Stack, Option<Vec<u8>>)> {
+        let found = tree.entries().find(|entry| {
+            entry.name() == GITATTRIBUTES.as_bytes()
+                && matches!(
+                    entry.entry_type(),
+                    TreeEntryType::File | TreeEntryType::Executable
+                )
+        });
+        let Some(entry) = found else {
+            return Ok((attrs, None));
+        };
+        let named = if prefix.is_empty() {
+            GITATTRIBUTES.to_string()
+        } else {
+            format!("{prefix}/{GITATTRIBUTES}")
+        };
+        let data = self.fetch_blob_now(entry.id()).await.context_path(&named)?;
+        let file = AttributesFile::parse(&data);
+        // A file of nothing but comments is not worth a stack frame that every
+        // later lookup would walk through.
+        let attrs = if file.is_empty() {
+            attrs
+        } else {
+            attrs.push(prefix, file)
+        };
+        Ok((attrs, Some(data)))
+    }
+
+    /// Fetch one blob and wait for it, draining the pools meanwhile.
+    ///
+    /// Everything else the walk asks for is queued and collected later, because
+    /// nothing it does next depends on the answer. An attributes file is the
+    /// exception: what it says decides which of its directory's entries are
+    /// worth fetching at all, so the walk cannot queue them until it has read
+    /// it. The cost is one round trip, and only in directories that carry a
+    /// `.gitattributes`; the fetches already in flight keep landing throughout,
+    /// so nothing else is held up by the wait.
+    async fn fetch_blob_now(&mut self, id: ObjectId) -> anyhow::Result<Vec<u8>> {
+        let repo = self.repo;
+        let mut fetch = async move {
+            Ok::<_, anyhow::Error>(
+                repo.object(id)
+                    .await?
+                    .blob()
+                    .map_err(wrong_type)?
+                    .data_owned(),
+            )
+        }
+        .boxed_local();
+        self.progress.queued(1);
+        loop {
+            if self.trees.is_empty() && self.blobs.is_empty() {
+                let data = fetch.await?;
+                self.progress.landed();
+                return Ok(data);
+            }
+            // Dropping the loser is free for the same reason it is in
+            // `next_tree`: what either side had got through lives in the pools,
+            // not in the future that was waiting on them.
+            let (fetched, drained) = match select(&mut fetch, Box::pin(self.drain_one())).await {
+                Either::Left((data, _)) => (Some(data), Ok(())),
+                Either::Right((drained, _)) => (None, drained),
+            };
+            drained?;
+            if let Some(data) = fetched {
+                let data = data?;
+                self.progress.landed();
+                return Ok(data);
+            }
+        }
+    }
+
+    /// Take delivery of one object from either fetch pool, whichever lands
+    /// first. Returns at once if both pools are empty, so every caller checks
+    /// that for itself before looping on this.
+    async fn drain_one(&mut self) -> anyhow::Result<()> {
+        if self.trees.is_empty() {
+            if let Some((slot, result)) = self.blobs.next().await {
+                self.store_blob(slot, result?)?;
+            }
+            return Ok(());
+        }
+        if self.blobs.is_empty() {
+            if let Some(landed) = self.trees.next().await {
+                self.stash_tree(landed)?;
+            }
+            return Ok(());
+        }
+        // Dropping the loser is free: both futures only borrow their stream, so
+        // whichever didn't win keeps its progress inside the stream itself.
+        // Which one landed is pulled out of the `select` before anything is
+        // done with it, so that neither borrow is still live when the result is
+        // recorded.
+        match select(self.trees.next(), self.blobs.next()).await {
+            Either::Left((landed, _)) => {
+                if let Some(landed) = landed {
+                    self.stash_tree(landed)?;
+                }
+            }
+            Either::Right((landed, _)) => {
+                if let Some((slot, result)) = landed {
+                    self.store_blob(slot, result?)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Move backlogged subtrees into the fetch pool, up to the tree budget.
     fn issue_trees(&mut self) {
         let repo = self.repo;
         while self.trees.len() < MAX_TREES_IN_FLIGHT {
-            let Some((frame, path, id)) = self.backlog.pop_front() else {
+            let Some((dir, id)) = self.backlog.pop_front() else {
                 break;
             };
             self.trees.push(
                 async move {
                     let tree = async { repo.object(id).await?.tree().map_err(wrong_type) }.await;
-                    (frame, path, tree)
+                    (dir, tree)
                 }
                 .boxed_local(),
             );
@@ -366,7 +558,7 @@ impl<'a, S: ObjectSource> Walk<'a, S> {
     ///
     /// Whichever subtree lands first is the one returned — the walk has no
     /// preferred order, because the output's order doesn't come from here.
-    async fn next_tree(&mut self) -> anyhow::Result<Option<(usize, String, Tree)>> {
+    async fn next_tree(&mut self) -> anyhow::Result<Option<(Pending, Tree)>> {
         loop {
             if let Some(ready) = self.landed.pop_front() {
                 return Ok(Some(ready));
@@ -375,78 +567,26 @@ impl<'a, S: ObjectSource> Walk<'a, S> {
             if self.trees.is_empty() {
                 return Ok(None);
             }
-            if self.blobs.is_empty() {
-                let landed = self.trees.next().await;
-                match landed {
-                    Some(landed) => self.stash_tree(landed)?,
-                    None => return Ok(None),
-                }
-                continue;
-            }
-            // Dropping the loser is free: both futures only borrow their
-            // stream, so whichever didn't win keeps its progress inside the
-            // stream itself. Which one landed is pulled out of the `select`
-            // before anything is done with it, so that neither borrow is still
-            // live when the result is recorded.
-            let (tree, blob) = match select(self.trees.next(), self.blobs.next()).await {
-                Either::Left((tree, _)) => (tree, None),
-                Either::Right((blob, _)) => (None, blob),
-            };
-            if let Some(landed) = tree {
-                self.stash_tree(landed)?;
-                continue;
-            }
-            if let Some((slot, result)) = blob {
-                self.store_blob(slot, result?)?;
-            }
-        }
-    }
-
-    /// Wait for one blob to land, keeping subtree fetches polled meanwhile.
-    ///
-    /// The polling is the point: a future that has never been polled has never
-    /// issued its request, so a bare await on the blob pool would leave freshly
-    /// queued subtree fetches sitting idle — which is exactly the discovery
-    /// stall the breadth-first walk is shaped to avoid. A subtree that lands
-    /// here is set aside rather than expanded, since expanding it means reading
-    /// a directory and the caller is already part-way through one.
-    async fn await_blob(&mut self) -> anyhow::Result<()> {
-        loop {
-            if self.trees.is_empty() {
-                let landed = self.blobs.next().await;
-                if let Some((slot, result)) = landed {
-                    self.store_blob(slot, result?)?;
-                }
-                return Ok(());
-            }
-            let (tree, blob) = match select(self.trees.next(), self.blobs.next()).await {
-                Either::Left((tree, _)) => (tree, None),
-                Either::Right((blob, _)) => (None, blob),
-            };
-            if let Some(landed) = tree {
-                self.stash_tree(landed)?;
-                continue;
-            }
-            if let Some((slot, result)) = blob {
-                self.store_blob(slot, result?)?;
-            }
-            return Ok(());
+            // A subtree that lands is set aside rather than expanded on the
+            // spot, so it is the next turn of this loop that picks it up.
+            self.drain_one().await?;
         }
     }
 
     /// Set aside a subtree that has arrived, for the main loop to expand, and
     /// refill the slot it just freed in the tree pool.
-    fn stash_tree(&mut self, landed: (usize, String, anyhow::Result<Tree>)) -> anyhow::Result<()> {
-        let (frame, path, tree) = landed;
+    fn stash_tree(&mut self, landed: (Pending, anyhow::Result<Tree>)) -> anyhow::Result<()> {
+        let (dir, tree) = landed;
         self.progress.landed();
-        let tree = tree.context_path(&path)?;
-        self.landed.push_back((frame, path, tree));
+        let tree = tree.context_path(&dir.path)?;
+        self.landed.push_back((dir, tree));
         self.issue_trees();
         Ok(())
     }
 
-    /// Record one finished blob, keeping the running byte total inside the cap.
-    fn store_blob(&mut self, slot: usize, data: Vec<u8>) -> anyhow::Result<()> {
+    /// Put a file's bytes into the slot the walk reserved for them, keeping the
+    /// running byte total inside the cap.
+    fn fill_slot(&mut self, slot: usize, data: Vec<u8>) -> anyhow::Result<()> {
         self.bytes += data.len();
         if self.bytes > MAX_ARCHIVE_BYTES {
             anyhow::bail!(
@@ -456,6 +596,15 @@ impl<'a, S: ObjectSource> Walk<'a, S> {
             );
         }
         self.fetched[slot] = Some(data);
+        Ok(())
+    }
+
+    /// As [`fill_slot`], for a blob that came out of the fetch pool: one more
+    /// of the objects the progress counts has landed.
+    ///
+    /// [`fill_slot`]: Walk::fill_slot
+    fn store_blob(&mut self, slot: usize, data: Vec<u8>) -> anyhow::Result<()> {
+        self.fill_slot(slot, data)?;
         self.progress.landed();
         Ok(())
     }

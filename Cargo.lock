@@ -515,9 +515,20 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "futures",
+ "gib-attributes",
+ "gib-fs",
  "gib-object",
+ "gib-odb",
+ "gib-testkit",
  "tar",
  "tempfile",
+]
+
+[[package]]
+name = "gib-attributes"
+version = "0.0.0"
+dependencies = [
+ "gib-testkit",
 ]
 
 [[package]]

@@ -462,6 +462,14 @@ of tests.
   - a missing subtree is reported with the path that was missing
   - over the archive size cap — refused
   - the archive's bytes match what `git archive` produces
+  - `.gitattributes` — `export-ignore` keeps a path out of the archive
+    - a directory is pruned whole, and nothing inside it is ever fetched
+    - a trailing-slash pattern matches the directory, not a file of that name
+    - a pattern with no slash applies at every depth below the file that set it
+    - a pattern with one is anchored to that file's own directory
+    - a subdirectory's file overrides its parent's, `-export-ignore` included
+    - the attributes file is archived too, unless it excludes itself
+    - it is fetched once, for the attributes and for its own archive entry
   - a path too long for a tar header
   - a symlink target too long for a tar header
   - streamed and whole-archive output are identical
