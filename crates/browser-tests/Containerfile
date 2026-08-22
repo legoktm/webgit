@@ -7,7 +7,6 @@ FROM registry.fedoraproject.org/fedora:44
 ARG GECKODRIVER_VERSION=0.37.1
 ARG MINISERVE_VERSION=0.35.0
 ARG TRUNK_VERSION=0.21.14
-ARG RUST_VERSION=1.97.1
 
 # Published sha256 for the geckodriver tarball. The other two are checked the
 # same way below where their URLs are constructed.
@@ -75,8 +74,12 @@ ENV HOME=/home/runner
 ENV RUSTUP_HOME=/home/runner/.rustup \
     CARGO_HOME=/home/runner/.cargo \
     PATH=/home/runner/.cargo/bin:$PATH
-RUN rustup-init -y --profile minimal --default-toolchain "${RUST_VERSION}" \
-        --target wasm32-unknown-unknown
+
+COPY --chown=runner:runner rust-toolchain.toml /home/runner/rust-toolchain.toml
+WORKDIR /home/runner
+RUN rustup-init -y --profile minimal --default-toolchain none \
+    && rustup toolchain install \
+    && rm /home/runner/rust-toolchain.toml
 
 # Where scripts/browser-tests.sh mounts the source (read-only) and the cache.
 WORKDIR /src

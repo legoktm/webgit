@@ -26,9 +26,9 @@ on:
 
 env:
   # Pinned so that rebuilding a tag reproduces the bytes the manifest was
-  # signed over. Bumping this changes every hash in dist/. The Rust toolchain
-  # is whatever the runner ships, so reproducing a release means matching that
-  # too — the release archive, not a rebuild, is what gets deployed.
+  # signed over. Bumping this changes every hash in dist/, as does bumping the
+  # Rust toolchain, which rust-toolchain.toml pins for this workflow the same
+  # way it does for a local build.
   TRUNK_VERSION: v0.21.14
   TRUNK_SHA256: f2b4680cd239693a646a2795e4633c625328d7b2a044fbe749fa3a2fe9e7036b
   # Bumping this can change the enrollment and manifest formats; regenerate
@@ -53,8 +53,8 @@ jobs:
           # the wasm, so the build needs the full history and its tags.
           fetch-depth: 0
 
-      - name: Install the wasm target
-        run: rustup target add wasm32-unknown-unknown
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install
 
       - name: Install trunk
         run: |
