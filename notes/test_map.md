@@ -252,6 +252,11 @@ Do not add new kinds of tests, just focus on snapshot + browser.
   - metadata table — author, committer, parents, commit, tree
     - browser:
       - commit_renders_real_content
+  - the tree hash links to the tree as of that commit, not to the tree object
+    - snapshot:
+      - test_commit_html_merge_with_diff
+      - test_commit_html_root_commit
+      - test_commit_html_diff_pending
   - only the first parent row is labelled; the rest have a blank label cell
     - snapshot:
       - test_commit_html_merge_with_diff

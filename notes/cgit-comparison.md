@@ -55,8 +55,6 @@ As things are implemented, remove them from this list.
   downloaded patch lacks too — a rename is a delete plus an add.
 - **`?id2=`** — diff this commit against something other than its first parent;
   on merges cgit offers a link per parent.
-- **Linked tree hash** — the `tree` row is plain text
-  (`src/render/commit.rs:441-444`), cgit links it to the tree view.
 - **Notes** (`git notes`) display.
 
 ## Refs / tags

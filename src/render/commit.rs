@@ -440,7 +440,11 @@ pub(crate) fn commit_view(props: &CommitProps) -> Html {
                     </tr>
                     <tr>
                         <td class="label">{ "tree" }</td>
-                        <td class="mono">{ tree_hash.clone() }</td>
+                        <td class="mono">
+                            <a href={crate::route::tree_url("", Some(&meta.hash), false)}>
+                                { tree_hash.clone() }
+                            </a>
+                        </td>
                     </tr>
                 </tbody>
             </table>

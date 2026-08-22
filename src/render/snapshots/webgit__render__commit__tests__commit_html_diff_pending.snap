@@ -24,7 +24,9 @@ expression: render(props)
 </tr>
 <tr>
 <td class="label">tree</td>
-<td class="mono">fedcba98fedcba98fedcba98fedcba98fedcba98</td>
+<td class="mono">
+<a href="#!/tree?h=0123abcd0123abcd0123abcd0123abcd0123abcd">fedcba98fedcba98fedcba98fedcba98fedcba98</a>
+</td>
 </tr>
 </tbody>
 </table><pre class="tag-message">Fix the thing
