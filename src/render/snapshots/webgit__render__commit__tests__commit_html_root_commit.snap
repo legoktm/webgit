@@ -14,7 +14,7 @@ expression: render(base_fixture())
 </tr>
 <tr>
 <td class="label">commit</td>
-<td class="mono">0123abcd0123abcd0123abcd0123abcd0123abcd</td>
+<td class="mono">0123abcd0123abcd0123abcd0123abcd0123abcd (<a href="#" class="patch-link">patch</a>)</td>
 </tr>
 <tr>
 <td class="label">tree</td>

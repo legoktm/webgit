@@ -323,15 +323,7 @@ fn plural(n: u64, unit: &str) -> String {
     }
 }
 
-/// Heuristic matching git's: a blob is treated as binary if a NUL byte appears
-/// in its leading bytes. git scans the first 8000 bytes, so do the same.
-///
-/// Shared by the two views that must decide whether bytes can be shown as text:
-/// the diff (which prints "Binary files differ" instead of a hunk) and the blob
-/// view (which refuses to render the file at all).
-pub(crate) fn is_binary(data: &[u8]) -> bool {
-    data.iter().take(8000).any(|&b| b == 0)
-}
+pub(crate) use gib_patch::is_binary;
 
 fn commit_first_line(message: &[u8]) -> String {
     String::from_utf8_lossy(message)
@@ -1035,6 +1027,39 @@ fn object_url(mime: &str, data: &[u8]) -> Option<String> {
     web_sys::Url::create_object_url_with_blob(&blob).ok()
 }
 
+/// Click a detached `<a download>`, the one way to start a download that isn't
+/// a navigation. Nothing is done on failure: the caller either has a visible
+/// link as its fallback, or nothing useful to say.
+pub(crate) fn click_download(url: &str, name: &str) {
+    use wasm_bindgen::JsCast;
+    let anchor = web_sys::window()
+        .and_then(|w| w.document())
+        .and_then(|d| d.create_element("a").ok())
+        .and_then(|e| e.dyn_into::<web_sys::HtmlAnchorElement>().ok());
+    if let Some(anchor) = anchor {
+        anchor.set_href(url);
+        anchor.set_download(name);
+        anchor.click();
+    }
+}
+
+/// Save `data` as `name`, for bytes that exist only for the moment a link is
+/// clicked: mint an object URL, click it, and revoke it again.
+pub(crate) fn download_bytes(name: &str, mime: &str, data: &[u8]) {
+    use wasm_bindgen::JsCast;
+    let Some(url) = object_url(mime, data) else {
+        return;
+    };
+    click_download(&url, name);
+    let revoke = wasm_bindgen::closure::Closure::once_into_js(move || {
+        let _ = web_sys::Url::revoke_object_url(&url);
+    });
+    if let Some(win) = web_sys::window() {
+        let _ =
+            win.set_timeout_with_callback_and_timeout_and_arguments_0(revoke.unchecked_ref(), 0);
+    }
+}
+
 fn ref_row(name: String, c: &Commit) -> RefRow {
     RefRow {
         name,
@@ -1259,20 +1284,6 @@ mod tests {
             [60, 3600, 86400 * 400],
             "expected ascending recency order"
         );
-    }
-
-    #[test]
-    fn test_is_binary() {
-        assert!(!is_binary(b""));
-        assert!(!is_binary(b"hello\nworld\n"));
-        // UTF-8 multibyte content has no NUL bytes and must stay textual.
-        assert!(!is_binary("café — résumé".as_bytes()));
-        assert!(is_binary(b"PK\x03\x04\x00\x00"));
-        assert!(is_binary(b"text then \0 nul"));
-        // A NUL past the 8000-byte scan window is not flagged, matching git.
-        let mut late_nul = vec![b'a'; 8000];
-        late_nul.push(0);
-        assert!(!is_binary(&late_nul));
     }
 
     #[test]

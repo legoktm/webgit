@@ -20,6 +20,7 @@ default-members = [
     "crates/gib-odb",
     "crates/gib-pack",
     "crates/gib-parse",
+    "crates/gib-patch",
     "crates/gib-ref",
 ]
 
@@ -39,13 +40,14 @@ gib-object = { path = "crates/gib-object" }
 gib-odb = { path = "crates/gib-odb" }
 gib-pack = { path = "crates/gib-pack" }
 gib-parse = { path = "crates/gib-parse" }
+gib-patch = { path = "crates/gib-patch" }
 gib-ref = { path = "crates/gib-ref" }
 gib-testkit = { path = "crates/gib-testkit" }
 git-version = "0.3.9"
 hex = { version = "0.4.3", default-features = false, features = [] }
 hex-literal = "1.1.0"
 insta = "1"
-jiff = { version = "0.2.35", default-features = false }
+jiff = { version = "0.2.35", default-features = false, features = ["alloc"] }
 js-sys = "0.3"
 miniz_oxide = "0.9.1"
 nom = { version = "8.0.0", default-features = false, features = ["alloc"] }
@@ -113,6 +115,7 @@ crate-type = ["cdylib"]
 anyhow.workspace = true
 futures = { workspace = true, features = ["alloc", "async-await"] }
 gib.workspace = true
+gib-patch.workspace = true
 wasm-bindgen.workspace = true
 wasm-bindgen-futures.workspace = true
 js-sys.workspace = true
@@ -120,7 +123,6 @@ web-sys.workspace = true
 console_error_panic_hook.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-similar.workspace = true
 yew = { workspace = true, features = ["csr"] }
 git-version.workspace = true
 comrak.workspace = true

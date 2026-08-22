@@ -1,0 +1,18 @@
+[package]
+name = "gib-patch"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+gib-hash.workspace = true
+gib-object.workspace = true
+jiff.workspace = true
+similar.workspace = true
+
+[dev-dependencies]
+futures = { workspace = true, features = ["async-await", "executor"] }
+gib-diff.workspace = true
+gib-fs.workspace = true
+gib-odb.workspace = true
+gib-testkit.workspace = true

@@ -5,7 +5,7 @@ use git_version::git_version;
 use std::rc::Rc;
 use yew::prelude::*;
 
-const COMMIT: &str = git_version!();
+pub(crate) const COMMIT: &str = git_version!();
 
 /// The view inputs for the about page. The `on_clear` callback is wired to the
 /// "(clear)" button so the cache can be flushed and the page re-rendered; it's

@@ -1,11 +1,11 @@
 use crate::cache::CachingRepo;
 use crate::error::GitContext;
-use crate::render::{format_datetime, is_binary, yield_to_browser};
+use crate::render::{download_bytes, format_datetime, yield_to_browser};
 use futures::stream::{FuturesOrdered, StreamExt};
 use gib::diff::{DiffEntry, TreeDiff};
 use gib::error::Error as GitError;
 use gib::object::{Object, ObjectId, ObjectIdPrefix, PrefixResolution};
-use similar::{ChangeTag, TextDiffConfig};
+use gib_patch::{FileDiff, LineKind, PatchLine, PatchMeta, Side};
 use yew::prelude::*;
 
 #[derive(PartialEq, Clone)]
@@ -14,23 +14,28 @@ struct ParentRef {
     short: String,
 }
 
+/// One row of the diffstat, and the file's diff once it has one.
 #[derive(PartialEq, Clone)]
-struct DiffLine {
-    kind: String,
-    content: String,
-}
-
-#[derive(PartialEq, Clone)]
-struct FileDiff {
+struct FileRow {
     path: String,
-    additions: usize,
-    deletions: usize,
+    /// The file's diff, absent between the tree diff (which gives us the path)
+    /// and this file's blobs loading (which give us everything else): the row
+    /// shows the name with the stats column blank until they arrive.
+    diff: Option<FileDiff>,
+    /// The two halves of the diffstat bar, in columns. Recomputed as files
+    /// arrive, so they are the view's own and not the patch's.
     bar_add: usize,
     bar_del: usize,
-    /// True between the tree diff (which gives us the path) and this file's
-    /// blobs loading (which give us the counts): the row shows the name with the
-    /// stats column blank until they arrive.
-    pending: bool,
+}
+
+impl FileRow {
+    fn additions(&self) -> usize {
+        self.diff.as_ref().map_or(0, |d| d.additions)
+    }
+
+    fn deletions(&self) -> usize {
+        self.diff.as_ref().map_or(0, |d| d.deletions)
+    }
 }
 
 /// One piece of a commit message: either literal text (escaped by Yew when
@@ -48,9 +53,7 @@ enum MessageSegment {
 /// (`CommitView`) can be exercised independently.
 #[derive(Properties, PartialEq, Clone)]
 pub(crate) struct CommitProps {
-    hash: String,
-    author_name: String,
-    author_email: String,
+    meta: PatchMeta,
     author_date: String,
     committer_name: String,
     committer_email: String,
@@ -60,8 +63,8 @@ pub(crate) struct CommitProps {
     message: Vec<MessageSegment>,
     total_additions: usize,
     total_deletions: usize,
-    files: Vec<FileDiff>,
-    diff_lines: Vec<DiffLine>,
+    files: Vec<FileRow>,
+    complete: bool,
 }
 
 /// Build a commit view, calling `on_partial` first with the metadata alone
@@ -106,9 +109,7 @@ pub(crate) async fn build_commit(
     // The metadata is ready well before the diff; emit it now so the header
     // table and message paint while the diff blobs are still loading.
     let base = CommitProps {
-        hash: format!("{}", commit.id()),
-        author_name: String::from_utf8_lossy(commit.author_name()).into_owned(),
-        author_email: String::from_utf8_lossy(commit.author_email()).into_owned(),
+        meta: PatchMeta::from_commit(&commit),
         author_date: format_datetime(commit.author_date()),
         committer_name: String::from_utf8_lossy(commit.committer_name()).into_owned(),
         committer_email: String::from_utf8_lossy(commit.committer_email()).into_owned(),
@@ -119,13 +120,16 @@ pub(crate) async fn build_commit(
         total_additions: 0,
         total_deletions: 0,
         files: Vec::new(),
-        diff_lines: Vec::new(),
+        complete: false,
     };
     on_partial(base.clone());
 
     let Some(parent) = parent_commits.first() else {
         // Root commit: nothing to diff against.
-        return Ok(base);
+        return Ok(CommitProps {
+            complete: true,
+            ..base
+        });
     };
 
     let parent_tree = repo
@@ -140,22 +144,21 @@ pub(crate) async fn build_commit(
         .await
         .context("tree diff")?;
 
-    let (files, diff_lines) = stream_diff(repo, &td, |files, diff_lines| {
+    let files = stream_diff(repo, &td, |files| {
         on_partial(CommitProps {
-            total_additions: files.iter().map(|f| f.additions).sum(),
-            total_deletions: files.iter().map(|f| f.deletions).sum(),
+            total_additions: files.iter().map(FileRow::additions).sum(),
+            total_deletions: files.iter().map(FileRow::deletions).sum(),
             files: files.to_vec(),
-            diff_lines: diff_lines.to_vec(),
             ..base.clone()
         });
     })
     .await;
 
     Ok(CommitProps {
-        total_additions: files.iter().map(|f| f.additions).sum(),
-        total_deletions: files.iter().map(|f| f.deletions).sum(),
+        total_additions: files.iter().map(FileRow::additions).sum(),
+        total_deletions: files.iter().map(FileRow::deletions).sum(),
         files,
-        diff_lines,
+        complete: true,
         ..base
     })
 }
@@ -243,124 +246,78 @@ fn linkify_message(message: &str) -> Vec<MessageSegment> {
     segments
 }
 
-async fn load_blob(repo: &CachingRepo, id: ObjectId) -> Vec<u8> {
-    if id.bytes() == &[0u8; 20] {
+/// The bytes of one side of a change, or nothing when the file did not exist
+/// on that side.
+async fn load_side(repo: &CachingRepo, side: Option<Side>) -> Vec<u8> {
+    let Some(side) = side else {
         return Vec::new();
-    }
-    match repo.lookup_object(id).await {
+    };
+    match repo.lookup_object(side.id).await {
         Ok(Object::Blob(b)) => b.data_owned(),
-        Ok(_) => format!("{id}").into_bytes(),
+        Ok(_) => format!("{}", side.id).into_bytes(),
         Err(_) => Vec::new(),
     }
 }
 
-/// Compute the rendered diff lines and (additions, deletions) for a single
-/// changed file. The returned lines always begin with the `diff --git` header;
-/// a file detected as binary yields just that header plus a "Binary files
-/// differ" line and zero counts. The `+++`/`---` unified-diff headers are
-/// emitted but excluded from the counts, matching `git`'s diffstat.
-fn diff_file(path: &str, old_data: Vec<u8>, new_data: Vec<u8>) -> (Vec<DiffLine>, usize, usize) {
-    let mut lines = vec![DiffLine {
-        kind: "hunk".to_string(),
-        content: format!("diff --git a/{path} b/{path}"),
-    }];
-
-    // Git treats a blob as binary if it contains a NUL byte; in that case it
-    // shows "Binary files differ" rather than a line-by-line diff, which would
-    // be meaningless (and potentially huge). Mirror that here.
-    if is_binary(&old_data) || is_binary(&new_data) {
-        lines.push(DiffLine {
-            kind: "ctx".to_string(),
-            content: format!("Binary files a/{path} and b/{path} differ"),
-        });
-        return (lines, 0, 0);
+/// The two sides of a diff entry, absent where the file did not exist.
+fn sides(entry: &DiffEntry<(ObjectId, ObjectId)>) -> (Option<Side>, Option<Side>) {
+    match entry {
+        DiffEntry::LeftOnly {
+            entry_type,
+            content: (old, _),
+            ..
+        } => (
+            Some(Side {
+                id: *old,
+                entry_type: *entry_type,
+            }),
+            None,
+        ),
+        DiffEntry::RightOnly {
+            entry_type,
+            content: (_, new),
+            ..
+        } => (
+            None,
+            Some(Side {
+                id: *new,
+                entry_type: *entry_type,
+            }),
+        ),
+        DiffEntry::Both {
+            left_type,
+            right_type,
+            content: (old, new),
+            ..
+        } => (
+            Some(Side {
+                id: *old,
+                entry_type: *left_type,
+            }),
+            Some(Side {
+                id: *new,
+                entry_type: *right_type,
+            }),
+        ),
     }
-
-    let text_diff = TextDiffConfig::default().diff_lines(old_data, new_data);
-
-    // Walk `similar`'s hunk/change iterators rather than rendering the unified
-    // diff with `to_string()` and re-splitting it: that would build the entire
-    // diff as one allocation and then copy every line out of it again, so a
-    // large diff was held in memory twice over before a row was rendered. The
-    // output is byte-for-byte what `UnifiedDiff`'s `Display` would have
-    // produced (see `test_diff_file_matches_unified_diff`), just emitted one
-    // `DiffLine` at a time: file headers before the first hunk, the `@@` header
-    // before a hunk's first change, and the "no newline" hint after a change
-    // that lacks one.
-    let mut additions = 0usize;
-    let mut deletions = 0usize;
-    let mut file_header_pending = true;
-    for hunk in text_diff.unified_diff().iter_hunks() {
-        if std::mem::take(&mut file_header_pending) {
-            lines.push(DiffLine {
-                kind: "del".to_string(),
-                content: format!("--- a/{path}"),
-            });
-            lines.push(DiffLine {
-                kind: "add".to_string(),
-                content: format!("+++ b/{path}"),
-            });
-        }
-        let mut hunk_header_pending = true;
-        for change in hunk.iter_changes() {
-            if std::mem::take(&mut hunk_header_pending) {
-                lines.push(DiffLine {
-                    kind: "hunk".to_string(),
-                    content: hunk.header().to_string(),
-                });
-            }
-            let (kind, marker) = match change.tag() {
-                ChangeTag::Insert => {
-                    additions += 1;
-                    ("add", '+')
-                }
-                ChangeTag::Delete => {
-                    deletions += 1;
-                    ("del", '-')
-                }
-                ChangeTag::Equal => ("ctx", ' '),
-            };
-            // Each value carries its own line terminator; strip it (and a CRLF's
-            // `\r`, which `str::lines` would also have dropped) so the content is
-            // one rendered row.
-            let value = change.to_string_lossy();
-            let value = value.strip_suffix('\n').unwrap_or(&value);
-            let value = value.strip_suffix('\r').unwrap_or(value);
-            let mut content = String::with_capacity(value.len() + 1);
-            content.push(marker);
-            content.push_str(value);
-            lines.push(DiffLine {
-                kind: kind.to_string(),
-                content,
-            });
-            if text_diff.newline_terminated() && change.missing_newline() {
-                lines.push(DiffLine {
-                    kind: "ctx".to_string(),
-                    content: "\\ No newline at end of file".to_string(),
-                });
-            }
-        }
-    }
-
-    (lines, additions, deletions)
 }
 
 /// Rescale the diffstat bars to the current widest file (0–40 columns). Called
 /// before each progress emit, so bars re-normalise as larger files arrive; the
 /// final return leaves them at their finished widths.
-fn recompute_bars(files: &mut [FileDiff]) {
+fn recompute_bars(files: &mut [FileRow]) {
     let max_changes = files
         .iter()
-        .map(|f| f.additions + f.deletions)
+        .map(|f| f.additions() + f.deletions())
         .max()
         .unwrap_or(1)
         .max(1);
 
     for f in files {
-        let total = f.additions + f.deletions;
+        let total = f.additions() + f.deletions();
         let bar_total = total * 40 / max_changes;
         f.bar_add = f
-            .additions
+            .additions()
             .checked_mul(bar_total)
             .and_then(|n| n.checked_div(total))
             .unwrap_or(0);
@@ -385,59 +342,44 @@ const DIFF_EMIT_INTERVAL_MS: f64 = 50.0;
 async fn stream_diff(
     repo: &CachingRepo,
     td: &TreeDiff,
-    on_progress: impl Fn(&[FileDiff], &[DiffLine]),
-) -> (Vec<FileDiff>, Vec<DiffLine>) {
+    on_progress: impl Fn(&[FileRow]),
+) -> Vec<FileRow> {
     // The changed-file list is known from the tree diff before any blob loads,
     // so show it right away with the stats column blank.
-    let mut files: Vec<FileDiff> = td
+    let mut files: Vec<FileRow> = td
         .entries()
         .iter()
-        .map(|entry| FileDiff {
+        .map(|entry| FileRow {
             path: String::from_utf8_lossy(entry.path().as_slice()).into_owned(),
-            additions: 0,
-            deletions: 0,
+            diff: None,
             bar_add: 0,
             bar_del: 0,
-            pending: true,
         })
         .collect();
-    let mut diff_lines: Vec<DiffLine> = Vec::new();
-    on_progress(&files, &diff_lines);
+    on_progress(&files);
     yield_to_browser().await;
 
     let mut loads: FuturesOrdered<_> = td
         .entries()
         .iter()
         .map(|entry| async move {
-            match entry {
-                DiffEntry::LeftOnly {
-                    content: (old_id, _),
-                    ..
-                } => (load_blob(repo, *old_id).await, Vec::new()),
-                DiffEntry::RightOnly {
-                    content: (_, new_id),
-                    ..
-                } => (Vec::new(), load_blob(repo, *new_id).await),
-                DiffEntry::Both {
-                    content: (old_id, new_id),
-                    ..
-                } => {
-                    futures::join!(load_blob(repo, *old_id), load_blob(repo, *new_id))
-                }
-            }
+            let (old, new) = sides(entry);
+            let (old_data, new_data) = futures::join!(load_side(repo, old), load_side(repo, new));
+            (old, new, old_data, new_data)
         })
         .collect();
 
     // `FuturesOrdered` yields in tree order, matching `files`.
     let mut idx = 0;
     let mut last_emit = js_sys::Date::now();
-    while let Some((old_data, new_data)) = loads.next().await {
-        let path = files[idx].path.clone();
-        let (lines, additions, deletions) = diff_file(&path, old_data, new_data);
-        diff_lines.extend(lines);
-        files[idx].additions = additions;
-        files[idx].deletions = deletions;
-        files[idx].pending = false;
+    while let Some((old, new, old_data, new_data)) = loads.next().await {
+        files[idx].diff = Some(gib_patch::diff_file(
+            &files[idx].path,
+            old,
+            new,
+            &old_data,
+            &new_data,
+        ));
         idx += 1;
         // Paint progressively, but only every ~50ms so a large diff isn't
         // re-rendered (and the growing line list re-cloned) once per file. Yield
@@ -445,14 +387,14 @@ async fn stream_diff(
         // cached blobs drain as microtasks that wouldn't otherwise let it.
         if js_sys::Date::now() - last_emit >= DIFF_EMIT_INTERVAL_MS {
             recompute_bars(&mut files);
-            on_progress(&files, &diff_lines);
+            on_progress(&files);
             yield_to_browser().await;
             last_emit = js_sys::Date::now();
         }
     }
 
     recompute_bars(&mut files);
-    (files, diff_lines)
+    files
 }
 
 /// The Yew component used to mount the commit view into the DOM. The markup
@@ -465,9 +407,7 @@ pub(crate) fn commit_view_component(props: &CommitProps) -> Html {
 
 pub(crate) fn commit_view(props: &CommitProps) -> Html {
     let CommitProps {
-        hash,
-        author_name,
-        author_email,
+        meta,
         author_date,
         committer_name,
         committer_email,
@@ -478,7 +418,7 @@ pub(crate) fn commit_view(props: &CommitProps) -> Html {
         total_additions,
         total_deletions,
         files,
-        diff_lines,
+        complete: _,
     } = props;
 
     html! {
@@ -487,7 +427,7 @@ pub(crate) fn commit_view(props: &CommitProps) -> Html {
                 <tbody>
                     <tr>
                         <td class="label">{ "author" }</td>
-                        <td>{ format!("{author_name} <{author_email}> {author_date}") }</td>
+                        <td>{ format!("{} <{}> {author_date}", meta.author_name, meta.author_email) }</td>
                     </tr>
                     <tr>
                         <td class="label">{ "committer" }</td>
@@ -496,7 +436,7 @@ pub(crate) fn commit_view(props: &CommitProps) -> Html {
                     { for parents.iter().enumerate().map(|(i, p)| parent_row(i == 0, p)) }
                     <tr>
                         <td class="label">{ "commit" }</td>
-                        <td class="mono">{ hash.clone() }</td>
+                        <td class="mono">{ meta.hash.clone() }{ patch_link(props) }</td>
                     </tr>
                     <tr>
                         <td class="label">{ "tree" }</td>
@@ -517,7 +457,10 @@ pub(crate) fn commit_view(props: &CommitProps) -> Html {
                             { for files.iter().map(diffstat_row) }
                         </table>
                     </div>
-                    <pre class="diff-pre">{ for diff_lines.iter().map(diff_line) }</pre>
+                    <pre class="diff-pre">
+                        { for files.iter().filter_map(|f| f.diff.as_ref())
+                            .flat_map(|d| d.lines.iter()).map(diff_line) }
+                    </pre>
                 </>
             }
         </>
@@ -544,10 +487,10 @@ fn message_segment(seg: &MessageSegment) -> Html {
     }
 }
 
-fn diffstat_row(f: &FileDiff) -> Html {
+fn diffstat_row(f: &FileRow) -> Html {
     // Before its blobs load, a file's name is known but its stats aren't: show
     // the name with the remaining columns blank until they stream in.
-    if f.pending {
+    if f.diff.is_none() {
         return html! {
             <tr key={f.path.clone()}>
                 <td class="diffstat-name">{ f.path.clone() }</td>
@@ -565,30 +508,65 @@ fn diffstat_row(f: &FileDiff) -> Html {
     html! {
         <tr key={f.path.clone()}>
             <td class="diffstat-name">{ f.path.clone() }</td>
-            <td class="diffstat-count">{ f.additions + f.deletions }</td>
+            <td class="diffstat-count">{ f.additions() + f.deletions() }</td>
             <td class="diffstat-bar-cell">
                 <span class="diffstat-bar">
                     <span class={bar_add}></span><span class={bar_del}></span>
                 </span>
             </td>
             <td class="diffstat-pm">
-                if f.additions > 0 {
-                    <span class="add-count">{ format!("+{}", f.additions) }</span>
+                if f.additions() > 0 {
+                    <span class="add-count">{ format!("+{}", f.additions()) }</span>
                 }
-                if f.deletions > 0 {
-                    <span class="del-count">{ format!("-{}", f.deletions) }</span>
+                if f.deletions() > 0 {
+                    <span class="del-count">{ format!("-{}", f.deletions()) }</span>
                 }
             </td>
         </tr>
     }
 }
 
-fn diff_line(line: &DiffLine) -> Html {
-    let class = format!("diff-{}", line.kind);
+fn diff_line(line: &PatchLine) -> Html {
+    let class = match line.kind {
+        LineKind::Meta => "diff-hunk",
+        LineKind::Insert => "diff-add",
+        LineKind::Delete => "diff-del",
+        LineKind::Context => "diff-ctx",
+    };
     // The trailing newline is part of the line's content inside the <pre>, so
     // each line's span ends with it (matching git's own line-oriented output).
-    let content = format!("{}\n", line.content);
+    let content = format!("{}\n", line.text);
     html! { <span class={class}>{ content }</span> }
+}
+
+/// The `(patch)` link beside the commit hash, where cgit's commit view puts it.
+fn patch_link(props: &CommitProps) -> Html {
+    if !props.complete {
+        return Html::default();
+    }
+    let props = props.clone();
+    let onclick = Callback::from(move |e: MouseEvent| {
+        // There is no patch page to navigate to: the href only makes this a
+        // link, and the download takes the place of following it.
+        e.prevent_default();
+        download_bytes(
+            &format!("{}.patch", props.meta.hash),
+            "text/plain",
+            build_patch(&props).as_bytes(),
+        );
+    });
+    html! {
+        <>{ " (" }<a class="patch-link" href="#" {onclick}>{ "patch" }</a>{ ")" }</>
+    }
+}
+
+/// The commit as a patch file, from the diff the view is already holding.
+fn build_patch(props: &CommitProps) -> String {
+    gib_patch::format_patch(
+        &props.meta,
+        props.files.iter().filter_map(|f| f.diff.as_ref()),
+        &format!("webgit {}", crate::render::about::COMMIT),
+    )
 }
 
 fn diffstat_summary(files: usize, additions: usize, deletions: usize) -> String {
@@ -648,143 +626,61 @@ mod tests {
 
     fn base_fixture() -> CommitProps {
         CommitProps {
-            hash: "0123abcd0123abcd0123abcd0123abcd0123abcd".to_string(),
-            author_name: "Kunal Mehta".to_string(),
-            author_email: "author@example.org".to_string(),
+            meta: PatchMeta {
+                hash: "0123abcd0123abcd0123abcd0123abcd0123abcd".to_string(),
+                author_name: "Kunal Mehta".to_string(),
+                author_email: "author@example.org".to_string(),
+                date: "Thu, 15 Jan 2026 12:34:56 +0000".to_string(),
+                message: MESSAGE.to_string(),
+            },
             author_date: "2026-01-15 12:34:56 +00:00".to_string(),
             committer_name: "Committer Person".to_string(),
             committer_email: "committer@example.org".to_string(),
             committer_date: "2026-01-15 13:00:00 +00:00".to_string(),
             parents: vec![],
             tree_hash: "fedcba98fedcba98fedcba98fedcba98fedcba98".to_string(),
-            message: linkify_message(
-                "Fix the thing\n\nLonger explanation with <html> & \"chars\".\nSee 0123abcd for context.",
-            ),
+            message: linkify_message(MESSAGE),
             total_additions: 0,
             total_deletions: 0,
             files: vec![],
-            diff_lines: vec![],
+            complete: true,
         }
     }
 
-    #[test]
-    fn test_diff_file_modification() {
-        let (lines, additions, deletions) = diff_file(
-            "foo.txt",
-            b"alpha\nbeta\n".to_vec(),
-            b"alpha\nbeta changed\n".to_vec(),
-        );
-        assert_eq!(additions, 1);
-        assert_eq!(deletions, 1);
-        // The first line is always the git-style header.
-        assert_eq!(lines[0].kind, "hunk");
-        assert_eq!(lines[0].content, "diff --git a/foo.txt b/foo.txt");
-        // A hunk marker and the changed lines are present and classified.
-        assert!(
-            lines
-                .iter()
-                .any(|l| l.kind == "hunk" && l.content.starts_with("@@"))
-        );
-        assert!(lines.iter().any(|l| l.kind == "add"
-            && l.content.starts_with('+')
-            && !l.content.starts_with("+++")));
-        assert!(lines.iter().any(|l| l.kind == "del"
-            && l.content.starts_with('-')
-            && !l.content.starts_with("---")));
-    }
+    const MESSAGE: &str =
+        "Fix the thing\n\nLonger explanation with <html> & \"chars\".\nSee 0123abcd for context.";
 
-    #[test]
-    fn test_diff_file_pure_addition_and_deletion() {
-        // A brand-new file: every line counts as an addition, none as deletion.
-        let (_lines, additions, deletions) =
-            diff_file("new.txt", Vec::new(), b"one\ntwo\nthree\n".to_vec());
-        assert_eq!((additions, deletions), (3, 0));
-
-        // A removed file: the reverse.
-        let (_lines, additions, deletions) =
-            diff_file("gone.txt", b"one\ntwo\n".to_vec(), Vec::new());
-        assert_eq!((additions, deletions), (0, 2));
-    }
-
-    #[test]
-    fn test_diff_file_binary() {
-        // A NUL byte makes the file binary: no line-by-line diff, zero counts.
-        let (lines, additions, deletions) =
-            diff_file("blob.bin", b"\0\x01\x02".to_vec(), b"\0\x03".to_vec());
-        assert_eq!((additions, deletions), (0, 0));
-        assert_eq!(lines.len(), 2);
-        assert_eq!(lines[0].content, "diff --git a/blob.bin b/blob.bin");
-        assert_eq!(lines[1].kind, "ctx");
-        assert_eq!(
-            lines[1].content,
-            "Binary files a/blob.bin and b/blob.bin differ"
-        );
-    }
-
-    /// `diff_file` emits the unified diff line by line instead of rendering it
-    /// into one string and re-splitting it. That's only safe while the two agree
-    /// exactly, so pin them against each other over the cases where the hand-
-    /// rolled emission could drift: a plain modification, a file with no
-    /// trailing newline on either side, CRLF endings, multiple hunks (the file
-    /// header must appear once, each `@@` header once), an identical pair (no
-    /// hunks at all, so no header), and invalid UTF-8 (lossy decoding).
-    #[test]
-    fn test_diff_file_matches_unified_diff() {
-        let cases: &[(&[u8], &[u8])] = &[
-            (b"alpha\nbeta\n", b"alpha\nbeta changed\n"),
-            (b"alpha\nbeta", b"alpha\nbeta changed"),
-            (b"alpha\nbeta\n", b"alpha\nbeta"),
-            (b"alpha\r\nbeta\r\n", b"alpha\r\nbeta changed\r\n"),
-            (
-                b"1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n",
-                b"1\n2\nx\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\ny\n20\n",
-            ),
-            (b"same\n", b"same\n"),
-            (b"", b"only\n"),
-            (b"caf\xc3\xa9\n", b"caf\xff\n"),
-        ];
-
-        for (old, new) in cases {
-            let (lines, additions, deletions) = diff_file("foo.txt", old.to_vec(), new.to_vec());
-            // The reference rendering, produced the way `diff_file` used to.
-            let text_diff = TextDiffConfig::default().diff_lines(old.to_vec(), new.to_vec());
-            let expected = text_diff
-                .unified_diff()
-                .header("a/foo.txt", "b/foo.txt")
-                .to_string();
-
-            // `lines[0]` is our own `diff --git` header, which `similar` never
-            // emits; the rest must match the reference line for line.
-            let got: Vec<&str> = lines[1..].iter().map(|l| l.content.as_str()).collect();
-            let want: Vec<&str> = expected.lines().collect();
-            assert_eq!(got, want, "line mismatch for {old:?} -> {new:?}");
-
-            // Counts exclude the `---`/`+++` headers, matching git's diffstat.
-            let want_add = want
-                .iter()
-                .filter(|l| l.starts_with('+') && !l.starts_with("+++"))
-                .count();
-            let want_del = want
-                .iter()
-                .filter(|l| l.starts_with('-') && !l.starts_with("---"))
-                .count();
-            assert_eq!(
-                (additions, deletions),
-                (want_add, want_del),
-                "count mismatch for {old:?} -> {new:?}"
-            );
-        }
-    }
-
-    fn file(path: &str, additions: usize, deletions: usize) -> FileDiff {
-        FileDiff {
+    /// A file row with a diff already in it, as the view holds one once its
+    /// blobs have loaded.
+    fn row(path: &str, old: &[u8], new: &[u8], bar_add: usize, bar_del: usize) -> FileRow {
+        // The two sides carry different (made-up) blob ids, as a real change
+        // does, so the `index` header line comes out as it would in the app.
+        let blob = |data: &[u8], hex: &[u8]| {
+            (!data.is_empty()).then_some(Side {
+                id: ObjectId::from_hex(hex).unwrap(),
+                entry_type: gib::object::TreeEntryType::File,
+            })
+        };
+        FileRow {
             path: path.to_string(),
-            additions,
-            deletions,
-            bar_add: 0,
-            bar_del: 0,
-            pending: false,
+            diff: Some(gib_patch::diff_file(
+                path,
+                blob(old, b"1111111111111111111111111111111111111111"),
+                blob(new, b"2222222222222222222222222222222222222222"),
+                old,
+                new,
+            )),
+            bar_add,
+            bar_del,
         }
+    }
+
+    /// A file row whose diff has `additions` added lines and `deletions`
+    /// removed ones, for the bar arithmetic.
+    fn file(path: &str, additions: usize, deletions: usize) -> FileRow {
+        let old = "old\n".repeat(deletions);
+        let new = "new\n".repeat(additions);
+        row(path, old.as_bytes(), new.as_bytes(), 0, 0)
     }
 
     #[test]
@@ -864,6 +760,59 @@ mod tests {
         );
     }
 
+    /// A commit view with one modified file, as it looks once its diff has
+    /// streamed in.
+    fn patch_fixture() -> CommitProps {
+        let mut props = base_fixture();
+        props.parents = vec![ParentRef {
+            hash: "1111111111111111111111111111111111111111".to_string(),
+            short: "11111111".to_string(),
+        }];
+        props.files = vec![row(
+            "src/main.rs",
+            b"alpha\nbeta\n",
+            b"alpha\nbeta changed\n",
+            20,
+            20,
+        )];
+        props.total_additions = 1;
+        props.total_deletions = 1;
+        props
+    }
+
+    #[test]
+    fn test_build_patch() {
+        // What the "(patch)" link downloads. The format itself is `gib-patch`'s
+        // and is checked against `git format-patch` there; what this pins is
+        // the wiring — the view's metadata and its streamed diff reaching the
+        // patch writer intact, under this build's signature.
+        let patch =
+            build_patch(&patch_fixture()).replace(crate::render::about::COMMIT, "<version>");
+        insta::assert_snapshot!(patch);
+    }
+
+    #[test]
+    fn test_patch_link_waits_for_the_whole_diff() {
+        // A patch built from an unfinished view would be missing files, so the
+        // link is only offered once the diff is done...
+        let props = patch_fixture();
+        assert!(render(props.clone()).contains("patch-link"));
+
+        // ...both while a file's blobs are still loading...
+        let mut streaming = props.clone();
+        streaming.complete = false;
+        streaming.files[0].diff = None;
+        assert!(!render(streaming).contains("patch-link"));
+
+        // ...and on the metadata-only first frame, whose empty file list would
+        // otherwise look exactly like a root commit's and hand over a patch
+        // with no diff in it.
+        let mut first_frame = props;
+        first_frame.complete = false;
+        first_frame.files = vec![];
+        assert!(!render(first_frame).contains("patch-link"));
+    }
+
     #[test]
     fn test_commit_html_root_commit() {
         // No parents and no diff: the diffstat section should be absent.
@@ -884,78 +833,41 @@ mod tests {
             },
         ];
         props.files = vec![
-            FileDiff {
-                path: "src/main.rs".to_string(),
-                additions: 3,
-                deletions: 1,
-                bar_add: 30,
-                bar_del: 10,
-                pending: false,
-            },
-            FileDiff {
-                path: "README".to_string(),
-                additions: 1,
-                deletions: 0,
-                bar_add: 10,
-                bar_del: 0,
-                pending: false,
-            },
+            row(
+                "src/main.rs",
+                b"fn main() {\n    println!(\"old\");\n}\n",
+                b"fn main() {\n    println!(\"<new> & escaped\");\n}\n",
+                30,
+                10,
+            ),
+            row("README", b"", b"hello\n", 10, 0),
         ];
-        props.total_additions = 4;
+        props.total_additions = 2;
         props.total_deletions = 1;
-        props.diff_lines = vec![
-            DiffLine {
-                kind: "hunk".to_string(),
-                content: "diff --git a/src/main.rs b/src/main.rs".to_string(),
-            },
-            DiffLine {
-                kind: "hunk".to_string(),
-                content: "@@ -1,3 +1,5 @@".to_string(),
-            },
-            DiffLine {
-                kind: "ctx".to_string(),
-                content: " fn main() {".to_string(),
-            },
-            DiffLine {
-                kind: "del".to_string(),
-                content: "-    println!(\"old\");".to_string(),
-            },
-            DiffLine {
-                kind: "add".to_string(),
-                content: "+    println!(\"<new> & escaped\");".to_string(),
-            },
-        ];
         insta::assert_snapshot!(render(props));
     }
 
     #[test]
     fn test_commit_html_diff_pending() {
         // The streamed first frame: the changed-file list is known (from the
-        // tree diff) but no blobs have loaded, so every row is `pending` — name
-        // shown, stats columns blank — and the diff body is still empty.
+        // tree diff) but no blobs have loaded, so every row is pending — name
+        // shown, stats columns blank — the diff body is still empty, and the
+        // patch link has nothing to offer yet.
         let mut props = base_fixture();
         props.parents = vec![ParentRef {
             hash: "1111111111111111111111111111111111111111".to_string(),
             short: "11111111".to_string(),
         }];
-        props.files = vec![
-            FileDiff {
-                path: "src/main.rs".to_string(),
-                additions: 0,
-                deletions: 0,
+        props.complete = false;
+        props.files = ["src/main.rs", "README"]
+            .into_iter()
+            .map(|path| FileRow {
+                path: path.to_string(),
+                diff: None,
                 bar_add: 0,
                 bar_del: 0,
-                pending: true,
-            },
-            FileDiff {
-                path: "README".to_string(),
-                additions: 0,
-                deletions: 0,
-                bar_add: 0,
-                bar_del: 0,
-                pending: true,
-            },
-        ];
+            })
+            .collect();
         insta::assert_snapshot!(render(props));
     }
 }

@@ -273,6 +273,22 @@ of tests.
   - CRLF line endings — the `\r` stripped so each row is one line
   - the `---`/`+++` headers are emitted but excluded from the counts
   - a null object id on one side — treated as an empty file
+  - the `diff --git` header block — mode lines for a creation, a deletion or a
+    `chmod`, and an `index` line whenever the two sides are different objects
+  - a file that becomes a symlink — written as a deletion and a creation, under
+    one diffstat row
+  - "(patch)" link beside the commit hash — downloads the commit as a
+    `git format-patch`-shaped `<sha>.patch`, built from the diff already on
+    screen, with no route of its own
+    - snapshot:
+      - test_build_patch
+    - browser:
+      - patch_link_downloads_the_commit_as_a_patch
+  - the link appears only once every file's diff has arrived, so a patch is
+    never half a diff
+  - patch bytes match `git format-patch --no-binary --no-renames`: mbox header,
+    RFC 2047-encoded headers, folded subject, diffstat with git's column
+    arithmetic, summary lines, and the signature
 - `#!/refs`
   - `#!/refs` and `#!/refs/` — branches and tags together, each sorted by recency
     - snapshot:

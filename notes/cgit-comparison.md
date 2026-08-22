@@ -12,7 +12,7 @@ As things are implemented, remove them from this list.
 | cgit URL | What it does | webgit |
 |---|---|---|
 | `/diff/` | Diff between two arbitrary revisions (`?id=` & `?id2=`), optional path scope | missing — diffs only ever appear inside `#!/commit/<sha>`, against the first parent |
-| `/patch/` | `git format-patch` output, plus patch ranges (`?id=..id2`) | missing |
+| `/patch/` | `git format-patch` output, plus patch ranges (`?id=..id2`) | partial — the commit page's "(patch)" link downloads the same bytes (`crates/gib-patch`, differential-tested against `git format-patch`), but there is no addressable URL and no ranges |
 | `/rawdiff/` | Raw unified diff, no HTML | missing |
 | `/plain/` | Raw blob at a URL, with mimetype dispatch | missing — `#!/tree/<path>` gives an in-page download button built from a Blob URL, but there's no addressable raw URL |
 | `/blame/` | Per-line blame with commit links | missing |
@@ -55,12 +55,12 @@ As things are implemented, remove them from this list.
 
 - **Diff controls**: `?context=N`, `?ignorews=1`, `?dt=` (unified / stat-only),
   and `ss=1` **side-by-side diff**.
-- **Rename/copy detection** in the diffstat (`git diff -M/-C`).
+- **Rename/copy detection** in the diffstat (`git diff -M/-C`), which the
+  downloaded patch lacks too — a rename is a delete plus an add.
 - **`?id2=`** — diff this commit against something other than its first parent;
   on merges cgit offers a link per parent.
-- **"download patch" link** on the commit page.
 - **Linked tree hash** — the `tree` row is plain text
-  (`src/render/commit.rs:501-504`), cgit links it to the tree view.
+  (`src/render/commit.rs:437-440`), cgit links it to the tree view.
 - **Notes** (`git notes`) display.
 
 ## Refs / tags

@@ -598,6 +598,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "gib-patch"
+version = "0.0.0"
+dependencies = [
+ "futures",
+ "gib-diff",
+ "gib-fs",
+ "gib-hash",
+ "gib-object",
+ "gib-odb",
+ "gib-testkit",
+ "jiff",
+ "similar 3.1.1",
+]
+
+[[package]]
 name = "gib-ref"
 version = "0.0.0"
 dependencies = [
@@ -1217,10 +1232,12 @@ version = "0.2.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "668b7183bd07af9a4885f5c35b0cc5c83c4607a913c16b7e17291832910d2dcc"
 dependencies = [
+ "defmt",
  "jiff-core",
  "jiff-static",
  "portable-atomic",
  "portable-atomic-util",
+ "serde_core",
 ]
 
 [[package]]
@@ -2341,13 +2358,13 @@ dependencies = [
  "console_error_panic_hook",
  "futures",
  "gib",
+ "gib-patch",
  "git-version",
  "insta",
  "jiff",
  "js-sys",
  "serde",
  "serde_json",
- "similar 3.1.1",
  "tar",
  "tempfile",
  "wasm-bindgen",

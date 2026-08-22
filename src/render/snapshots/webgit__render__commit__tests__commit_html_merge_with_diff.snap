@@ -27,7 +27,7 @@ expression: render(props)
 </tr>
 <tr>
 <td class="label">commit</td>
-<td class="mono">0123abcd0123abcd0123abcd0123abcd0123abcd</td>
+<td class="mono">0123abcd0123abcd0123abcd0123abcd0123abcd (<a href="#" class="patch-link">patch</a>)</td>
 </tr>
 <tr>
 <td class="label">tree</td>
@@ -38,11 +38,11 @@ expression: render(props)
 
 Longer explanation with &lt;html&gt; &amp; "chars".
 See <a href="#!/commit/0123abcd">0123abcd</a> for context.</pre><div class="diffstat">
-<p class="diffstat-summary">2 files changed, 4 insertions(+), 1 deletion(-)</p>
+<p class="diffstat-summary">2 files changed, 2 insertions(+), 1 deletion(-)</p>
 <table class="diffstat-table">
 <tr>
 <td class="diffstat-name">src/main.rs</td>
-<td class="diffstat-count">4</td>
+<td class="diffstat-count">2</td>
 <td class="diffstat-bar-cell">
 <span class="diffstat-bar">
 <span class="bar-add bar-w-30">
@@ -52,7 +52,7 @@ See <a href="#!/commit/0123abcd">0123abcd</a> for context.</pre><div class="diff
 </span>
 </td>
 <td class="diffstat-pm">
-<span class="add-count">+3</span>
+<span class="add-count">+1</span>
 <span class="del-count">-1</span>
 </td>
 </tr>
@@ -73,8 +73,19 @@ See <a href="#!/commit/0123abcd">0123abcd</a> for context.</pre><div class="diff
 </tr>
 </table>
 </div><pre class="diff-pre"><span class="diff-hunk">diff --git a/src/main.rs b/src/main.rs
-</span><span class="diff-hunk">@@ -1,3 +1,5 @@
+</span><span class="diff-hunk">index 1111111..2222222 100644
+</span><span class="diff-del">--- a/src/main.rs
+</span><span class="diff-add">+++ b/src/main.rs
+</span><span class="diff-hunk">@@ -1,3 +1,3 @@
 </span><span class="diff-ctx"> fn main() {
 </span><span class="diff-del">-    println!("old");
 </span><span class="diff-add">+    println!("&lt;new&gt; &amp; escaped");
+</span><span class="diff-ctx"> }
+</span><span class="diff-hunk">diff --git a/README b/README
+</span><span class="diff-hunk">new file mode 100644
+</span><span class="diff-hunk">index 0000000..2222222
+</span><span class="diff-del">--- /dev/null
+</span><span class="diff-add">+++ b/README
+</span><span class="diff-hunk">@@ -0,0 +1 @@
+</span><span class="diff-add">+hello
 </span></pre>

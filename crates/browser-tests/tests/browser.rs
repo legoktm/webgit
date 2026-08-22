@@ -484,6 +484,65 @@ async fn snapshot_route_downloads_a_tarball() -> Result<()> {
     h.finish().await
 }
 
+/// The commit page's "(patch)" link has no route behind it: the click builds
+/// the patch in the page and hands the bytes straight to the browser as a blob.
+/// Nothing below this level can tell whether that actually reaches the disk —
+/// the object URL is minted, clicked and revoked entirely inside the browser —
+/// so drive it for real and read what lands in the download directory.
+#[tokio::test]
+async fn patch_link_downloads_the_commit_as_a_patch() -> Result<()> {
+    let h = Harness::start().await?;
+    let repo = &h.fixtures.basic;
+    let head = repo.head();
+
+    h.open(repo, &format!("#!/commit/{}", head.sha)).await?;
+    // The link is only rendered once every file's diff has streamed in, so
+    // waiting for it also waits for the diff to finish.
+    h.wait_for(".patch-link").await?;
+    h.assert_no_error().await?;
+
+    h.client
+        .find(Locator::Css(".patch-link"))
+        .await?
+        .click()
+        .await?;
+
+    let file = wait_for_download(&h.downloads, Duration::from_secs(30))
+        .unwrap_or_else(|| panic!("no patch landed in {}", h.downloads.display()));
+    let name = file
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    assert_eq!(
+        name,
+        format!("{}.patch", head.sha),
+        "the patch was saved under the wrong name"
+    );
+
+    let patch = std::fs::read_to_string(&file)?;
+    assert!(
+        patch.starts_with(&format!("From {} Mon Sep 17 00:00:00 2001\n", head.sha)),
+        "the patch does not open with the mbox header: {:?}",
+        patch.lines().next()
+    );
+    assert!(
+        patch.contains(&format!("Subject: [PATCH] {}", head.subject)),
+        "the patch does not carry the commit's subject: {patch}"
+    );
+    assert!(
+        patch.contains("\ndiff --git a/"),
+        "the patch carries no diff: {patch}"
+    );
+    assert!(
+        patch.contains("\n-- \nwebgit "),
+        "the patch is missing its signature: {patch}"
+    );
+
+    h.assert_no_error().await?;
+    h.finish().await
+}
+
 /// Poll for a completed download. Firefox writes `.part` alongside the target
 /// while a transfer is in flight, so ignore those.
 fn wait_for_download(dir: &std::path::Path, timeout: Duration) -> Option<std::path::PathBuf> {

@@ -10,11 +10,10 @@
 
 use crate::archive::{ArchiveEntry, EntryKind, collect_entries, stream_tar_gz};
 use crate::cache::CachingRepo;
-use crate::render::{use_blob_url, yield_to_browser};
+use crate::render::{click_download, use_blob_url, yield_to_browser};
 use crate::stats::format_bytes;
 use gib::object::{Commit, Tree};
 use std::cell::Cell;
-use wasm_bindgen::JsCast;
 use web_sys::Blob;
 use yew::prelude::*;
 
@@ -303,21 +302,6 @@ fn use_auto_download(url: &str, name: &str) {
             || ()
         },
     );
-}
-
-/// Click a detached `<a download>`, the one way to start a download that isn't
-/// a navigation. Nothing is done on failure: the view's own link is the
-/// fallback, and it is already on screen.
-fn click_download(url: &str, name: &str) {
-    let anchor = web_sys::window()
-        .and_then(|w| w.document())
-        .and_then(|d| d.create_element("a").ok())
-        .and_then(|e| e.dyn_into::<web_sys::HtmlAnchorElement>().ok());
-    if let Some(anchor) = anchor {
-        anchor.set_href(url);
-        anchor.set_download(name);
-        anchor.click();
-    }
 }
 
 #[cfg(test)]
