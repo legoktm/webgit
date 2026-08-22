@@ -1,6 +1,9 @@
+use crate::error::GitContext;
 use crate::fs::HttpFilesystem;
+use futures::FutureExt;
+use futures::future::LocalBoxFuture;
 use gib::Repo;
-use gib::commit_graph::bloom::{BloomSettings, path_maybe_changed};
+use gib::commit_graph::bloom::BloomSettings;
 use gib::diff::TreeDiff;
 use gib::error::{Error as GitError, GResult};
 use gib::object::{
@@ -8,6 +11,7 @@ use gib::object::{
 };
 use gib::prelude::*;
 use gib::reference::{Ref, RefEntry, RefName};
+use gib_log::{CommitSource, GraphRecord};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
@@ -24,16 +28,6 @@ const STORE_TAG_REFS: &str = "tag_refs";
 /// pure function of the commit, so these are immutable and survive the server
 /// regenerating its commit-graph (only genuinely new commits are ever missing).
 const STORE_GRAPH: &str = "graph";
-
-/// What the history walk needs about one commit, derived from the commit-graph
-/// and cached per OID. `bloom` is the changed-path filter (`None` ⇒ treat as
-/// "maybe", i.e. fall back to a real diff).
-pub(crate) struct GraphRecord {
-    pub(crate) tree: ObjectId,
-    pub(crate) parents: Vec<ObjectId>,
-    pub(crate) commit_time: i64,
-    pub(crate) bloom: Option<Vec<u8>>,
-}
 
 // ---------------------------------------------------------------------------
 // CachingRepo
@@ -185,7 +179,7 @@ impl CachingRepo {
     /// by a single bulk fetch when the cache is empty). A genuinely new commit —
     /// one pushed since the cache was seeded — is resolved with a small range
     /// read of the live file and then cached in memory and IndexedDB.
-    pub(crate) async fn graph_record(&self, id: ObjectId) -> Option<Rc<GraphRecord>> {
+    async fn lookup_graph_record(&self, id: ObjectId) -> Option<Rc<GraphRecord>> {
         self.ensure_graph_loaded().await;
         if let Some(rec) = self.graph.borrow().get(&id) {
             return Some(Rc::clone(rec));
@@ -202,16 +196,6 @@ impl CachingRepo {
         Some(rec)
     }
 
-    /// Whether `bloom` (a commit's changed-path filter) definitively says the
-    /// path did not change. `false` means "unknown" — no filter or a possible
-    /// match — so the caller must diff.
-    pub(crate) fn graph_path_unchanged(&self, bloom: Option<&[u8]>, path: &str) -> bool {
-        let (Some(bytes), Some(settings)) = (bloom, self.graph_settings) else {
-            return false;
-        };
-        !path_maybe_changed(bytes, &settings, path.as_bytes())
-    }
-
     /// Populate the in-memory graph map once per session. Prefers the persisted
     /// per-commit records; if there are none (cold cache), bulk-loads the whole
     /// commit-graph in one request and persists every commit for next time.
@@ -219,7 +203,7 @@ impl CachingRepo {
     /// A non-empty store has to mean "a bulk load finished", since that is
     /// exactly what the check below reads it as. Only a completed load may
     /// therefore leave records behind: a failed one must write nothing at all,
-    /// or the stray records left by [`graph_record`](Self::graph_record)'s miss
+    /// or the stray records left by [`lookup_graph_record`](Self::lookup_graph_record)'s miss
     /// path would read as a finished load next session and suppress the bulk
     /// fetch forever. `graph_seeded` is what holds that line.
     async fn ensure_graph_loaded(&self) {
@@ -590,6 +574,23 @@ impl CachingRepo {
         }
         set_field(&record, "tag", &JsValue::from_f64(self.graph_tag));
         record
+    }
+}
+
+/// How [`gib_log`] reads this repository: every object through the cache, and
+/// the commit-graph accelerators above. The walk itself lives in that crate;
+/// this is only the wiring that tells it where the bytes come from.
+impl CommitSource for CachingRepo {
+    fn object(&self, id: ObjectId) -> LocalBoxFuture<'_, anyhow::Result<Object>> {
+        async move { self.lookup_object(id).await.context("read object") }.boxed_local()
+    }
+
+    fn graph_record(&self, id: ObjectId) -> LocalBoxFuture<'_, Option<Rc<GraphRecord>>> {
+        self.lookup_graph_record(id).boxed_local()
+    }
+
+    fn bloom_settings(&self) -> Option<BloomSettings> {
+        self.graph_settings
     }
 }
 

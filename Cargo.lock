@@ -571,6 +571,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "gib-log"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "futures",
+ "gib-commitgraph",
+ "gib-fs",
+ "gib-object",
+ "gib-odb",
+ "gib-testkit",
+]
+
+[[package]]
 name = "gib-object"
 version = "0.0.0"
 dependencies = [
@@ -2381,6 +2394,7 @@ dependencies = [
  "futures",
  "gib",
  "gib-archive",
+ "gib-log",
  "gib-patch",
  "git-version",
  "insta",

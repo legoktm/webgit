@@ -1,9 +1,9 @@
 use crate::cache::CachingRepo;
 use crate::route::encode_component;
-use gib::object::{Commit, ObjectId, TreeEntryType};
+use gib::object::{Commit, ObjectId};
 use gib::reference::{RefEntry, RefName, RefTarget};
 use std::cell::{Cell, RefCell};
-use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
+use std::collections::BTreeMap;
 use std::rc::Rc;
 use yew::{Html, html};
 
@@ -494,209 +494,34 @@ pub(crate) async fn decoration_map(repo: &CachingRepo) -> BTreeMap<ObjectId, Vec
     map
 }
 
-/// The id of the entry named `name` in `tree`, or `None` if absent.
-fn entry_id(tree: &gib::object::Tree, name: &str) -> Option<ObjectId> {
-    tree.entries()
-        .find(|e| e.name() == name.as_bytes())
-        .map(|e| e.id())
-}
-
-/// Resolve a slash-separated path to the [`ObjectId`] it points at within the
-/// tree `tree_id` — a blob id for a file, a tree id for a directory. Returns
-/// `None` if the path does not exist in that tree. Only used for root commits,
-/// which have no parent to diff against.
-async fn path_object_id(
-    tree_id: ObjectId,
-    components: &[&str],
-    repo: &CachingRepo,
-) -> Option<ObjectId> {
-    let (last, dirs) = components.split_last()?;
-    let mut current = repo.lookup_object(tree_id).await.ok()?.tree().ok()?;
-    for component in dirs {
-        let entry = current
-            .entries()
-            .find(|e| e.name() == component.as_bytes())?;
-        if entry.entry_type() != TreeEntryType::Tree {
-            return None;
-        }
-        current = repo.lookup_object(entry.id()).await.ok()?.tree().ok()?;
+/// Turn a commit into the row the log and summary tables render, with no ref
+/// decorations attached — [`apply_decorations`] folds those in once the
+/// (separately, concurrently fetched) decoration map resolves, so peeling every
+/// tag never holds up the commit rows.
+fn commit_row(commit: &Commit) -> CommitRow {
+    CommitRow {
+        id: commit.id(),
+        short_hash: short_hash(commit.id()),
+        message: commit_first_line(commit.message()),
+        author: String::from_utf8_lossy(commit.author_name()).into_owned(),
+        age: Age::new(commit.author_date()),
+        refs: Vec::new(),
     }
-    entry_id(&current, last)
 }
 
-/// Whether the object at `components` differs between trees `a` and `b`.
+fn commit_rows(commits: &[Commit]) -> Vec<CommitRow> {
+    commits.iter().map(commit_row).collect()
+}
+
+/// Walk history a page at a time, calling `on_batch` with the rows gathered so
+/// far after each chunk of commit objects is fetched, so the log can render
+/// progressively instead of waiting for the whole page. The return value is
+/// still the complete page plus whether a further page exists.
 ///
-/// Walks both trees in lockstep, comparing the entry id for each path component.
-/// As soon as the two ids match, the entire subtree below is byte-identical, so
-/// the path is unchanged and we stop — the deep trees are never fetched. We only
-/// descend as far as the path actually diverged between the two commits, which
-/// for most commits is zero levels (they touched a different part of the tree).
-async fn path_differs(a: ObjectId, b: ObjectId, components: &[&str], repo: &CachingRepo) -> bool {
-    let Some((last, dirs)) = components.split_last() else {
-        return false;
-    };
-    // Identical (sub)tree id ⇒ everything beneath is identical ⇒ no change.
-    let mut a = a;
-    let mut b = b;
-    for component in dirs {
-        if a == b {
-            return false;
-        }
-        // Fetch both sides' trees concurrently to halve this level's latency.
-        let (ta, tb) = match futures::join!(repo.lookup_object(a), repo.lookup_object(b)) {
-            (Ok(oa), Ok(ob)) => match (oa.tree(), ob.tree()) {
-                (Ok(ta), Ok(tb)) => (ta, tb),
-                _ => return true,
-            },
-            _ => return true,
-        };
-        let (ea, eb) = (entry_id(&ta, component), entry_id(&tb, component));
-        match (ea, eb) {
-            // Subtree present on both sides with the same id: pruned, unchanged.
-            (Some(x), Some(y)) if x == y => return false,
-            // Present on both but different: descend into the two subtrees.
-            (Some(x), Some(y)) => (a, b) = (x, y),
-            // Present on only one side (added/removed dir): the path changed.
-            _ => return true,
-        }
-    }
-    if a == b {
-        return false;
-    }
-    let (ta, tb) = match futures::join!(repo.lookup_object(a), repo.lookup_object(b)) {
-        (Ok(oa), Ok(ob)) => match (oa.tree(), ob.tree()) {
-            (Ok(ta), Ok(tb)) => (ta, tb),
-            _ => return true,
-        },
-        _ => return true,
-    };
-    entry_id(&ta, last) != entry_id(&tb, last)
-}
-
-/// Counters for one [`walk_commits_streamed`] call, logged to the console so it's
+/// The walk itself is [`gib_log`]'s; what is left here is turning its commits
+/// into rows and reporting what the walk cost to the console, where it is
 /// visible whether the commit-graph (and its Bloom filters) is actually doing
-/// the work: graph hits should dominate fallbacks, and on a filtered log most
-/// commits should be Bloom-skipped rather than tree-diffed.
-#[derive(Default)]
-struct WalkStats {
-    /// Commits whose metadata came from the commit-graph (no object fetch).
-    graph_meta_hits: usize,
-    /// Commits whose metadata required fetching the commit object instead.
-    object_meta_fallbacks: usize,
-    /// Filtered commits skipped via the Bloom filter with no tree fetch.
-    bloom_skips: usize,
-    /// Filtered commits that needed a real tree diff.
-    tree_diffs: usize,
-}
-
-/// The traversal data a single commit contributes to a log walk: enough to
-/// order the frontier (`time`), continue it (`parents`), filter by path
-/// (`tree`, plus `pos` for the Bloom filter), all without re-parsing objects.
-struct WalkNode {
-    tree: ObjectId,
-    parents: Vec<ObjectId>,
-    time: i64,
-    /// The commit's changed-path Bloom filter, if the commit-graph has one.
-    bloom: Option<Vec<u8>>,
-}
-
-/// Look up a commit's [`WalkNode`], memoised in `cache`. Prefers the
-/// commit-graph (no object fetch); otherwise falls back to the commit object,
-/// using `known` when the caller already holds it (the walk's starting commit).
-/// `None` only if the commit can be found neither way.
-///
-/// The graph is bulk-loaded once (and persisted) via [`CachingRepo::graph_record`],
-/// so traversal is in-memory and survives reloads; a commit missing from the
-/// bulk set (e.g. pushed since the seed) is resolved with a single targeted read.
-async fn ensure_node(
-    repo: &CachingRepo,
-    cache: &mut BTreeMap<ObjectId, Rc<WalkNode>>,
-    id: ObjectId,
-    known: Option<&Commit>,
-    stats: &mut WalkStats,
-) -> Option<Rc<WalkNode>> {
-    if let Some(node) = cache.get(&id) {
-        return Some(Rc::clone(node));
-    }
-    let node = if let Some(rec) = repo.graph_record(id).await {
-        stats.graph_meta_hits += 1;
-        WalkNode {
-            tree: rec.tree,
-            parents: rec.parents.clone(),
-            time: rec.commit_time,
-            bloom: rec.bloom.clone(),
-        }
-    } else {
-        stats.object_meta_fallbacks += 1;
-        let commit = match known {
-            Some(c) => c.clone(),
-            None => repo.lookup_object(id).await.ok()?.commit().ok()?,
-        };
-        WalkNode {
-            tree: commit.tree(),
-            parents: commit.parents().to_vec(),
-            time: commit.commit_date().timestamp().as_second(),
-            bloom: None,
-        }
-    };
-    let node = Rc::new(node);
-    cache.insert(id, Rc::clone(&node));
-    Some(node)
-}
-
-/// A Bloom candidate awaiting confirmation by a real tree diff. It carries the
-/// commit's tree and its parents' trees (all resolved up front from the
-/// in-memory graph), so [`confirm_task`] touches no shared mutable state and a
-/// batch of them can run concurrently.
-struct ConfirmTask {
-    id: ObjectId,
-    tree: ObjectId,
-    parent_trees: Vec<ObjectId>,
-    root: bool,
-}
-
-/// Whether a candidate actually changed the path, mirroring git's default
-/// simplification: a root is shown when the path exists; otherwise a commit is
-/// shown unless it is TREESAME to (same object at the path as) some parent.
-/// Read-only, so many of these can be awaited together.
-async fn confirm_task(repo: &CachingRepo, task: &ConfirmTask, components: &[&str]) -> bool {
-    if task.root {
-        return path_object_id(task.tree, components, repo).await.is_some();
-    }
-    for parent_tree in &task.parent_trees {
-        if !path_differs(task.tree, *parent_tree, components, repo).await {
-            return false;
-        }
-    }
-    true
-}
-
-/// How many candidate tree-diffs to confirm concurrently. Traversal is in-memory
-/// so the only latency is these diffs; batching turns ~N serial round-trips into
-/// ~N/BATCH waves (relies on HTTP/2 multiplexing the per-diff object fetches).
-///
-/// Each diff fetches its two trees concurrently (see [`path_differs`]), so peak
-/// in-flight streams are ~`2 × CONFIRM_BATCH` — kept under typical HTTP/2 limits
-/// (servers cap concurrent streams around 100–128). The batch that crosses the
-/// page boundary is fully confirmed, so a larger value also fetches up to
-/// `BATCH` candidates of slack past the last shown commit; 64 keeps that cost
-/// negligible against a deep walk while roughly halving the wave count vs 32.
-const CONFIRM_BATCH: usize = 64;
-
-/// How many commit objects to fetch (concurrently) before emitting a partial
-/// page during a streamed walk. Small enough that the first rows paint quickly,
-/// large enough to keep the round-trips well overlapped.
-const STREAM_BATCH: usize = 10;
-
-/// Walk history a page at a time, calling `on_batch` with the rows
-/// gathered so far after each chunk of commit objects is fetched, so the log
-/// can render progressively instead of waiting for the whole page. The return
-/// value is still the complete page plus whether a further page exists.
-///
-/// Rows are emitted with no ref decorations (`refs` empty), as
-/// [`recent_commits`] does: the caller computes the decoration map concurrently
-/// and folds it in with [`apply_decorations`], so peeling every tag never holds
-/// up the walk.
+/// the work.
 pub(crate) async fn walk_commits_streamed(
     head_commit: &Commit,
     repo: &CachingRepo,
@@ -705,232 +530,37 @@ pub(crate) async fn walk_commits_streamed(
     limit: usize,
     on_batch: impl Fn(&[CommitRow]),
 ) -> (Vec<CommitRow>, bool) {
-    // Pre-split the pathspec once; `None` walks the full history unfiltered.
-    let path_components: Option<Vec<&str>> =
-        path.map(|p| p.split('/').filter(|s| !s.is_empty()).collect());
-
-    // The frontier is ordered by commit time (newest first), tie-broken by id;
-    // nodes carry only an id, with metadata memoised in `meta`.
-    let mut heap: BinaryHeap<(i64, ObjectId)> = BinaryHeap::new();
-    let mut visited: BTreeSet<ObjectId> = BTreeSet::new();
-    let mut meta: BTreeMap<ObjectId, Rc<WalkNode>> = BTreeMap::new();
-    let mut stats = WalkStats::default();
-
-    if let Some(node) = ensure_node(
-        repo,
-        &mut meta,
-        head_commit.id(),
-        Some(head_commit),
-        &mut stats,
-    )
-    .await
-    {
-        heap.push((node.time, head_commit.id()));
-        visited.insert(head_commit.id());
-    }
-
-    // Collect the ids of matching commits in order. We need `skip + limit` to
-    // fill the page, plus the detection of one more to know whether a next page
-    // exists. `skip` comes straight from `?offset=` in the URL, so the sum is
-    // saturating: near `usize::MAX` (reachable on wasm32, where that is only
-    // 4 GiB) it would otherwise panic in debug builds and wrap in release,
-    // turning a nonsense offset into a page of the wrong commits.
-    let want = skip.saturating_add(limit);
-    let mut matched: Vec<ObjectId> = Vec::new();
-    let mut has_more = false;
-    let mut traversed = 0usize;
-
-    match &path_components {
-        // Unfiltered: every traversed commit matches; pure in-memory traversal.
-        None => {
-            while let Some((_, id)) = heap.pop() {
-                traversed += 1;
-                let node = meta.get(&id).map(Rc::clone).unwrap();
-                if matched.len() == want {
-                    has_more = true;
-                    break;
-                }
-                matched.push(id);
-                for parent in node.parents.iter().copied() {
-                    if visited.insert(parent)
-                        && let Some(parent_node) =
-                            ensure_node(repo, &mut meta, parent, None, &mut stats).await
-                    {
-                        heap.push((parent_node.time, parent));
-                    }
-                }
-            }
-        }
-        // Filtered: traverse in memory to gather Bloom candidates in order, then
-        // confirm them with tree diffs in concurrent batches.
-        Some(components) => {
-            let path_str = path.unwrap_or("");
-            let mut pending: Vec<ConfirmTask> = Vec::new();
-            'outer: loop {
-                // Refill the candidate buffer by traversing (in-memory) commits,
-                // enqueueing parents and Bloom-skipping non-matches as we go.
-                while pending.len() < CONFIRM_BATCH {
-                    let Some((_, id)) = heap.pop() else { break };
-                    traversed += 1;
-                    let node = meta.get(&id).map(Rc::clone).unwrap();
-                    let mut parent_trees = Vec::with_capacity(node.parents.len());
-                    for parent in node.parents.iter().copied() {
-                        if let Some(parent_node) =
-                            ensure_node(repo, &mut meta, parent, None, &mut stats).await
-                        {
-                            if visited.insert(parent) {
-                                heap.push((parent_node.time, parent));
-                            }
-                            parent_trees.push(parent_node.tree);
-                        }
-                    }
-                    if node.parents.is_empty() {
-                        pending.push(ConfirmTask {
-                            id,
-                            tree: node.tree,
-                            parent_trees,
-                            root: true,
-                        });
-                    } else if repo.graph_path_unchanged(node.bloom.as_deref(), path_str) {
-                        stats.bloom_skips += 1;
-                    } else {
-                        pending.push(ConfirmTask {
-                            id,
-                            tree: node.tree,
-                            parent_trees,
-                            root: false,
-                        });
-                    }
-                }
-                if pending.is_empty() {
-                    break;
-                }
-                let batch_len = pending.len().min(CONFIRM_BATCH);
-                let batch: Vec<ConfirmTask> = pending.drain(..batch_len).collect();
-                stats.tree_diffs += batch.len();
-                let results = futures::future::join_all(
-                    batch
-                        .iter()
-                        .map(|task| confirm_task(repo, task, components)),
-                )
-                .await;
-                for (task, is_match) in batch.iter().zip(results) {
-                    if is_match {
-                        if matched.len() == want {
-                            has_more = true;
-                            break 'outer;
-                        }
-                        matched.push(task.id);
-                    }
-                }
-            }
-        }
-    }
+    let page = gib_log::walk_commits(head_commit, repo, path, skip, limit, |commits| {
+        on_batch(&commit_rows(commits));
+    })
+    .await;
 
     crate::console_log(&format!(
-        "webgit: log walk{}: traversed {traversed} commits \
-         (graph-meta {}, object-meta {}), filter: {} Bloom-skips / {} tree-diffs, \
-         showing {} rows{}",
+        "webgit: log walk{}: {}, showing {} rows{}",
         path.map(|p| format!(" [{p}]")).unwrap_or_default(),
-        stats.graph_meta_hits,
-        stats.object_meta_fallbacks,
-        stats.bloom_skips,
-        stats.tree_diffs,
-        matched.len().saturating_sub(skip).min(limit),
-        if has_more { " (more pages)" } else { "" },
+        page.stats,
+        page.commits.len(),
+        if page.has_more { " (more pages)" } else { "" },
     ));
 
-    // Fetch objects only for the commits actually shown — at most `limit`. Work
-    // in chunks (each chunk fetched concurrently) so the first rows can render
-    // while the rest are still in flight, emitting the rows so far after each.
-    let window: Vec<ObjectId> = matched.into_iter().skip(skip).take(limit).collect();
-    let mut commits: Vec<CommitRow> = Vec::with_capacity(window.len());
-    for chunk in window.chunks(STREAM_BATCH) {
-        let objects =
-            futures::future::join_all(chunk.iter().map(|id| repo.lookup_object(*id))).await;
-        for (id, object) in chunk.iter().zip(objects) {
-            let Some(commit) = object.ok().and_then(|o| o.commit().ok()) else {
-                continue;
-            };
-            commits.push(CommitRow {
-                id: *id,
-                short_hash: short_hash(*id),
-                message: commit_first_line(commit.message()),
-                author: String::from_utf8_lossy(commit.author_name()).into_owned(),
-                age: Age::new(commit.author_date()),
-                refs: Vec::new(),
-            });
-        }
-        on_batch(&commits);
-    }
-
-    (commits, has_more)
+    (commit_rows(&page.commits), page.has_more)
 }
 
-/// Walk the most recent `limit` commits reachable from `head_commit` by fetching
-/// commit objects directly, deliberately bypassing the commit-graph. For a small
-/// bounded preview (the summary) this avoids the whole-file bulk load that
-/// [`walk_commits_streamed`] triggers on its first `graph_record` call — a handful of
-/// cheap object reads (the same path the ref rows use) instead of downloading
-/// and persisting every commit's metadata just to show a teaser. History is
-/// unfiltered, so there is no path/Bloom work; `on_batch` is called with the
-/// rows so far as each commit object resolves, so they stream in newest-first.
-///
-/// Rows are emitted with no ref decorations (`refs` empty): the caller computes
-/// the decoration map concurrently and folds it in with [`apply_decorations`],
-/// so the (sometimes fetch-bound) ref scan never holds up the commit rows.
+/// The most recent `limit` commits reachable from `head_commit`, as rows,
+/// streamed through `on_batch` as each commit object resolves. See
+/// [`gib_log::recent_commits`] for why the summary's teaser deliberately
+/// bypasses the commit-graph.
 pub(crate) async fn recent_commits(
     head_commit: &Commit,
     repo: &CachingRepo,
     limit: usize,
     on_batch: impl Fn(&[CommitRow]),
 ) -> Vec<CommitRow> {
-    // Same frontier discipline as `walk_commits_streamed`'s unfiltered arm — a heap
-    // ordered by commit time (newest first), tie-broken by id — but we hold the
-    // resolved `Commit` for each frontier entry so popping a node both emits its
-    // row and yields its parents to fetch, with no commit-graph in the loop.
-    let mut heap: BinaryHeap<(i64, ObjectId)> = BinaryHeap::new();
-    let mut visited: BTreeSet<ObjectId> = BTreeSet::new();
-    let mut frontier: BTreeMap<ObjectId, Commit> = BTreeMap::new();
-
-    let head_id = head_commit.id();
-    heap.push((head_commit.commit_date().timestamp().as_second(), head_id));
-    visited.insert(head_id);
-    frontier.insert(head_id, head_commit.clone());
-
-    let mut commits: Vec<CommitRow> = Vec::with_capacity(limit);
-    while let Some((_, id)) = heap.pop() {
-        let commit = frontier.remove(&id).expect("frontier holds every heap id");
-        commits.push(CommitRow {
-            id,
-            short_hash: short_hash(id),
-            message: commit_first_line(commit.message()),
-            author: String::from_utf8_lossy(commit.author_name()).into_owned(),
-            age: Age::new(commit.author_date()),
-            refs: Vec::new(),
-        });
-        on_batch(&commits);
-        if commits.len() == limit {
-            break;
-        }
-        // Enqueue not-yet-seen parents, fetching their objects concurrently.
-        let parents: Vec<ObjectId> = commit
-            .parents()
-            .iter()
-            .copied()
-            .filter(|p| visited.insert(*p))
-            .collect();
-        let objects =
-            futures::future::join_all(parents.iter().map(|p| repo.lookup_object(*p))).await;
-        for (pid, object) in parents.iter().zip(objects) {
-            if let Some(parent) = object.ok().and_then(|o| o.commit().ok()) {
-                heap.push((parent.commit_date().timestamp().as_second(), *pid));
-                frontier.insert(*pid, parent);
-            }
-        }
-    }
-
-    commits
+    let commits = gib_log::recent_commits(head_commit, repo, limit, |commits| {
+        on_batch(&commit_rows(commits));
+    })
+    .await;
+    commit_rows(&commits)
 }
 
 /// Fold a decoration map into already-built commit rows, matching on commit id,

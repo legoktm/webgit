@@ -1,0 +1,17 @@
+[package]
+name = "gib-log"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+futures = { workspace = true, features = ["alloc", "async-await"] }
+gib-commitgraph.workspace = true
+gib-object.workspace = true
+
+[dev-dependencies]
+futures = { workspace = true, features = ["async-await", "executor"] }
+gib-fs.workspace = true
+gib-odb.workspace = true
+gib-testkit.workspace = true
