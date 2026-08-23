@@ -624,6 +624,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "gib-mailmap"
+version = "0.0.0"
+dependencies = [
+ "gib-testkit",
+]
+
+[[package]]
 name = "gib-object"
 version = "0.0.0"
 dependencies = [
@@ -2351,6 +2358,7 @@ dependencies = [
  "gib",
  "gib-archive",
  "gib-log",
+ "gib-mailmap",
  "gib-patch",
  "git-version",
  "insta",

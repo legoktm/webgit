@@ -1,10 +1,11 @@
 use crate::cache::CachingRepo;
 use crate::error::GitContext;
-use crate::render::{download_bytes, format_datetime, yield_to_browser};
+use crate::render::{download_bytes, format_datetime, mapped_ident, yield_to_browser};
 use futures::stream::{FuturesOrdered, StreamExt};
 use gib::diff::{DiffEntry, TreeDiff};
 use gib::error::Error as GitError;
 use gib::object::{Object, ObjectId, ObjectIdPrefix, PrefixResolution};
+use gib_mailmap::Mailmap;
 use gib_patch::{FileDiff, LineKind, PatchLine, PatchMeta, Side};
 use std::cell::RefCell;
 use yew::prelude::*;
@@ -55,6 +56,8 @@ enum MessageSegment {
 #[derive(Properties, PartialEq, Clone)]
 pub(crate) struct CommitProps {
     meta: PatchMeta,
+    author_name: String,
+    author_email: String,
     author_date: String,
     committer_name: String,
     committer_email: String,
@@ -75,6 +78,7 @@ pub(crate) struct CommitProps {
 /// value is the complete view.
 pub(crate) async fn build_commit(
     repo: &CachingRepo,
+    mailmap: &Mailmap,
     sha: &str,
     on_partial: impl Fn(CommitProps),
 ) -> anyhow::Result<CommitProps> {
@@ -110,11 +114,18 @@ pub(crate) async fn build_commit(
 
     // The metadata is ready well before the diff; emit it now so the header
     // table and message paint while the diff blobs are still loading.
+    let (author_name, author_email) =
+        mapped_ident(commit.author_name(), commit.author_email(), mailmap);
+    let (committer_name, committer_email) =
+        mapped_ident(commit.committer_name(), commit.committer_email(), mailmap);
+
     let base = CommitProps {
         meta: PatchMeta::from_commit(&commit),
+        author_name,
+        author_email,
         author_date: format_datetime(commit.author_date()),
-        committer_name: String::from_utf8_lossy(commit.committer_name()).into_owned(),
-        committer_email: String::from_utf8_lossy(commit.committer_email()).into_owned(),
+        committer_name,
+        committer_email,
         committer_date: format_datetime(commit.commit_date()),
         parents,
         tree_hash: format!("{}", commit.tree()),
@@ -429,6 +440,8 @@ pub(crate) fn commit_view_component(props: &CommitProps) -> Html {
 pub(crate) fn commit_view(props: &CommitProps) -> Html {
     let CommitProps {
         meta,
+        author_name,
+        author_email,
         author_date,
         committer_name,
         committer_email,
@@ -449,7 +462,7 @@ pub(crate) fn commit_view(props: &CommitProps) -> Html {
                 <tbody>
                     <tr>
                         <td class="label">{ "author" }</td>
-                        <td>{ format!("{} <{}> {author_date}", meta.author_name, meta.author_email) }</td>
+                        <td>{ format!("{author_name} <{author_email}> {author_date}") }</td>
                     </tr>
                     <tr>
                         <td class="label">{ "committer" }</td>
@@ -664,6 +677,8 @@ mod tests {
                 date: "Thu, 15 Jan 2026 12:34:56 +0000".to_string(),
                 message: MESSAGE.to_string(),
             },
+            author_name: "Kunal Mehta".to_string(),
+            author_email: "author@example.org".to_string(),
             author_date: "2026-01-15 12:34:56 +00:00".to_string(),
             committer_name: "Committer Person".to_string(),
             committer_email: "committer@example.org".to_string(),
@@ -821,6 +836,29 @@ mod tests {
         let patch =
             build_patch(&patch_fixture()).replace(crate::render::about::COMMIT, "<version>");
         insta::assert_snapshot!(patch);
+    }
+
+    #[test]
+    fn test_the_patch_keeps_the_contact_the_commit_records() {
+        // The header shows the mailmapped author; the patch must not, because
+        // `git format-patch` is not one of the commands `log.mailmap` applies
+        // to — a patch carries the authorship it will be applied under.
+        let mut props = patch_fixture();
+        props.author_name = "Proper Name".to_string();
+        props.author_email = "proper@example.org".to_string();
+
+        let patch = build_patch(&props);
+        assert!(
+            patch.contains("From: Kunal Mehta <author@example.org>"),
+            "{patch}"
+        );
+        assert!(!patch.contains("proper@example.org"), "{patch}");
+
+        let rendered = render(props);
+        assert!(
+            rendered.contains("Proper Name &lt;proper@example.org&gt;"),
+            "{rendered}"
+        );
     }
 
     #[test]

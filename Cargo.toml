@@ -19,6 +19,7 @@ default-members = [
     "crates/gib-fs",
     "crates/gib-hash",
     "crates/gib-log",
+    "crates/gib-mailmap",
     "crates/gib-object",
     "crates/gib-odb",
     "crates/gib-pack",
@@ -41,6 +42,7 @@ gib-diff = { path = "crates/gib-diff" }
 gib-fs = { path = "crates/gib-fs" }
 gib-hash = { path = "crates/gib-hash" }
 gib-log = { path = "crates/gib-log" }
+gib-mailmap = { path = "crates/gib-mailmap" }
 gib-object = { path = "crates/gib-object" }
 gib-odb = { path = "crates/gib-odb" }
 gib-pack = { path = "crates/gib-pack" }
@@ -123,6 +125,7 @@ futures = { workspace = true, features = ["alloc", "async-await"] }
 gib.workspace = true
 gib-archive.workspace = true
 gib-log.workspace = true
+gib-mailmap.workspace = true
 gib-patch.workspace = true
 wasm-bindgen.workspace = true
 wasm-bindgen-futures.workspace = true

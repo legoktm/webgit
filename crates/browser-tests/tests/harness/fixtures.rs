@@ -173,6 +173,9 @@ fn install(
 /// ordering is stable and the rendered ages are deterministic.
 fn write_history(repo: &TestRepo) -> Result<()> {
     const AUTHOR: (&str, &str) = ("A Test Author", "author@example.org");
+    /// The identity HEAD (and the annotated tag) is made under, which the
+    /// fixture's `.mailmap` maps to `AUTHOR`.
+    const OLD: (&str, &str) = ("Old Name", "old@example.org");
 
     write_file(
         repo,
@@ -214,6 +217,19 @@ fn write_history(repo: &TestRepo) -> Result<()> {
         "2000-01-03T00:00:00Z",
     )?;
 
+    // A `.mailmap`, and a commit made under the old identity it canonicalises,
+    // so that HEAD's contact is one the app has to map: `AUTHOR` is what every
+    // view is expected to show for it, and `OLD` is what the objects record.
+    // The `.mailmap` has to be in HEAD's tree, which is where the app reads it
+    // from (`HEAD:.mailmap`, as git does for a bare repository).
+    write_file(
+        repo,
+        ".mailmap",
+        format!("{} <{}> {} <{}>\n", AUTHOR.0, AUTHOR.1, OLD.0, OLD.1).as_bytes(),
+    )?;
+    repo.run_git(["add", "--all"])?;
+    repo.commit("Add a mailmap", OLD.0, OLD.1, "2000-01-04T00:00:00Z")?;
+
     // A second branch, so refs/summary have more than one row. Built and then
     // left behind, with `main` checked out again as HEAD.
     repo.run_git(["checkout", "-b", "develop"])?;
@@ -223,19 +239,20 @@ fn write_history(repo: &TestRepo) -> Result<()> {
         "Start the new parser",
         AUTHOR.0,
         AUTHOR.1,
-        "2000-01-04T00:00:00Z",
+        "2000-01-05T00:00:00Z",
     )?;
     repo.run_git(["checkout", "main"])?;
 
     // One annotated and one lightweight tag: they peel differently, and the
-    // refs page renders them from different code paths.
+    // refs page renders them from different code paths. The annotated one is
+    // tagged under the old identity, so the tag page has a contact to map too.
     repo.tag_annotated(
         "v1.0.0",
         "HEAD",
         "Release 1.0.0",
-        AUTHOR.0,
-        AUTHOR.1,
-        "2000-01-05T00:00:00Z",
+        OLD.0,
+        OLD.1,
+        "2000-01-06T00:00:00Z",
     )?;
     repo.run_git(["tag", "v0.9", "HEAD~1"])?;
 

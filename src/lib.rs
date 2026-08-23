@@ -14,7 +14,8 @@ use cache::CachingRepo;
 use error::GitContext;
 use fs::{HttpDirectory, HttpFilesystem};
 use gib::Repo;
-use gib::object::{Commit, Tree};
+use gib::object::{Commit, Tree, TreeEntryType};
+use gib_mailmap::Mailmap;
 use render::about::AboutView;
 use render::blob::BlobView;
 use render::commit::CommitView;
@@ -56,14 +57,15 @@ fn current_hash() -> String {
 /// cloneable (all `Rc`), so it can live in Yew state and be passed as a prop to
 /// `RouteView`.
 #[derive(Clone)]
-struct RepoBundle {
-    repo: Rc<CachingRepo>,
-    head_commit: Rc<Commit>,
-    root_tree: Rc<Tree>,
-    clone_url: Rc<String>,
+pub(crate) struct RepoBundle {
+    pub(crate) repo: Rc<CachingRepo>,
+    pub(crate) head_commit: Rc<Commit>,
+    pub(crate) root_tree: Rc<Tree>,
+    pub(crate) mailmap: Rc<Mailmap>,
+    pub(crate) clone_url: Rc<String>,
     /// The repository's name, resolved once from the URL — what snapshots are
     /// named after. See [`repo_name`].
-    repo_name: Rc<String>,
+    pub(crate) repo_name: Rc<String>,
 }
 
 /// A bundle is created once per repository load and never mutated, so identity
@@ -74,6 +76,7 @@ impl PartialEq for RepoBundle {
         Rc::ptr_eq(&self.repo, &other.repo)
             && Rc::ptr_eq(&self.head_commit, &other.head_commit)
             && Rc::ptr_eq(&self.root_tree, &other.root_tree)
+            && Rc::ptr_eq(&self.mailmap, &other.mailmap)
             && Rc::ptr_eq(&self.clone_url, &other.clone_url)
             && Rc::ptr_eq(&self.repo_name, &other.repo_name)
     }
@@ -122,13 +125,42 @@ async fn load_repo_bundle(url: String) -> anyhow::Result<RepoBundle> {
         .tree()
         .map_err(|e| anyhow::anyhow!("Root object is not a tree: {e:?}"))?;
 
+    let mailmap = load_mailmap(&root_tree, &repo).await;
+
     Ok(RepoBundle {
         repo: Rc::new(repo),
         head_commit: Rc::new(commit),
         root_tree: Rc::new(root_tree),
+        mailmap: Rc::new(mailmap),
         repo_name: Rc::new(repo_name(&url)),
         clone_url: Rc::new(url),
     })
+}
+
+/// Read `HEAD:.mailmap`
+async fn load_mailmap(root_tree: &Tree, repo: &CachingRepo) -> Mailmap {
+    let Some(entry) = root_tree
+        .entries()
+        .find(|e| e.name() == gib_mailmap::MAILMAP.as_bytes())
+    else {
+        return Mailmap::default();
+    };
+    if !matches!(
+        entry.entry_type(),
+        TreeEntryType::File | TreeEntryType::Executable
+    ) {
+        return Mailmap::default();
+    }
+    match repo.lookup_object(entry.id()).await {
+        Ok(object) => match object.blob() {
+            Ok(blob) => Mailmap::parse(blob.data()),
+            Err(_) => Mailmap::default(),
+        },
+        Err(e) => {
+            console_log(&format!("webgit: could not read .mailmap: {e:?}"));
+            Mailmap::default()
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -354,17 +386,9 @@ fn route_view(props: &RouteViewProps) -> Html {
                                 }
                             }
                         };
-                        let result = build_route(
-                            &hash,
-                            &bundle.head_commit,
-                            &bundle.root_tree,
-                            &bundle.repo,
-                            &bundle.clone_url,
-                            &bundle.repo_name,
-                            &emit,
-                        )
-                        .await
-                        .map_err(|e| format!("{e:#}"));
+                        let result = build_route(&hash, &bundle, &emit)
+                            .await
+                            .map_err(|e| format!("{e:#}"));
                         if !cancelled.get() {
                             loaded.set(Some(result));
                         }

@@ -635,8 +635,71 @@ async fn patch_link_downloads_the_commit_as_a_patch() -> Result<()> {
         patch.contains("\n-- \nwebgit "),
         "the patch is missing its signature: {patch}"
     );
+    // HEAD is the fixture's mailmapped commit, and the page it was built from
+    // is showing the canonical contact — but a patch is applied, not read, so
+    // it has to carry the authorship the commit object records. `git
+    // format-patch` is not one of the commands `log.mailmap` applies to.
+    assert!(
+        patch.contains("From: Old Name <old@example.org>"),
+        "the patch rewrote the author the commit records: {patch}"
+    );
 
     h.assert_no_error().await?;
+    h.finish().await
+}
+
+/// A repository with a `.mailmap` shows the canonical contact everywhere it
+/// shows one. The fixture's HEAD commit and its annotated tag are both made
+/// under an old identity that the file maps to `A Test Author`, so a viewer
+/// that never read `HEAD:.mailmap` renders `Old Name` and fails here.
+#[tokio::test]
+async fn mailmap_canonicalises_every_contact_shown() -> Result<()> {
+    let h = Harness::start().await?;
+    let repo = &h.fixtures.basic;
+    let head = repo.head();
+
+    h.open(repo, "#!/log").await?;
+    h.wait_for(".summary-table").await?;
+    h.assert_no_error().await?;
+    let authors = h.texts_of(".summary-table td.author").await?;
+    assert_eq!(
+        authors.first().map(String::as_str),
+        Some("A Test Author"),
+        "the log's HEAD row did not map its author: {authors:?}"
+    );
+    let text = h.content_text().await?;
+    assert!(
+        !text.contains("Old Name"),
+        "the log showed an unmapped author: {text}"
+    );
+
+    // The commit page maps both contacts, and shows the address as well as the
+    // name — the fixture's entry rewrites both halves of each. Only the
+    // metadata table is examined: this commit's diff *adds* the mailmap, so
+    // the old identity legitimately appears further down the page.
+    h.open(repo, &format!("#!/commit/{}", head.sha)).await?;
+    h.wait_for(".tag-table").await?;
+    h.assert_no_error().await?;
+    let meta = h.text_of(".tag-table").await?;
+    assert!(
+        meta.matches("A Test Author <author@example.org>").count() >= 2,
+        "the commit page did not map both its author and its committer: {meta}"
+    );
+    assert!(
+        !meta.contains("Old Name") && !meta.contains("old@example.org"),
+        "the commit page showed an unmapped contact: {meta}"
+    );
+
+    // And the tag page, whose tagger is the old identity too.
+    h.open(repo, "#!/refs/tags/v1.0.0").await?;
+    h.wait_for(".tag-table").await?;
+    h.assert_no_error().await?;
+    let text = h.content_text().await?;
+    assert!(
+        text.contains("A Test Author") && !text.contains("Old Name"),
+        "the tag page did not map its tagger: {text}"
+    );
+
     h.finish().await
 }
 

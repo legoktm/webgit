@@ -2,14 +2,19 @@ use crate::{
     cache::CachingRepo,
     render::{RefRow, branches_section, collect_refs, fetch_ref_rows, tags_section},
 };
+use gib_mailmap::Mailmap;
 use yew::prelude::*;
 
-pub(crate) async fn build_refs_all(repo: &CachingRepo, repo_name: &str) -> RefsAllProps {
+pub(crate) async fn build_refs_all(
+    repo: &CachingRepo,
+    mailmap: &Mailmap,
+    repo_name: &str,
+) -> RefsAllProps {
     let (branch_refs, tag_refs) = collect_refs(repo).await;
 
     let (mut branches, mut tags) = futures::join!(
-        fetch_ref_rows(&branch_refs, repo),
-        fetch_ref_rows(&tag_refs, repo),
+        fetch_ref_rows(&branch_refs, repo, mailmap),
+        fetch_ref_rows(&tag_refs, repo, mailmap),
     );
     branches.sort_by_key(|b| b.age_secs());
     tags.sort_by_key(|t| t.age_secs());

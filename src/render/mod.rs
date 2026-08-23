@@ -2,6 +2,7 @@ use crate::cache::CachingRepo;
 use crate::route::encode_component;
 use gib::object::{Commit, ObjectId};
 use gib::reference::{RefEntry, RefName, RefTarget};
+use gib_mailmap::Mailmap;
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::rc::Rc;
@@ -374,12 +375,16 @@ pub(crate) async fn commit_for_entry(entry: &RefEntry, repo: &CachingRepo) -> Op
     repo.peel_to_commit(&obj).await.ok().flatten()
 }
 
-pub(crate) async fn fetch_ref_rows(refs: &[(String, RefEntry)], repo: &CachingRepo) -> Vec<RefRow> {
+pub(crate) async fn fetch_ref_rows(
+    refs: &[(String, RefEntry)],
+    repo: &CachingRepo,
+    mailmap: &Mailmap,
+) -> Vec<RefRow> {
     futures::future::join_all(refs.iter().map(|(short, entry)| {
         let short = short.clone();
         async move {
             let commit = commit_for_entry(entry, repo).await?;
-            Some(ref_row(short, &commit))
+            Some(ref_row(short, &commit, mailmap))
         }
     }))
     .await
@@ -445,6 +450,7 @@ impl<T> InOrder<T> {
 pub(crate) async fn fetch_ref_rows_each(
     refs: &[(String, RefEntry)],
     repo: &CachingRepo,
+    mailmap: &Mailmap,
     on_row: impl Fn(usize, RefRow),
 ) {
     let reveal = InOrder::new(refs.len());
@@ -455,7 +461,7 @@ pub(crate) async fn fetch_ref_rows_each(
         async move {
             let row = commit_for_entry(entry, repo)
                 .await
-                .map(|commit| ref_row(short, &commit));
+                .map(|commit| ref_row(short, &commit, mailmap));
             reveal.resolve(i, row, on_row);
         }
     }))
@@ -498,19 +504,32 @@ pub(crate) async fn decoration_map(repo: &CachingRepo) -> BTreeMap<ObjectId, Vec
 /// decorations attached — [`apply_decorations`] folds those in once the
 /// (separately, concurrently fetched) decoration map resolves, so peeling every
 /// tag never holds up the commit rows.
-fn commit_row(commit: &Commit) -> CommitRow {
+fn commit_row(commit: &Commit, mailmap: &Mailmap) -> CommitRow {
     CommitRow {
         id: commit.id(),
         short_hash: short_hash(commit.id()),
         message: commit_first_line(commit.message()),
-        author: String::from_utf8_lossy(commit.author_name()).into_owned(),
+        author: mapped_author_name(commit, mailmap),
         age: Age::new(commit.author_date()),
         refs: Vec::new(),
     }
 }
 
-fn commit_rows(commits: &[Commit]) -> Vec<CommitRow> {
-    commits.iter().map(commit_row).collect()
+fn commit_rows(commits: &[Commit], mailmap: &Mailmap) -> Vec<CommitRow> {
+    commits.iter().map(|c| commit_row(c, mailmap)).collect()
+}
+
+fn mapped_author_name(commit: &Commit, mailmap: &Mailmap) -> String {
+    let (name, _) = mailmap.map(commit.author_name(), commit.author_email());
+    String::from_utf8_lossy(name).into_owned()
+}
+
+pub(crate) fn mapped_ident(name: &[u8], email: &[u8], mailmap: &Mailmap) -> (String, String) {
+    let (name, email) = mailmap.map(name, email);
+    (
+        String::from_utf8_lossy(name).into_owned(),
+        String::from_utf8_lossy(email).into_owned(),
+    )
 }
 
 /// Walk history a page at a time, calling `on_batch` with the rows gathered so
@@ -525,13 +544,14 @@ fn commit_rows(commits: &[Commit]) -> Vec<CommitRow> {
 pub(crate) async fn walk_commits_streamed(
     head_commit: &Commit,
     repo: &CachingRepo,
+    mailmap: &Mailmap,
     path: Option<&str>,
     skip: usize,
     limit: usize,
     on_batch: impl Fn(&[CommitRow]),
 ) -> (Vec<CommitRow>, bool) {
     let page = gib_log::walk_commits(head_commit, repo, path, skip, limit, |commits| {
-        on_batch(&commit_rows(commits));
+        on_batch(&commit_rows(commits, mailmap));
     })
     .await;
 
@@ -543,7 +563,7 @@ pub(crate) async fn walk_commits_streamed(
         if page.has_more { " (more pages)" } else { "" },
     ));
 
-    (commit_rows(&page.commits), page.has_more)
+    (commit_rows(&page.commits, mailmap), page.has_more)
 }
 
 /// The most recent `limit` commits reachable from `head_commit`, as rows,
@@ -553,14 +573,15 @@ pub(crate) async fn walk_commits_streamed(
 pub(crate) async fn recent_commits(
     head_commit: &Commit,
     repo: &CachingRepo,
+    mailmap: &Mailmap,
     limit: usize,
     on_batch: impl Fn(&[CommitRow]),
 ) -> Vec<CommitRow> {
     let commits = gib_log::recent_commits(head_commit, repo, limit, |commits| {
-        on_batch(&commit_rows(commits));
+        on_batch(&commit_rows(commits, mailmap));
     })
     .await;
-    commit_rows(&commits)
+    commit_rows(&commits, mailmap)
 }
 
 /// Fold a decoration map into already-built commit rows, matching on commit id,
@@ -690,12 +711,12 @@ pub(crate) fn download_bytes(name: &str, mime: &str, data: &[u8]) {
     }
 }
 
-fn ref_row(name: String, c: &Commit) -> RefRow {
+fn ref_row(name: String, c: &Commit, mailmap: &Mailmap) -> RefRow {
     RefRow {
         name,
         meta: Some(RefMeta {
             message: commit_first_line(c.message()),
-            author: String::from_utf8_lossy(c.author_name()).into_owned(),
+            author: mapped_author_name(c, mailmap),
             age: Age::new(c.author_date()),
         }),
     }
@@ -779,9 +800,84 @@ pub(crate) mod fixtures {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gib::object::{ObjectType, RawObject};
 
     fn fixed_date() -> jiff::civil::Date {
         jiff::civil::date(2001, 2, 3)
+    }
+
+    /// A commit object authored (and committed) by one contact, as the row
+    /// builders receive it.
+    fn commit_by(name: &str, email: &str) -> Commit {
+        let body = format!(
+            "tree 3a4df67dd7fd7cb3ca82d9896dbdd28053d39bdb\n\
+             author {name} <{email}> 1774735018 +0000\n\
+             committer {name} <{email}> 1774735018 +0000\n\
+             \n\
+             Fix the thing\n"
+        );
+        gib::object::Object::from_raw(
+            ObjectId::from_hex(b"0123abcd0123abcd0123abcd0123abcd0123abcd").unwrap(),
+            RawObject {
+                object_type: ObjectType::Commit,
+                body: body.into_bytes(),
+            },
+        )
+        .unwrap()
+        .commit()
+        .unwrap()
+    }
+
+    /// The author a listing row shows. `commit_row` and `ref_row` are not
+    /// called directly: building a row reads the wall clock for its age
+    /// column, and that clock is `js_sys`', which panics off the browser. What
+    /// both of them do with a contact is this.
+    #[test]
+    fn listings_show_the_mailmapped_author() {
+        let mailmap = Mailmap::parse(b"Proper Name <proper@example.org> <commit@example.org>\n");
+        let commit = commit_by("Commit Name", "commit@example.org");
+
+        assert_eq!(mapped_author_name(&commit, &mailmap), "Proper Name");
+        // With no mailmap in the repository, the commit's own name shows.
+        assert_eq!(
+            mapped_author_name(&commit, &Mailmap::default()),
+            "Commit Name"
+        );
+    }
+
+    #[test]
+    fn a_contact_is_mapped_on_both_of_its_halves() {
+        // A name-keyed entry only applies to that name, so this fails unless
+        // the email *and* the name reach the map.
+        let mailmap =
+            Mailmap::parse(b"Proper Name <proper@example.org> Commit Name <commit@example.org>\n");
+
+        assert_eq!(
+            mapped_author_name(&commit_by("Commit Name", "commit@example.org"), &mailmap),
+            "Proper Name"
+        );
+        assert_eq!(
+            mapped_author_name(&commit_by("Other Name", "commit@example.org"), &mailmap),
+            "Other Name"
+        );
+    }
+
+    /// Both halves of a contact are mapped together, and the commit view maps
+    /// its committer the same way it maps its author.
+    #[test]
+    fn an_ident_is_mapped_as_a_pair() {
+        let mailmap = Mailmap::parse(b"Proper Name <proper@example.org> <commit@example.org>\n");
+        let commit = commit_by("Commit Name", "commit@example.org");
+
+        let expected = ("Proper Name".to_string(), "proper@example.org".to_string());
+        assert_eq!(
+            mapped_ident(commit.author_name(), commit.author_email(), &mailmap),
+            expected
+        );
+        assert_eq!(
+            mapped_ident(commit.committer_name(), commit.committer_email(), &mailmap),
+            expected
+        );
     }
 
     /// Resolve `order` (a permutation of slot indices) and collect what was

@@ -2,11 +2,16 @@ use crate::{
     cache::CachingRepo,
     render::{RefRow, collect_refs, fetch_ref_rows, tags_section},
 };
+use gib_mailmap::Mailmap;
 use yew::prelude::*;
 
-pub(crate) async fn build_refs_tags(repo: &CachingRepo, repo_name: &str) -> RefsTagsProps {
+pub(crate) async fn build_refs_tags(
+    repo: &CachingRepo,
+    mailmap: &Mailmap,
+    repo_name: &str,
+) -> RefsTagsProps {
     let (_, tags) = collect_refs(repo).await;
-    let mut tags = fetch_ref_rows(&tags, repo).await;
+    let mut tags = fetch_ref_rows(&tags, repo, mailmap).await;
     tags.sort_by_key(|t| t.age_secs());
     RefsTagsProps {
         tags,

@@ -1,11 +1,13 @@
 use crate::cache::CachingRepo;
 use crate::error::GitContext;
-use crate::render::format_datetime;
+use crate::render::{format_datetime, mapped_ident};
 use gib::reference::RefName;
+use gib_mailmap::Mailmap;
 use yew::prelude::*;
 
 pub(crate) async fn build_tag(
     repo: &CachingRepo,
+    mailmap: &Mailmap,
     tag: String,
     repo_name: &str,
 ) -> anyhow::Result<TagProps> {
@@ -37,12 +39,14 @@ pub(crate) async fn build_tag(
                     .ok_or_else(|| anyhow::anyhow!("no date on tag {tag}"))?,
             ),
             tagger_name: Some(
-                String::from_utf8_lossy(
+                mapped_ident(
                     tag_obj
                         .tagger_name()
                         .ok_or_else(|| anyhow::anyhow!("no tagger on {tag}"))?,
+                    tag_obj.tagger_email().unwrap_or_default(),
+                    mailmap,
                 )
-                .into_owned(),
+                .0,
             ),
             commit: commit.id().to_string(),
             contents: Some(String::from_utf8_lossy(tag_obj.message()).into_owned()),

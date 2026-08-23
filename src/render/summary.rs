@@ -7,6 +7,7 @@ use crate::{
     },
 };
 use gib::object::Commit;
+use gib_mailmap::Mailmap;
 use std::cell::RefCell;
 use std::rc::Rc;
 use yew::prelude::*;
@@ -28,6 +29,7 @@ use yew::prelude::*;
 pub(crate) async fn build_summary(
     head_commit: &Commit,
     repo: &CachingRepo,
+    mailmap: &Mailmap,
     clone_url: &str,
     repo_name: &str,
     on_partial: impl Fn(SummaryProps),
@@ -85,7 +87,7 @@ pub(crate) async fn build_summary(
     let branches_fut = {
         let acc = acc.clone();
         async move {
-            fetch_ref_rows_each(&branches, repo, |i, row| {
+            fetch_ref_rows_each(&branches, repo, mailmap, |i, row| {
                 acc.borrow_mut().branches[i] = row;
                 on_partial(acc.borrow().clone());
             })
@@ -95,7 +97,7 @@ pub(crate) async fn build_summary(
     let tags_fut = {
         let acc = acc.clone();
         async move {
-            fetch_ref_rows_each(&tags, repo, |i, row| {
+            fetch_ref_rows_each(&tags, repo, mailmap, |i, row| {
                 acc.borrow_mut().tags[i] = row;
                 on_partial(acc.borrow().clone());
             })
@@ -109,7 +111,7 @@ pub(crate) async fn build_summary(
             // fetch-bound) ref scan must not delay the first commit rows, so the
             // walk streams label-less rows and the branch/tag chips are folded in
             // once decorations resolve.
-            let walk = recent_commits(head_commit, repo, 10, |rows| {
+            let walk = recent_commits(head_commit, repo, mailmap, 10, |rows| {
                 acc.borrow_mut().commits = Some(rows.to_vec());
                 on_partial(acc.borrow().clone());
             });

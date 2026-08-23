@@ -1,3 +1,4 @@
+use crate::RepoBundle;
 use crate::cache::CachingRepo;
 use crate::error::GitContext;
 use crate::render::about::{AboutProps, build_about};
@@ -15,7 +16,7 @@ use crate::render::tree::{TreeProps, build_tree_props};
 use crate::render::{commit_for_entry, head_branch_name};
 use gib::object::{ObjectId, ObjectIdPrefix, Tree, TreeEntryType};
 use gib::reference::RefName;
-use std::rc::Rc;
+use gib_mailmap::Mailmap;
 
 // ---------------------------------------------------------------------------
 // Tree / blob walking
@@ -580,19 +581,22 @@ pub(crate) enum LoadedView {
 /// missing objects) propagate so `RouteView` can show them in the content area.
 pub(crate) async fn build_route(
     hash: &str,
-    head_commit: &gib::object::Commit,
-    root_tree: &Tree,
-    repo: &Rc<CachingRepo>,
-    clone_url: &Rc<String>,
-    repo_name: &Rc<String>,
+    bundle: &RepoBundle,
     on_partial: &dyn Fn(LoadedView),
 ) -> anyhow::Result<LoadedView> {
+    let repo = &bundle.repo;
+    let head_commit: &gib::object::Commit = &bundle.head_commit;
+    let root_tree: &Tree = &bundle.root_tree;
+    let mailmap: &Mailmap = &bundle.mailmap;
+    let clone_url = &bundle.clone_url;
+    let repo_name = &bundle.repo_name;
+
     match parse_hash(hash) {
         Route::About => Ok(LoadedView::About(build_about(repo, clone_url).await)),
         // The README always comes from HEAD's tree, never a `?h=` ref.
         Route::Readme => Ok(LoadedView::Readme(build_readme(root_tree, repo).await)),
         Route::Summary => Ok(LoadedView::Summary(
-            build_summary(head_commit, repo, clone_url, repo_name, |p| {
+            build_summary(head_commit, repo, mailmap, clone_url, repo_name, |p| {
                 on_partial(LoadedView::Summary(p))
             })
             .await,
@@ -608,31 +612,42 @@ pub(crate) async fn build_route(
                 None => head_commit,
             };
             Ok(LoadedView::Log(
-                build_log(log_commit, repo, &path, offset, head.as_deref(), |p| {
-                    on_partial(LoadedView::Log(p))
-                })
+                build_log(
+                    log_commit,
+                    repo,
+                    mailmap,
+                    &path,
+                    offset,
+                    head.as_deref(),
+                    |p| on_partial(LoadedView::Log(p)),
+                )
                 .await,
             ))
         }
         Route::CommitHead => Ok(LoadedView::Commit(Box::new(
-            build_commit(repo, &format!("{}", head_commit.id()), |p| {
+            build_commit(repo, mailmap, &format!("{}", head_commit.id()), |p| {
                 on_partial(LoadedView::Commit(Box::new(p)))
             })
             .await?,
         ))),
         Route::Commit(sha) => Ok(LoadedView::Commit(Box::new(
-            build_commit(repo, &sha, |p| on_partial(LoadedView::Commit(Box::new(p)))).await?,
+            build_commit(repo, mailmap, &sha, |p| {
+                on_partial(LoadedView::Commit(Box::new(p)))
+            })
+            .await?,
         ))),
-        Route::Refs(RefsRoute::Heads) => Ok(LoadedView::RefsHeads(build_refs_heads(repo).await)),
-        Route::Refs(RefsRoute::Tags) => {
-            Ok(LoadedView::RefsTags(build_refs_tags(repo, repo_name).await))
+        Route::Refs(RefsRoute::Heads) => {
+            Ok(LoadedView::RefsHeads(build_refs_heads(repo, mailmap).await))
         }
-        Route::Refs(RefsRoute::All) => {
-            Ok(LoadedView::RefsAll(build_refs_all(repo, repo_name).await))
-        }
-        Route::Refs(RefsRoute::Tag(tag)) => {
-            Ok(LoadedView::Tag(build_tag(repo, tag, repo_name).await?))
-        }
+        Route::Refs(RefsRoute::Tags) => Ok(LoadedView::RefsTags(
+            build_refs_tags(repo, mailmap, repo_name).await,
+        )),
+        Route::Refs(RefsRoute::All) => Ok(LoadedView::RefsAll(
+            build_refs_all(repo, mailmap, repo_name).await,
+        )),
+        Route::Refs(RefsRoute::Tag(tag)) => Ok(LoadedView::Tag(
+            build_tag(repo, mailmap, tag, repo_name).await?,
+        )),
         Route::Tree { path, head, render } => {
             let resolved_tree;
             let tree: &Tree = if let Some(ref_name) = effective_head(repo, head.as_deref()).await {

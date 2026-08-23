@@ -2,11 +2,12 @@ use crate::{
     cache::CachingRepo,
     render::{RefRow, branches_section, collect_refs, fetch_ref_rows},
 };
+use gib_mailmap::Mailmap;
 use yew::prelude::*;
 
-pub(crate) async fn build_refs_heads(repo: &CachingRepo) -> RefsHeadsProps {
+pub(crate) async fn build_refs_heads(repo: &CachingRepo, mailmap: &Mailmap) -> RefsHeadsProps {
     let (branches, _) = collect_refs(repo).await;
-    let branches = fetch_ref_rows(&branches, repo).await;
+    let branches = fetch_ref_rows(&branches, repo, mailmap).await;
     RefsHeadsProps {
         branches,
         // This page lists every branch, so there is never a "more" link.
