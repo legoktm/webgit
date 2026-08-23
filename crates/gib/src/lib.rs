@@ -70,6 +70,7 @@ pub mod commit_graph;
 pub mod diff;
 pub mod error;
 pub mod file_system;
+pub mod notes;
 pub mod object;
 pub mod prelude;
 pub mod reference;

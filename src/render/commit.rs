@@ -6,6 +6,7 @@ use gib::diff::{DiffEntry, TreeDiff};
 use gib::error::Error as GitError;
 use gib::object::{Object, ObjectId, ObjectIdPrefix, PrefixResolution};
 use gib_patch::{FileDiff, LineKind, PatchLine, PatchMeta, Side};
+use std::cell::RefCell;
 use yew::prelude::*;
 
 #[derive(PartialEq, Clone)]
@@ -61,6 +62,7 @@ pub(crate) struct CommitProps {
     parents: Vec<ParentRef>,
     tree_hash: String,
     message: Vec<MessageSegment>,
+    notes: Option<Vec<MessageSegment>>,
     total_additions: usize,
     total_deletions: usize,
     files: Vec<FileRow>,
@@ -117,6 +119,7 @@ pub(crate) async fn build_commit(
         parents,
         tree_hash: format!("{}", commit.tree()),
         message: linkify_message(&String::from_utf8_lossy(commit.message())),
+        notes: None,
         total_additions: 0,
         total_deletions: 0,
         files: Vec::new(),
@@ -124,43 +127,61 @@ pub(crate) async fn build_commit(
     };
     on_partial(base.clone());
 
-    let Some(parent) = parent_commits.first() else {
-        // Root commit: nothing to diff against.
-        return Ok(CommitProps {
-            complete: true,
-            ..base
-        });
+    let notes = RefCell::new(None);
+    let notes = &notes;
+    let load_notes = async {
+        *notes.borrow_mut() = commit_note(repo, oid).await;
     };
 
-    let parent_tree = repo
-        .lookup_object(parent.tree())
-        .await
-        .context("lookup parent tree")?
-        .tree()
-        .map_err(GitError::from)
-        .context("unexpected object type")?;
-    let td = repo
-        .tree_diff(&parent_tree, &commit_tree)
-        .await
-        .context("tree diff")?;
+    let build_diff = async {
+        let Some(parent) = parent_commits.first() else {
+            // Root commit: nothing to diff against.
+            return anyhow::Ok(Vec::new());
+        };
 
-    let files = stream_diff(repo, &td, |files| {
-        on_partial(CommitProps {
-            total_additions: files.iter().map(FileRow::additions).sum(),
-            total_deletions: files.iter().map(FileRow::deletions).sum(),
-            files: files.to_vec(),
-            ..base.clone()
-        });
-    })
-    .await;
+        let parent_tree = repo
+            .lookup_object(parent.tree())
+            .await
+            .context("lookup parent tree")?
+            .tree()
+            .map_err(GitError::from)
+            .context("unexpected object type")?;
+        let td = repo
+            .tree_diff(&parent_tree, &commit_tree)
+            .await
+            .context("tree diff")?;
+
+        anyhow::Ok(
+            stream_diff(repo, &td, |files| {
+                on_partial(CommitProps {
+                    total_additions: files.iter().map(FileRow::additions).sum(),
+                    total_deletions: files.iter().map(FileRow::deletions).sum(),
+                    files: files.to_vec(),
+                    notes: notes.borrow().clone(),
+                    ..base.clone()
+                });
+            })
+            .await,
+        )
+    };
+
+    let (_, files) = futures::join!(load_notes, build_diff);
+    let files = files?;
 
     Ok(CommitProps {
         total_additions: files.iter().map(FileRow::additions).sum(),
         total_deletions: files.iter().map(FileRow::deletions).sum(),
         files,
+        notes: notes.borrow().clone(),
         complete: true,
         ..base
     })
+}
+
+/// The commit's note, split for rendering, or `None` when it has none.
+async fn commit_note(repo: &CachingRepo, oid: ObjectId) -> Option<Vec<MessageSegment>> {
+    let note = repo.note(oid).await.ok()??;
+    Some(linkify_message(&String::from_utf8_lossy(&note)))
 }
 
 /// Resolve a SHA written into a URL — the one in `#!/commit/…`, or a `?h=`
@@ -415,6 +436,7 @@ pub(crate) fn commit_view(props: &CommitProps) -> Html {
         parents,
         tree_hash,
         message,
+        notes,
         total_additions,
         total_deletions,
         files,
@@ -450,6 +472,11 @@ pub(crate) fn commit_view(props: &CommitProps) -> Html {
             </table>
 
             <pre class="tag-message">{ for message.iter().map(message_segment) }</pre>
+
+            if let Some(notes) = notes {
+                <div class="notes-header">{ "Notes" }</div>
+                <pre class="notes">{ for notes.iter().map(message_segment) }</pre>
+            }
 
             if !files.is_empty() {
                 <>
@@ -644,6 +671,7 @@ mod tests {
             parents: vec![],
             tree_hash: "fedcba98fedcba98fedcba98fedcba98fedcba98".to_string(),
             message: linkify_message(MESSAGE),
+            notes: None,
             total_additions: 0,
             total_deletions: 0,
             files: vec![],
@@ -873,5 +901,24 @@ mod tests {
             })
             .collect();
         insta::assert_snapshot!(render(props));
+    }
+
+    #[test]
+    fn test_commit_html_with_notes() {
+        // A note is rendered under its own heading, below the message and
+        // above the diff, with the same SHA linkification the message gets.
+        let mut props = base_fixture();
+        props.notes = Some(linkify_message(
+            "Cherry-picked from 0123abcd.\nReviewed with <angle> & \"quoted\" text.\n",
+        ));
+        insta::assert_snapshot!(render(props));
+    }
+
+    #[test]
+    fn commit_html_without_notes_has_no_notes_markup() {
+        // The usual case: no notes ref, or none for this commit. Nothing is
+        // drawn for it — not an empty box, and no heading.
+        let html = render(base_fixture());
+        assert!(!html.contains("notes"));
     }
 }

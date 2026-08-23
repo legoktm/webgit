@@ -1,0 +1,31 @@
+---
+source: src/render/commit.rs
+expression: render(props)
+---
+<table class="tag-table">
+<tbody>
+<tr>
+<td class="label">author</td>
+<td>Kunal Mehta &lt;author@example.org&gt; 2026-01-15 12:34:56 +00:00</td>
+</tr>
+<tr>
+<td class="label">committer</td>
+<td>Committer Person &lt;committer@example.org&gt; 2026-01-15 13:00:00 +00:00</td>
+</tr>
+<tr>
+<td class="label">commit</td>
+<td class="mono">0123abcd0123abcd0123abcd0123abcd0123abcd (<a href="#" class="patch-link">patch</a>)</td>
+</tr>
+<tr>
+<td class="label">tree</td>
+<td class="mono">
+<a href="#!/tree?h=0123abcd0123abcd0123abcd0123abcd0123abcd">fedcba98fedcba98fedcba98fedcba98fedcba98</a>
+</td>
+</tr>
+</tbody>
+</table><pre class="tag-message">Fix the thing
+
+Longer explanation with &lt;html&gt; &amp; "chars".
+See <a href="#!/commit/0123abcd">0123abcd</a> for context.</pre><div class="notes-header">Notes</div><pre class="notes">Cherry-picked from <a href="#!/commit/0123abcd">0123abcd</a>.
+Reviewed with &lt;angle&gt; &amp; "quoted" text.
+</pre>

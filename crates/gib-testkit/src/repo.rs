@@ -53,6 +53,11 @@ pub struct TestRepo {
     pub location: TestDirectory,
 }
 
+/// The empty environment for [`TestRepo::run_git_with_env`], spelled out
+/// because an empty iterator literal gives the key and value types nowhere to
+/// be inferred from.
+const NO_ENV: [(&str, &str); 0] = [];
+
 impl TestRepo {
     /// A `git` invocation in this repository, with the ambient identity and
     /// date environment cleared so tests are reproducible.
@@ -75,6 +80,18 @@ impl TestRepo {
         &self,
         args: impl IntoIterator<Item = impl AsRef<OsStr>>,
     ) -> io::Result<Vec<u8>> {
+        self.run_git_with_env(NO_ENV, args)
+    }
+
+    /// [`TestRepo::run_git`] with extra environment variables set for the one
+    /// invocation. `GIT_INDEX_FILE` is the reason this exists: plumbing that
+    /// builds a tree (`update-index` then `write-tree`) needs somewhere to
+    /// build it that isn't the repository's real index.
+    pub fn run_git_with_env(
+        &self,
+        env: impl IntoIterator<Item = (impl AsRef<OsStr>, impl AsRef<OsStr>)>,
+        args: impl IntoIterator<Item = impl AsRef<OsStr>>,
+    ) -> io::Result<Vec<u8>> {
         let args: Vec<OsString> = args
             .into_iter()
             .map(|arg| arg.as_ref().to_os_string())
@@ -84,8 +101,11 @@ impl TestRepo {
         // command, and keeping it lets a failure report what git complained
         // about.
         let mut stderr_file = tempfile()?;
-        let mut git_process = self
-            .git_command()
+        let mut command = self.git_command();
+        for (key, value) in env {
+            command.env(key, value);
+        }
+        let mut git_process = command
             .args(&args)
             .stderr(Stdio::from(stderr_file.try_clone()?))
             .spawn()?;

@@ -600,6 +600,29 @@ a.ref-label:hover {
     line-height: 1.5;
 }
 
+/* ── Notes ───────────────────────────────────────────────────── */
+.notes-header {
+    font-family: var(--mono);
+    font-size: 0.85rem;
+    font-weight: bold;
+    color: var(--text-dim);
+    padding: 1.5rem 0 0.35rem;
+}
+
+.notes {
+    font-family: var(--mono);
+    font-size: 0.85rem;
+    background: var(--bg-alt);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 0.75rem 1rem;
+    margin: 0;
+    overflow-x: auto;
+    white-space: pre;
+    color: var(--text);
+    line-height: 1.5;
+}
+
 /* ── Readme ──────────────────────────────────────────────────── */
 /* Plain text, so hard-wrapped prose keeps its line breaks, but long
    lines wrap rather than forcing the page to scroll sideways. */

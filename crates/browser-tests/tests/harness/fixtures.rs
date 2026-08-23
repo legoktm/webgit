@@ -239,8 +239,17 @@ fn write_history(repo: &TestRepo) -> Result<()> {
     )?;
     repo.run_git(["tag", "v0.9", "HEAD~1"])?;
 
+    // A note on the tip of main, so the commit page has one to render. Added
+    // before any packing, which puts `refs/notes/commits` into packed-refs and
+    // the note's objects into the packfile for the fixtures that get one.
+    repo.run_git(["notes", "add", "-m", HEAD_NOTE])?;
+
     Ok(())
 }
+
+/// The note [`write_history`] attaches to the tip of `main`. Quotes a hash, as
+/// notes tend to, so the commit page's linkification of them is exercised too.
+pub const HEAD_NOTE: &str = "Cherry-picked from 0123abcd. Reviewed by nobody.";
 
 /// Ask `git` what it just built, so assertions can be exact without hard-coding
 /// hashes that a git upgrade could shift.

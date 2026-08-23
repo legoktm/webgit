@@ -53,7 +53,6 @@ As things are implemented, remove them from this list.
   downloaded patch lacks too — a rename is a delete plus an add.
 - **`?id2=`** — diff this commit against something other than its first parent;
   on merges cgit offers a link per parent.
-- **Notes** (`git notes`) display.
 
 ## Refs / tags
 

@@ -306,6 +306,17 @@ async fn check_commit(h: &Harness, repo: &RepoFixture) -> Result<()> {
         "[{}] commit page did not show the author",
         repo.name
     );
+
+    // The note arrives on its own walk of `refs/notes/commits`, after the
+    // header has painted, so wait for its box rather than the text captured
+    // above. Every fixture has one on the tip of main.
+    h.wait_for(".notes").await?;
+    let text = h.content_text().await?;
+    assert!(
+        text.contains(fixtures::HEAD_NOTE),
+        "[{}] commit page did not show the commit's note",
+        repo.name
+    );
     Ok(())
 }
 

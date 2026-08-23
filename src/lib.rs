@@ -390,7 +390,7 @@ fn render_loaded(view: &LoadedView, lines: Option<LineRange>) -> Html {
         LoadedView::Readme(p) => html! { <ReadmeView ..p.clone() /> },
         LoadedView::Summary(p) => html! { <SummaryView ..p.clone() /> },
         LoadedView::Log(p) => html! { <LogView ..p.clone() /> },
-        LoadedView::Commit(p) => html! { <CommitView ..p.clone() /> },
+        LoadedView::Commit(p) => html! { <CommitView ..(**p).clone() /> },
         LoadedView::RefsHeads(p) => html! { <RefsHeadsView ..p.clone() /> },
         LoadedView::RefsTags(p) => html! { <RefsTagsView ..p.clone() /> },
         LoadedView::RefsAll(p) => html! { <RefsAllView ..p.clone() /> },

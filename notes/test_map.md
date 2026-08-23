@@ -272,6 +272,20 @@ Do not add new kinds of tests, just focus on snapshot + browser.
   - a file whose blobs have not loaded — name shown, stats cell showing the ellipsis
     - snapshot:
       - test_commit_html_diff_pending
+  - the commit's git note from `refs/notes/commits`, under a "Notes" heading
+    between the message and the diff, loaded alongside the diff
+    - snapshot:
+      - test_commit_html_with_notes
+    - browser:
+      - commit_renders_real_content
+  - a note's text is linkified like a message, so quoted hashes become links
+    - snapshot:
+      - test_commit_html_with_notes
+  - no notes ref, or none for this commit — no heading and no box
+    - snapshot:
+      - commit_html_without_notes_has_no_notes_markup
+  - the note is found through the fanout git stores it under (flat, `2/38`,
+    `2/2/36`), and an entry of the wrong type at either level is not a note
   - hex-shaped runs of 7-40 characters in the message become commit links
   - all-digit runs are linkified too, since abbreviations may contain no letters
   - a hex run inside a longer word is not linkified

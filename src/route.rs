@@ -563,7 +563,8 @@ pub(crate) enum LoadedView {
     Readme(ReadmeProps),
     Summary(SummaryProps),
     Log(LogProps),
-    Commit(CommitProps),
+
+    Commit(Box<CommitProps>),
     RefsHeads(RefsHeadsProps),
     RefsTags(RefsTagsProps),
     RefsAll(RefsAllProps),
@@ -613,15 +614,15 @@ pub(crate) async fn build_route(
                 .await,
             ))
         }
-        Route::CommitHead => Ok(LoadedView::Commit(
+        Route::CommitHead => Ok(LoadedView::Commit(Box::new(
             build_commit(repo, &format!("{}", head_commit.id()), |p| {
-                on_partial(LoadedView::Commit(p))
+                on_partial(LoadedView::Commit(Box::new(p)))
             })
             .await?,
-        )),
-        Route::Commit(sha) => Ok(LoadedView::Commit(
-            build_commit(repo, &sha, |p| on_partial(LoadedView::Commit(p))).await?,
-        )),
+        ))),
+        Route::Commit(sha) => Ok(LoadedView::Commit(Box::new(
+            build_commit(repo, &sha, |p| on_partial(LoadedView::Commit(Box::new(p)))).await?,
+        ))),
         Route::Refs(RefsRoute::Heads) => Ok(LoadedView::RefsHeads(build_refs_heads(repo).await)),
         Route::Refs(RefsRoute::Tags) => {
             Ok(LoadedView::RefsTags(build_refs_tags(repo, repo_name).await))

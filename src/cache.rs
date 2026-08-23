@@ -6,6 +6,7 @@ use gib::Repo;
 use gib::commit_graph::bloom::BloomSettings;
 use gib::diff::TreeDiff;
 use gib::error::{Error as GitError, GResult};
+use gib::notes::{default_notes_ref, lookup_note};
 use gib::object::{
     Commit, Object, ObjectId, ObjectIdPrefix, ObjectType, PrefixResolution, RawObject, Tree,
 };
@@ -132,6 +133,21 @@ impl CachingRepo {
                 _ => return Ok(None),
             }
         }
+    }
+
+    /// The note `refs/notes/commits` attaches to `id`, or `None` when the
+    /// repository has no notes ref or none for this object.
+    pub(crate) async fn note(&self, id: ObjectId) -> GResult<Option<Vec<u8>>> {
+        let all_refs = self.all_refs().await?;
+        let Some(entry) = all_refs.get(&default_notes_ref()) else {
+            return Ok(None);
+        };
+        let obj = self.lookup_object(entry.commit_target()).await?;
+        let Some(notes_commit) = self.peel_to_commit(&obj).await? else {
+            return Ok(None);
+        };
+        let root = self.lookup_object(notes_commit.tree()).await?.tree()?;
+        lookup_note(&root, id, async |id| self.lookup_object(id).await).await
     }
 
     /// Expand an abbreviated SHA (the kind commit messages quote) into the full

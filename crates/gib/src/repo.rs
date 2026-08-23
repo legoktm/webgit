@@ -3,6 +3,7 @@ use crate::{
     diff::TreeDiff,
     error::{Error, GResult},
     file_system::{Directory, FileSystem, FileSystemError, read_file_if_exists, search_for_files},
+    notes::{note, notes_root},
     object::{Object, ObjectId, ObjectIdPrefix, PrefixResolution, RawObject, Tree},
     prelude::RefExt,
     reference::{
@@ -226,6 +227,20 @@ impl<F: FileSystem> Repo<F> {
             .await?
             .ok_or_else(|| Error::MissingObject(id))?;
         Ok(Object::from_raw(id, raw)?)
+    }
+
+    /// The note attached to `id` in the repository's default notes ref
+    /// (`refs/notes/commits`), or `None` when there is no such ref or it holds
+    /// no note for the object.
+    pub async fn note(&self, id: ObjectId) -> GResult<Option<Vec<u8>>> {
+        note(self, id).await
+    }
+
+    /// The tree a notes ref points at, or `None` if the repository has no such
+    /// ref. Pair it with [`notes::lookup_note`](crate::notes::lookup_note) to
+    /// read notes through a cache of your own instead of [`Repo::note`].
+    pub async fn notes_root(&self, notes_ref: &RefName) -> GResult<Option<Tree>> {
+        notes_root(self, notes_ref).await
     }
 
     /// Expand an abbreviated object ID (see [`ObjectIdPrefix`]) into the full
