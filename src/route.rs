@@ -277,7 +277,7 @@ fn parse_line_number(s: &str) -> Option<usize> {
 /// A plain `strip_prefix` matches mid-word, so `#!/logout` would parse as the
 /// log of a path named `out` and `#!/treex` as the tree of `x`, each rendering
 /// an empty page for a route nobody asked for. Requiring the boundary is what
-/// lets an unrecognised route reach the summary fallback instead.
+/// lets an unrecognised route reach the readme fallback instead.
 fn strip_route_prefix<'a>(hash: &'a str, prefix: &str, seps: &[char]) -> Option<&'a str> {
     let rest = hash.strip_prefix(prefix)?;
     match rest.chars().next() {
@@ -331,9 +331,9 @@ pub(crate) fn parse_index_hash(hash: &str) -> IndexRoute {
 /// route name must be followed by `/`, `?` or the end of the hash:
 ///
 /// ```text
-/// (empty) | #  | #!/summary        the summary
+/// (empty) | #  | #!/readme         the README at HEAD
 /// #!/about                         the about page
-/// #!/readme                        the README at HEAD
+/// #!/summary                       the summary
 /// #!/log[/<path>][?…]              the log; query: h=<rev>, offset=<n>
 /// #!/commit[/]                     HEAD's commit
 /// #!/commit/<sha>                  one commit
@@ -354,21 +354,21 @@ pub(crate) fn parse_index_hash(hash: &str) -> IndexRoute {
 /// distinctions are drawn. To the grammar it is one opaque string whichever it
 /// is.
 ///
-/// Anything else falls back to the summary, so a hand-edited or stale URL lands
+/// Anything else falls back to the readme, so a hand-edited or stale URL lands
 /// on a real page rather than an error.
 pub(crate) fn parse_hash(hash: &str) -> Route {
     // A line anchor selects rows within a view, never a different view, so it
     // comes off before anything below reads the string.
     let (hash, _) = split_line_anchor(hash);
     // most likely scenario
-    if hash == "#!/summary" || hash.is_empty() || hash == "#" {
-        return Route::Summary;
+    if hash == "#!/readme" || hash.is_empty() || hash == "#" {
+        return Route::Readme;
     }
     if hash == "#!/about" {
         return Route::About;
     }
-    if hash == "#!/readme" {
-        return Route::Readme;
+    if hash == "#!/summary" {
+        return Route::Summary;
     }
 
     if let Some(rest) = strip_route_prefix(hash, "#!/log", &['/', '?']) {
@@ -424,8 +424,8 @@ pub(crate) fn parse_hash(hash: &str) -> Route {
         return Route::Refs(subroute);
     }
 
-    // fallback to summary on invalid routes
-    Route::Summary
+    // fallback to the readme on invalid routes
+    Route::Readme
 }
 
 fn parse_tree_rest(rest: &str) -> (String, Option<String>, bool) {
@@ -822,9 +822,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_parse_hash_readme_is_the_default() {
+        assert!(matches!(parse_hash(""), Route::Readme));
+        assert!(matches!(parse_hash("#"), Route::Readme));
+        assert!(matches!(parse_hash("#!/readme"), Route::Readme));
+    }
+
+    #[test]
     fn test_parse_hash_summary() {
-        assert!(matches!(parse_hash(""), Route::Summary));
-        assert!(matches!(parse_hash("#"), Route::Summary));
         assert!(matches!(parse_hash("#!/summary"), Route::Summary));
     }
 
@@ -984,11 +989,6 @@ mod tests {
     #[test]
     fn test_parse_hash_about() {
         assert!(matches!(parse_hash("#!/about"), Route::About));
-    }
-
-    #[test]
-    fn test_parse_hash_readme() {
-        assert!(matches!(parse_hash("#!/readme"), Route::Readme));
     }
 
     #[test]
@@ -1337,7 +1337,7 @@ mod tests {
             "#!/readmes",
             "#!/nonsense",
         ] {
-            assert!(matches!(parse_hash(hash), Route::Summary), "{hash}");
+            assert!(matches!(parse_hash(hash), Route::Readme), "{hash}");
         }
     }
 

@@ -210,7 +210,7 @@ async fn check_line_anchors(h: &Harness, repo: &RepoFixture) -> Result<()> {
 
     // A single-line anchor selects one row and stays on the blob. Before line
     // anchors carried the route with them, a bare `#n2` parsed as no known
-    // route at all and dropped the reader on the summary page.
+    // route at all and dropped the reader on the default page.
     h.open(repo, &format!("{blob}#n2")).await?;
     h.wait_for(".blob-table").await?;
     h.assert_no_error().await?;
