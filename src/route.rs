@@ -287,6 +287,44 @@ fn strip_route_prefix<'a>(hash: &'a str, prefix: &str, seps: &[char]) -> Option<
     }
 }
 
+/// A route on the repository index. Its own grammar rather than a corner of
+/// [`Route`]: the index and a repository are disjoint modes, chosen from the URL
+/// before either hash is read, and neither one's routes exist in the other.
+///
+/// ```text
+/// #!/index[/<section>]             the listing, scrolled to a section
+/// #!/about                         the viewer-wide about page
+/// ```
+pub(crate) enum IndexRoute {
+    /// The listing. `section` is the prefix heading to scroll to, empty for the
+    /// top of the page.
+    Listing {
+        section: String,
+    },
+    About,
+}
+
+/// The hash naming a section of the listing (the whole listing, for an empty
+/// `section`).
+pub(crate) fn index_url(section: &str) -> String {
+    if section.is_empty() {
+        "#!/index".to_string()
+    } else {
+        format!("#!/index/{}", encode_path(section))
+    }
+}
+
+/// Parse `location.hash` on the repository index; see [`IndexRoute`].
+pub(crate) fn parse_index_hash(hash: &str) -> IndexRoute {
+    if hash == "#!/about" {
+        return IndexRoute::About;
+    }
+    let section = strip_route_prefix(hash, "#!/index", &['/'])
+        .map(|rest| decode_path(rest.trim_start_matches('/')))
+        .unwrap_or_default();
+    IndexRoute::Listing { section }
+}
+
 /// Parse `location.hash` into the route it names.
 ///
 /// The grammar, where `<…>` is percent-encoded ([`encode_component`]) and every
@@ -788,6 +826,39 @@ mod tests {
         assert!(matches!(parse_hash(""), Route::Summary));
         assert!(matches!(parse_hash("#"), Route::Summary));
         assert!(matches!(parse_hash("#!/summary"), Route::Summary));
+    }
+
+    /// The section a listing hash names, or `None` for the about page.
+    fn index_section(hash: &str) -> Option<String> {
+        match parse_index_hash(hash) {
+            IndexRoute::Listing { section } => Some(section),
+            IndexRoute::About => None,
+        }
+    }
+
+    #[test]
+    fn test_parse_index_hash() {
+        assert_eq!(index_section(""), Some(String::new()));
+        assert_eq!(index_section("#"), Some(String::new()));
+        assert_eq!(index_section("#!/index"), Some(String::new()));
+        assert_eq!(index_section("#!/index/"), Some(String::new()));
+        assert_eq!(index_section("#!/index/public"), Some("public".to_string()));
+        // A section is a prefix, so it may be several directories deep.
+        assert_eq!(index_section("#!/index/a/b"), Some("a/b".to_string()));
+        assert_eq!(index_section("#!/about"), None);
+        // An unknown route — including a bare `#<section>` anchor, which is not
+        // part of the grammar — is the listing, unscrolled, not an error.
+        assert_eq!(index_section("#!/log"), Some(String::new()));
+        assert_eq!(index_section("#public"), Some(String::new()));
+    }
+
+    #[test]
+    fn test_index_url_round_trips() {
+        assert_eq!(index_url(""), "#!/index");
+        assert_eq!(index_url("public"), "#!/index/public");
+        for section in ["public", "a/b", "with space", "q?x", "100%"] {
+            assert_eq!(index_section(&index_url(section)).as_deref(), Some(section));
+        }
     }
 
     #[test]

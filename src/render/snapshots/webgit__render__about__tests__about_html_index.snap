@@ -1,0 +1,15 @@
+---
+source: src/render/about.rs
+expression: "render(AboutProps { repo: None, ..fixture(true) })"
+---
+<h3 class="summary-heading">gib viewer</h3>
+<p>gib ("git-in-browser") allows you to view repositories entirely client-side. Objects are fetched as needed and stored in IndexedDB, similar to how <code>git</code> normally works.<br>The <a href="https://git.legoktm.com/public/webgit.git/">source code</a> is available (<code>0123abcd</code>).</p>
+<table class="tag-table">
+<tbody>
+<tr>
+<td class="label">cached objects</td>
+<td>5678 (56.78 MB) <button class="clear-btn">(clear)</button>
+</td>
+</tr>
+</tbody>
+</table>

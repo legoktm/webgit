@@ -586,6 +586,69 @@ async fn repository_index_lists_the_fixtures() -> Result<()> {
     h.finish().await
 }
 
+/// The index gets a nav of its own: the listing and an about page carrying only
+/// the viewer-wide half of a repository's — there is no repository to describe.
+#[tokio::test]
+async fn repository_index_tabs_switch_between_listing_and_about() -> Result<()> {
+    let h = Harness::start().await?;
+
+    h.open_index().await?;
+    h.wait_for(".repo-listing").await?;
+
+    let tabs = h.texts_of("#nav .nav-tab").await?;
+    assert_eq!(tabs, ["index", "about"], "the index nav was {tabs:?}");
+
+    h.client
+        .find(Locator::Css("#nav a[href='#!/about']"))
+        .await?
+        .click()
+        .await?;
+    h.wait_for(".tag-table").await?;
+    h.assert_no_error().await?;
+
+    let headings = h.texts_of("#content .summary-heading").await?;
+    assert_eq!(
+        headings,
+        ["gib viewer"],
+        "the index's about page showed a repository section: {headings:?}"
+    );
+    let body = h.content_text().await?;
+    assert!(
+        body.contains("cached objects"),
+        "the index's about page omitted the cache stats: {body}"
+    );
+
+    // ...and the index tab comes back to the listing.
+    h.client
+        .find(Locator::Css("#nav a[href='#!/index']"))
+        .await?
+        .click()
+        .await?;
+    h.wait_for(".repo-listing").await?;
+    h.assert_no_error().await?;
+
+    h.finish().await
+}
+
+/// The prefix in a repository's header links back to the index, at the section
+/// that repository is listed under.
+#[tokio::test]
+async fn repo_header_prefix_links_to_its_index_section() -> Result<()> {
+    let h = Harness::start().await?;
+
+    h.open(&h.fixtures.basic, "#!/summary").await?;
+    h.wait_for("#repo-path-name a").await?.click().await?;
+
+    h.wait_for(".repo-listing").await?;
+    h.assert_no_error().await?;
+    assert_eq!(h.hash().await?, "#!/index/repos");
+    // The section the hash names has to be an element, or there is nothing for
+    // the listing to scroll to.
+    h.wait_for(".repo-section #repos").await?;
+
+    h.finish().await
+}
+
 /// Snapshots are built in the browser and handed to the user as a blob
 /// download — there is no server-side archive endpoint to stand in for it.
 #[tokio::test]

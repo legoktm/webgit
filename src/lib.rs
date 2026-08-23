@@ -16,7 +16,7 @@ use fs::{HttpDirectory, HttpFilesystem};
 use gib::Repo;
 use gib::object::{Commit, Tree, TreeEntryType};
 use gib_mailmap::Mailmap;
-use render::about::AboutView;
+use render::about::{AboutProps, AboutView, build_index_about};
 use render::blob::BlobView;
 use render::commit::CommitView;
 use render::listing::{ListingProps, ListingView, parse_listing};
@@ -30,8 +30,8 @@ use render::summary::SummaryView;
 use render::tag::TagView;
 use render::tree::TreeView;
 use route::{
-    LineRange, LoadedView, RefKind, Route, active_tab, build_route, encode_component, log_url,
-    parse_hash, resolve_display_head,
+    IndexRoute, LineRange, LoadedView, RefKind, Route, active_tab, build_route, encode_component,
+    index_url, log_url, parse_hash, parse_index_hash, resolve_display_head,
 };
 use stats::format_stats;
 use std::cell::{Cell, RefCell};
@@ -252,16 +252,18 @@ fn app() -> Html {
         Content::Index(_) => Some("repositories".to_string()),
         Content::Loading | Content::Error(_) => None,
     };
-    // Native fragment navigation runs before the async listing has created its
-    // section elements. Repeat that navigation after Yew mounts the listing.
+    // `#!/index/<section>` names a section heading of the listing, which only
+    // exists once the (async) listing has mounted — and which the browser would
+    // not scroll to on its own regardless, the hash not being the heading's id.
     {
         let listing_loaded = matches!(&*content, Content::Index(_));
         let hash = (*hash).clone();
         use_effect_with((listing_loaded, hash), move |(listing_loaded, hash)| {
             if *listing_loaded
-                && let Some(anchor) = hash.strip_prefix('#').filter(|anchor| !anchor.is_empty())
+                && let IndexRoute::Listing { section } = parse_index_hash(hash)
+                && !section.is_empty()
                 && let Some(document) = web_sys::window().and_then(|window| window.document())
-                && let Some(target) = document.get_element_by_id(&route::decode_component(anchor))
+                && let Some(target) = document.get_element_by_id(&section)
             {
                 target.scroll_into_view();
             }
@@ -275,7 +277,7 @@ fn app() -> Html {
             let suffix = suffix.to_owned();
             html! {
                 <>
-                    <a href={ format!("/#{prefix}") }>{ prefix }</a>
+                    <a href={ format!("/{}", index_url(&prefix)) }>{ prefix }</a>
                     { " / " }
                     <span>{ suffix }</span>
                 </>
@@ -320,6 +322,8 @@ fn app() -> Html {
             if is_repo {
                 <NavBar hash={(*hash).clone()} />
                 <FetchStats />
+            } else {
+                <IndexNavBar hash={(*hash).clone()} />
             }
             { render_path_bar(&path_bar) }
 
@@ -330,12 +334,55 @@ fn app() -> Html {
                         Content::Repo(b) => {
                             html! { <RouteView bundle={b.clone()} hash={(*hash).clone()} /> }
                         }
-                        Content::Index(props) => html! { <ListingView ..props.clone() /> },
+                        Content::Index(props) => html! {
+                            <IndexView listing={props.clone()} hash={(*hash).clone()} />
+                        },
                         Content::Error(e) => html! { <p class="msg error">{ e.clone() }</p> },
                     }
                 }
             </div>
         </>
+    }
+}
+
+/// Props for [`IndexView`]: the parsed listing, and the hash deciding which of
+/// the index's two tabs is showing.
+#[derive(Properties, PartialEq, Clone)]
+struct IndexViewProps {
+    listing: ListingProps,
+    hash: String,
+}
+
+/// The repository index's content: the listing, or the about page when its tab
+/// is selected. There is no repository to build a route against, so this is a
+/// plain two-way switch rather than a [`RouteView`].
+#[function_component(IndexView)]
+fn index_view(props: &IndexViewProps) -> Html {
+    if matches!(parse_index_hash(&props.hash), IndexRoute::About) {
+        html! { <IndexAboutView /> }
+    } else {
+        html! { <ListingView ..props.listing.clone() /> }
+    }
+}
+
+/// The about page with no repository behind it. Its figures come from
+/// IndexedDB, so they're resolved on mount — in a component of its own, so the
+/// hooks that do it don't run while the listing is what's showing.
+#[function_component(IndexAboutView)]
+fn index_about_view() -> Html {
+    let props = use_state(|| None::<AboutProps>);
+    {
+        let props = props.clone();
+        use_effect_with((), move |_| {
+            wasm_bindgen_futures::spawn_local(async move {
+                props.set(Some(build_index_about().await));
+            });
+            || ()
+        });
+    }
+    match &*props {
+        Some(p) => html! { <AboutView ..p.clone() /> },
+        None => html! { <p class="msg">{ render::loading_dots() }</p> },
     }
 }
 
@@ -505,11 +552,21 @@ fn fetch_stats() -> Html {
     html! { <div id="fetch-stats">{ (*text).clone() }</div> }
 }
 
-/// Props for [`NavBar`]: the current location hash, from which the active tab
-/// and the head-scoped log/tree hrefs are derived.
+/// Props for [`NavBar`] and [`IndexNavBar`]: the current location hash, from
+/// which the active tab and the head-scoped log/tree hrefs are derived.
 #[derive(Properties, PartialEq, Clone)]
 struct NavBarProps {
     hash: String,
+}
+
+/// One nav tab, lit when it's the one the current route lives under.
+fn nav_tab(href: String, label: &'static str, active: bool) -> Html {
+    let class = if active {
+        classes!("nav-tab", "active")
+    } else {
+        classes!("nav-tab")
+    };
+    html! { <a href={href} {class}>{ label }</a> }
 }
 
 /// The repository nav tabs. Active highlight and the log/tree hrefs (scoped to
@@ -530,12 +587,7 @@ fn nav_bar(props: &NavBarProps) -> Html {
         None => "#!/tree".to_string(),
     };
     let tab = |base: &'static str, href: String, label: &'static str| -> Html {
-        let class = if base == active {
-            classes!("nav-tab", "active")
-        } else {
-            classes!("nav-tab")
-        };
-        html! { <a href={href} {class}>{ label }</a> }
+        nav_tab(href, label, base == active)
     };
     html! {
         <nav id="nav">
@@ -546,6 +598,20 @@ fn nav_bar(props: &NavBarProps) -> Html {
             { tab("#!/tree", tree_href, "tree") }
             { tab("#!/commit", "#!/commit".to_string(), "commit") }
             { tab("#!/about", "#!/about".to_string(), "about") }
+        </nav>
+    }
+}
+
+/// The repository index's nav: the listing itself, and the about page's
+/// viewer-wide half. Its own component rather than a mode of [`NavBar`], whose
+/// every tab is a route inside a repository.
+#[function_component(IndexNavBar)]
+fn index_nav_bar(props: &NavBarProps) -> Html {
+    let about = matches!(parse_index_hash(&props.hash), IndexRoute::About);
+    html! {
+        <nav id="nav">
+            { nav_tab(index_url(""), "index", !about) }
+            { nav_tab("#!/about".to_string(), "about", about) }
         </nav>
     }
 }
@@ -800,6 +866,34 @@ mod tests {
         // A subtree on a branch: tree active, and both the log and tree tabs
         // carry the current path / `?h=`.
         insta::assert_snapshot!(render_nav("#!/tree/src?h=main"));
+    }
+
+    /// The repository index's nav, which has only the two tabs.
+    fn render_index_nav(hash: &str) -> String {
+        let hash = hash.to_string();
+        let html = futures::executor::block_on(
+            yew::ServerRenderer::<IndexNavBar>::with_props(move || NavBarProps { hash })
+                .hydratable(false)
+                .render(),
+        );
+        html.replace("><", ">\n<")
+    }
+
+    #[test]
+    fn nav_index() {
+        // The listing, reached by its own tab...
+        insta::assert_snapshot!(render_index_nav(&index_url("")));
+    }
+
+    #[test]
+    fn nav_index_section_anchor() {
+        // ...and scrolled to a section, which is still the listing.
+        insta::assert_snapshot!(render_index_nav(&index_url("public")));
+    }
+
+    #[test]
+    fn nav_index_about() {
+        insta::assert_snapshot!(render_index_nav("#!/about"));
     }
 
     #[test]

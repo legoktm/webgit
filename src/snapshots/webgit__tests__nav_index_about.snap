@@ -1,0 +1,8 @@
+---
+source: src/lib.rs
+expression: "render_index_nav(\"#!/about\")"
+---
+<nav id="nav">
+<a href="#!/index" class="nav-tab">index</a>
+<a href="#!/about" class="nav-tab active">about</a>
+</nav>
