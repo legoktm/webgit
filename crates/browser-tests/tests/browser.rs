@@ -346,6 +346,8 @@ async fn check_root_commit(h: &Harness, repo: &RepoFixture) -> Result<()> {
         repo.name
     );
 
+    h.wait_for(".patch-link").await?;
+
     let text = h.content_text().await?;
     // Added files, so the diff bodies are all `/dev/null` on the left.
     for path in &expected {
