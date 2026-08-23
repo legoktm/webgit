@@ -52,6 +52,7 @@ jobs:
           # `git_version!()` in src/render/about.rs bakes `git describe` into
           # the wasm, so the build needs the full history and its tags.
           fetch-depth: 0
+          submodules: true
 
       - name: Install the pinned Rust toolchain
         run: rustup toolchain install

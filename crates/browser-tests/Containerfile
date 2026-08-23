@@ -12,6 +12,7 @@ ARG TRUNK_VERSION=0.21.14
 # same way below where their URLs are constructed.
 ARG GECKODRIVER_SHA256=e815130ea95983e162ae91843b48d3a3ce991735635fce83a647afde21e09f7e
 
+# clang          — cc-rs builds gib-xdiff's vendored C for wasm32 with it
 # firefox        — the browser under test
 # git            — gib-testkit builds every fixture by shelling out to it
 # python3        — scripts/postbuild.py, the trunk post-build hook
@@ -20,6 +21,7 @@ ARG GECKODRIVER_SHA256=e815130ea95983e162ae91843b48d3a3ce991735635fce83a647afde2
 # dbus-glib etc. — Firefox refuses to start headless without these
 RUN dnf install -y --setopt=install_weak_deps=False \
         ca-certificates \
+        clang \
         curl \
         dbus-glib \
         findutils \
