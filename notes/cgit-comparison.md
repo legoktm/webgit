@@ -40,8 +40,6 @@ As things are implemented, remove them from this list.
 ## Blob
 
 - **Syntax highlighting** (cgit's `source-filter`, e.g. highlight/pygments).
-- **Line-range anchors** — `#n5-n10` style range selection; webgit has
-  single-line `#n<N>` anchors only (`src/render/blob.rs:355-364`).
 - **Mimetype-driven inline rendering** — cgit maps extensions to types
   generally; webgit inlines PNG/JPEG/GIF only, everything else is "binary".
 - **HTML serving** (`enable-html-serving`) — deliberately unsafe, probably a

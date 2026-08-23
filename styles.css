@@ -314,8 +314,11 @@ code {
     color: var(--link);
 }
 
-.blob-table tr:target td,
-.blob-table tr:target td.lno a {
+/* The selected lines, from the URL's #n<A>[-n<B>] anchor. A class rather than
+   :target because the anchor is a suffix inside the routing fragment, so no
+   element's id ever equals location.hash and :target never matches. */
+.blob-table tr.hl td,
+.blob-table tr.hl td.lno a {
     background: var(--bg-alt);
     color: var(--link);
 }

@@ -7,19 +7,19 @@ expression: "render(b\"fn main() {\\n    println!(\\\"hello\\\");\\n}\\n\")"
 <tbody>
 <tr id="n1">
 <td class="lno">
-<a href="#n1">1</a>
+<a href="#!/tree/file.txt#n1" data-n="1">1</a>
 </td>
 <td class="code">fn main() {</td>
 </tr>
 <tr id="n2">
 <td class="lno">
-<a href="#n2">2</a>
+<a href="#!/tree/file.txt#n2" data-n="2">2</a>
 </td>
 <td class="code">    println!("hello");</td>
 </tr>
 <tr id="n3">
 <td class="lno">
-<a href="#n3">3</a>
+<a href="#!/tree/file.txt#n3" data-n="3">3</a>
 </td>
 <td class="code">}</td>
 </tr>

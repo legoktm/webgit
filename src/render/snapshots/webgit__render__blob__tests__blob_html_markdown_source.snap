@@ -8,20 +8,20 @@ expression: "render_path(\"docs/setup.md\", b\"# Setup\\n\\nRun it.\\n\")"
 <tbody>
 <tr id="n1">
 <td class="lno">
-<a href="#n1">1</a>
+<a href="#!/tree/docs/setup.md#n1" data-n="1">1</a>
 </td>
 <td class="code"># Setup</td>
 </tr>
 <tr id="n2">
 <td class="lno">
-<a href="#n2">2</a>
+<a href="#!/tree/docs/setup.md#n2" data-n="2">2</a>
 </td>
 <td class="code">
 </td>
 </tr>
 <tr id="n3">
 <td class="lno">
-<a href="#n3">3</a>
+<a href="#!/tree/docs/setup.md#n3" data-n="3">3</a>
 </td>
 <td class="code">Run it.</td>
 </tr>

@@ -8,7 +8,7 @@ expression: "render_with_url(\"src/main.rs\", b\"fn main() {}\\n\", \"blob:fake\
 <tbody>
 <tr id="n1">
 <td class="lno">
-<a href="#n1">1</a>
+<a href="#!/tree/src/main.rs#n1" data-n="1">1</a>
 </td>
 <td class="code">fn main() {}</td>
 </tr>

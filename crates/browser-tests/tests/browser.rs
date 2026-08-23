@@ -69,6 +69,7 @@ route_test!(summary_renders_real_content, check_summary);
 route_test!(log_renders_real_content, check_log);
 route_test!(tree_renders_real_content, check_tree);
 route_test!(blob_renders_real_content, check_blob);
+route_test!(blob_line_anchors_select_lines, check_line_anchors);
 route_test!(commit_renders_real_content, check_commit);
 route_test!(refs_render_real_content, check_refs);
 route_test!(about_renders_real_content, check_about);
@@ -196,6 +197,91 @@ async fn check_blob(h: &Harness, repo: &RepoFixture) -> Result<()> {
         repo.name
     );
     Ok(())
+}
+
+/// Line anchors, which only exist as real browser behaviour: the fragment is
+/// the router's input, so `#n2` has to arrive as a suffix on the route rather
+/// than as a fragment of its own, and nothing about that is observable from a
+/// server-rendered string.
+async fn check_line_anchors(h: &Harness, repo: &RepoFixture) -> Result<()> {
+    // The fixture's src/lib.rs is the three-line file check_blob pins down.
+    let blob = "#!/tree/src/lib.rs";
+
+    // A single-line anchor selects one row and stays on the blob. Before line
+    // anchors carried the route with them, a bare `#n2` parsed as no known
+    // route at all and dropped the reader on the summary page.
+    h.open(repo, &format!("{blob}#n2")).await?;
+    h.wait_for(".blob-table").await?;
+    h.assert_no_error().await?;
+    let selected = h.texts_of(".blob-table tr.hl td.code").await?;
+    assert_eq!(
+        selected.len(),
+        1,
+        "[{}] #n2 selected {selected:?}, not one line",
+        repo.name
+    );
+
+    // A range selects every line between its ends.
+    h.open(repo, &format!("{blob}#n1-n3")).await?;
+    h.wait_for(".blob-table tr.hl").await?;
+    let selected = h.texts_of(".blob-table tr.hl td.code").await?;
+    assert_eq!(
+        selected.len(),
+        3,
+        "[{}] #n1-n3 selected {selected:?}, not three lines",
+        repo.name
+    );
+
+    // Clicking a line number selects it, without leaving the blob.
+    h.open(repo, blob).await?;
+    h.wait_for(".blob-table").await?;
+    let lines = h
+        .client
+        .find_all(Locator::Css(".blob-table td.lno a"))
+        .await?;
+    lines[1].click().await?;
+    await_hash(h, &format!("{blob}#n2")).await?;
+    h.wait_for(".blob-table").await?;
+    h.assert_no_error().await?;
+
+    // Shift-clicking another extends that selection into a range. Dispatched
+    // rather than driven through the actions API: the modifier is the whole
+    // point, and a synthetic bubbling click reaches Yew's delegated listener
+    // the same way a real one does.
+    h.client
+        .execute(
+            "document.querySelectorAll('.blob-table td.lno a')[2].dispatchEvent(\
+             new MouseEvent('click', {bubbles: true, cancelable: true, shiftKey: true}));",
+            vec![],
+        )
+        .await?;
+    await_hash(h, &format!("{blob}#n2-n3")).await?;
+    let selected = h.texts_of(".blob-table tr.hl td.code").await?;
+    assert_eq!(
+        selected.len(),
+        2,
+        "[{}] shift-click selected {selected:?}, not two lines",
+        repo.name
+    );
+
+    Ok(())
+}
+
+/// Block until the location hash ends with `expected`. The hash is set from a
+/// click handler, so it changes a turn or two after the click returns.
+async fn await_hash(h: &Harness, expected: &str) -> Result<()> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let mut last = String::new();
+    loop {
+        last = h.hash().await.unwrap_or(last);
+        if last == expected {
+            return Ok(());
+        }
+        if std::time::Instant::now() >= deadline {
+            anyhow::bail!("hash is {last}, waited for {expected}");
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
 }
 
 async fn check_commit(h: &Harness, repo: &RepoFixture) -> Result<()> {

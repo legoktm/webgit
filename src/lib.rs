@@ -29,8 +29,8 @@ use render::summary::SummaryView;
 use render::tag::TagView;
 use render::tree::TreeView;
 use route::{
-    LoadedView, RefKind, Route, active_tab, build_route, encode_component, log_url, parse_hash,
-    resolve_display_head,
+    LineRange, LoadedView, RefKind, Route, active_tab, build_route, encode_component, log_url,
+    parse_hash, resolve_display_head,
 };
 use stats::format_stats;
 use std::cell::{Cell, RefCell};
@@ -321,13 +321,15 @@ struct RouteViewProps {
 #[function_component(RouteView)]
 fn route_view(props: &RouteViewProps) -> Html {
     let RouteViewProps { bundle, hash } = props;
+    let (route, lines) = route::split_line_anchor(hash);
+    let route = route.to_string();
     // `None` while resolving; `Some(Ok)` rendered; `Some(Err)` an error message.
     let loaded = use_state(|| None::<Result<LoadedView, String>>);
 
     {
         let loaded = loaded.clone();
         use_effect_with(
-            (hash.clone(), bundle.clone()),
+            (route, bundle.clone()),
             move |(hash, bundle): &(String, RepoBundle)| {
                 loaded.set(None);
                 // Guard against a stale in-flight resolution overwriting a newer
@@ -376,13 +378,13 @@ fn route_view(props: &RouteViewProps) -> Html {
     match &*loaded {
         None => html! { <p class="msg">{ render::loading_dots() }</p> },
         Some(Err(e)) => html! { <p class="msg error">{ e.clone() }</p> },
-        Some(Ok(view)) => render_loaded(view),
+        Some(Ok(view)) => render_loaded(view, lines),
     }
 }
 
 /// Render a resolved [`LoadedView`] by handing its props to the matching view
 /// component (the props spread `..p` provides every field at once).
-fn render_loaded(view: &LoadedView) -> Html {
+fn render_loaded(view: &LoadedView, lines: Option<LineRange>) -> Html {
     match view {
         LoadedView::About(p) => html! { <AboutView ..p.clone() /> },
         LoadedView::Readme(p) => html! { <ReadmeView ..p.clone() /> },
@@ -394,7 +396,11 @@ fn render_loaded(view: &LoadedView) -> Html {
         LoadedView::RefsAll(p) => html! { <RefsAllView ..p.clone() /> },
         LoadedView::Tag(p) => html! { <TagView ..p.clone() /> },
         LoadedView::Tree(p) => html! { <TreeView ..p.clone() /> },
-        LoadedView::Blob(p) => html! { <BlobView ..p.clone() /> },
+        LoadedView::Blob(p) => {
+            let mut p = p.clone();
+            p.lines = lines;
+            html! { <BlobView ..p /> }
+        }
         LoadedView::Snapshot(p) => html! { <SnapshotView ..p.clone() /> },
         LoadedView::NotFound(path) => html! {
             <p class="msg error">{ "Not found: " }<code>{ path.clone() }</code></p>

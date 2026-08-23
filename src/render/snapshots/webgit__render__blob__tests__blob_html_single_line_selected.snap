@@ -1,0 +1,27 @@
+---
+source: src/render/blob.rs
+expression: "render_selection(\"src/main.rs\", b\"one\\ntwo\\nthree\\n\", None, false,\nSome(LineRange::single(2)),)"
+---
+<div class="blob-info">blob: e69de29bb2d1d6434b8b29ae775ad8c2e48c5391</div>
+<table class="blob-table">
+<tbody>
+<tr id="n1">
+<td class="lno">
+<a href="#!/tree/src/main.rs#n1" data-n="1">1</a>
+</td>
+<td class="code">one</td>
+</tr>
+<tr id="n2" class="hl">
+<td class="lno">
+<a href="#!/tree/src/main.rs#n2" data-n="2">2</a>
+</td>
+<td class="code">two</td>
+</tr>
+<tr id="n3">
+<td class="lno">
+<a href="#!/tree/src/main.rs#n3" data-n="3">3</a>
+</td>
+<td class="code">three</td>
+</tr>
+</tbody>
+</table>

@@ -1,8 +1,9 @@
 use crate::render::markdown::{LinkBase, MarkdownFrame, markdown_to_html};
 use crate::render::{is_binary, use_object_url};
-use crate::route::tree_url;
+use crate::route::{LineRange, tree_url};
 use gib::object::ObjectId;
 use std::rc::Rc;
+use wasm_bindgen::JsCast;
 use yew::prelude::*;
 
 /// The largest blob rendered as text, in bytes.
@@ -159,6 +160,16 @@ pub(crate) struct BlobProps {
     pub content: BlobContent,
     /// The link to the blob's other view, for a markdown blob that has one.
     pub alt_view: Option<AltView>,
+    /// This blob's own source-view URL, without a line anchor: what every line
+    /// number's link is built on top of.
+    ///
+    /// A line anchor has to carry the whole route with it
+    pub source_url: String,
+    /// The lines the URL's `#n…` anchor selected, highlighted in the gutter and
+    /// scrolled to on arrival. Set by the router rather than by
+    /// [`build_blob_props`], because changing the selection must not re-resolve
+    /// the route: the blob is already on screen and only its highlight moves.
+    pub lines: Option<LineRange>,
 }
 
 /// Whether a file name is one this view will render as markdown.
@@ -192,10 +203,11 @@ pub(crate) fn build_blob_props(
         dir: path.rsplit_once('/').map_or("", |(dir, _)| dir).to_string(),
         self_url: tree_url(path, head, true),
     };
+    let source_url = tree_url(path, head, false);
     let content = blob_content(filename, &data, render.then_some(&base));
     let alt_view = match &content {
         BlobContent::Markdown(_) => Some(AltView {
-            url: tree_url(path, head, false),
+            url: source_url.clone(),
             label: "source",
         }),
         // Only from the source view, and only when the rendered view would
@@ -212,6 +224,8 @@ pub(crate) fn build_blob_props(
         name: filename.to_string(),
         content,
         alt_view,
+        source_url,
+        lines: None,
         data: Rc::new(data),
     }
 }
@@ -288,7 +302,77 @@ fn count_lines(data: &[u8]) -> usize {
 #[function_component(BlobView)]
 pub(crate) fn blob_view_component(props: &BlobProps) -> Html {
     let url = use_object_url(props.content.mime(), &props.data);
+    use_selection_scroll(props.lines.map(|lines| lines.start));
     blob_view(props, &url)
+}
+
+/// Bring the selected lines into view once they are on screen.
+///
+/// The browser would do this itself for a real fragment, but a line anchor is a
+/// suffix inside the routing fragment rather than a fragment of its own, so no
+/// element's id ever matches `location.hash` and native navigation has nothing
+/// to act on. The rows also arrive after the route resolves, which is late
+/// enough that even a matching id would have been missed.
+///
+/// Only the range's first line is scrolled to, and only when *it* changes —
+/// which is also why the effect keys on the start rather than on the whole
+/// range. The start is the line the reader asked for, and a range taller than
+/// the viewport should be positioned by its top rather than centred on nothing
+/// in particular; keying on it means extending a selection downwards leaves the
+/// page where it is, since a shift-click grows the range without moving the end
+/// the reader anchored it to.
+#[hook]
+fn use_selection_scroll(start: Option<usize>) {
+    use_effect_with(start, |start| {
+        if let Some(start) = *start
+            && let Some(document) = web_sys::window().and_then(|window| window.document())
+            && let Some(target) = document.get_element_by_id(&format!("n{start}"))
+        {
+            target.scroll_into_view();
+        }
+        || ()
+    });
+}
+
+/// The click handler shared by every line number in the gutter.
+///
+/// One callback for the whole table rather than one per row: a blob may run to
+/// [`MAX_BLOB_LINES`] rows, and a closure per row would allocate 20 000 of them
+/// to serve the one click that ever fires. The line number comes back off the
+/// clicked element's `data-n` instead of being captured.
+///
+/// A plain click is left to the browser — the `href` already names the right
+/// URL. Only a shift-click is intercepted, to extend the current selection into
+/// a range the way every other code viewer does; with nothing selected yet it
+/// falls through to selecting the clicked line alone.
+fn line_click_handler(source_url: &str, lines: Option<LineRange>) -> Callback<MouseEvent> {
+    let source_url = source_url.to_string();
+    Callback::from(move |event: MouseEvent| {
+        if !event.shift_key() {
+            return;
+        }
+        let Some(n) = event
+            .target()
+            .and_then(|target| target.dyn_into::<web_sys::Element>().ok())
+            .and_then(|element| element.get_attribute("data-n"))
+            .and_then(|n| n.parse::<usize>().ok())
+        else {
+            return;
+        };
+        // Extend from the anchor the reader last set, not from whichever end of
+        // the range is nearer: shift-clicking twice should be able to shrink a
+        // range as well as grow it.
+        let range = match lines {
+            Some(lines) => LineRange::spanning(lines.start, n),
+            None => LineRange::single(n),
+        };
+        event.prevent_default();
+        if let Some(window) = web_sys::window() {
+            let _ = window
+                .location()
+                .set_hash(&format!("{source_url}{}", range.anchor()));
+        }
+    })
 }
 
 /// The blob view's markup. `url` is an object URL over `props.data`, or empty
@@ -301,8 +385,11 @@ pub(crate) fn blob_view(props: &BlobProps, url: &str) -> Html {
         name,
         content,
         alt_view,
+        source_url,
+        lines: selected,
         data: _,
     } = props;
+    let on_line_click = line_click_handler(source_url, *selected);
 
     html! {
         <>
@@ -323,7 +410,14 @@ pub(crate) fn blob_view(props: &BlobProps, url: &str) -> Html {
                 BlobContent::Text(lines) => html! {
                     <table class="blob-table">
                         <tbody>
-                            { for lines.iter().enumerate().map(|(i, line)| blob_row(i + 1, line)) }
+                            { for lines.iter().enumerate().map(|(i, line)| {
+                                let n = i + 1;
+                                blob_row(n, line, BlobRowLink {
+                                    selected: selected.is_some_and(|s| s.contains(n)),
+                                    source_url,
+                                    on_click: &on_line_click,
+                                })
+                            }) }
                         </tbody>
                     </table>
                 },
@@ -352,12 +446,37 @@ pub(crate) fn blob_view(props: &BlobProps, url: &str) -> Html {
     }
 }
 
-fn blob_row(n: usize, line: &str) -> Html {
+/// What a row needs to link its own line number, beyond the number itself.
+/// Grouped so [`blob_row`] keeps one parameter per idea rather than a row of
+/// positional arguments a caller can transpose.
+struct BlobRowLink<'a> {
+    /// Whether this line falls inside the selected range.
+    selected: bool,
+    /// The blob's source-view URL, which the line anchor is appended to.
+    source_url: &'a str,
+    /// The gutter's shared shift-click handler.
+    on_click: &'a Callback<MouseEvent>,
+}
+
+/// One source line: its number in the gutter, linking to itself, and its text.
+///
+/// The link is the blob's whole URL plus a `#n…` suffix, not a bare `#n5`: the
+/// app routes on the fragment, so a bare one would parse as no known route and
+/// drop the reader on the summary page. `data-n` is what the shared click
+/// handler reads the line number back out of.
+fn blob_row(n: usize, line: &str, link: BlobRowLink<'_>) -> Html {
+    let BlobRowLink {
+        selected,
+        source_url,
+        on_click,
+    } = link;
     let row_id = format!("n{n}");
-    let href = format!("#n{n}");
+    let href = format!("{source_url}{}", LineRange::single(n).anchor());
     html! {
-        <tr id={row_id}>
-            <td class="lno"><a href={href}>{ n }</a></td>
+        <tr id={row_id} class={classes!(selected.then_some("hl"))}>
+            <td class="lno">
+                <a href={href} data-n={n.to_string()} onclick={on_click.clone()}>{ n }</a>
+            </td>
             <td class="code">{ line }</td>
         </tr>
     }
@@ -407,13 +526,27 @@ mod tests {
     /// As [`render_path`], but for a blob reached through a `?h=` ref and/or
     /// with `?render=1` — the inputs that decide the alt-view link.
     fn render_route(path: &str, data: &[u8], head: Option<&str>, render: bool) -> String {
+        render_selection(path, data, head, render, None)
+    }
+
+    /// As [`render_route`], but with `lines` selected — the field the router
+    /// sets after [`build_blob_props`] has run.
+    fn render_selection(
+        path: &str,
+        data: &[u8],
+        head: Option<&str>,
+        render: bool,
+        lines: Option<LineRange>,
+    ) -> String {
         let id = ObjectId::from_hex(b"e69de29bb2d1d6434b8b29ae775ad8c2e48c5391").unwrap();
         let path = path.to_string();
         let data = data.to_vec();
         let head = head.map(String::from);
         let html = futures::executor::block_on(
             yew::ServerRenderer::<BlobView>::with_props(move || {
-                build_blob_props(id, &path, data, head.as_deref(), render)
+                let mut props = build_blob_props(id, &path, data, head.as_deref(), render);
+                props.lines = lines;
+                props
             })
             .hydratable(false)
             .render(),
@@ -499,6 +632,65 @@ mod tests {
     #[test]
     fn test_blob_html_image_with_url() {
         insta::assert_snapshot!(render_with_url("docs/logo.png", PNG, "blob:fake-url"));
+    }
+
+    /// A range selects every line between its ends, inclusive, and leaves the
+    /// rest of the table alone.
+    #[test]
+    fn test_blob_html_line_range_selected() {
+        insta::assert_snapshot!(render_selection(
+            "src/main.rs",
+            b"one\ntwo\nthree\nfour\nfive\n",
+            None,
+            false,
+            Some(LineRange { start: 2, end: 4 }),
+        ));
+    }
+
+    /// A single-line anchor is a range whose ends are equal, so it highlights
+    /// exactly the one row.
+    #[test]
+    fn test_blob_html_single_line_selected() {
+        insta::assert_snapshot!(render_selection(
+            "src/main.rs",
+            b"one\ntwo\nthree\n",
+            None,
+            false,
+            Some(LineRange::single(2)),
+        ));
+    }
+
+    /// Every line's link carries the blob's whole route, including the `?h=`
+    /// it was reached through. A bare `#n2` would name no route at all and land
+    /// the reader on the summary page.
+    #[test]
+    fn test_blob_line_links_carry_the_route() {
+        let html = render_route("src/main.rs", b"one\ntwo\n", Some("v1.0"), false);
+        assert!(
+            html.contains(r##"href="#!/tree/src/main.rs?h=v1.0#n2""##),
+            "line link dropped the route: {html}"
+        );
+    }
+
+    /// A selection outside the file selects nothing rather than clamping to the
+    /// last line: `#n900` on a 3-line file is a stale link, and highlighting an
+    /// arbitrary row would misrepresent it as the one that was asked for.
+    #[test]
+    fn test_blob_selection_past_end_of_file() {
+        let html = render_selection(
+            "src/main.rs",
+            b"one\ntwo\nthree\n",
+            None,
+            false,
+            Some(LineRange {
+                start: 900,
+                end: 902,
+            }),
+        );
+        assert!(
+            !html.contains(r#"class="hl""#),
+            "selected a row that doesn't exist: {html}"
+        );
     }
 
     /// Every classification gets the same download link, including the ones
