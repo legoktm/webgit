@@ -27,7 +27,10 @@
 
 use gib_hash::ObjectId;
 use gib_object::{Commit, TreeEntryType};
-use similar::{ChangeTag, TextDiffConfig};
+use gib_xdiff::unified;
+
+/// Lines of context around each hunk (git's default)
+const CONTEXT: usize = 3;
 
 /// How to read a line of a patch: which of the four things it is that a diff
 /// viewer colours differently.
@@ -283,59 +286,51 @@ fn file_block(
         return diff;
     }
 
-    let text_diff = TextDiffConfig::default().diff_lines(old_data, new_data);
+    // Render the diff with xdiff
+    let body = match unified(old_data, new_data, CONTEXT) {
+        Ok(body) => body,
+        // xdiff only fails when an allocation does, at which point the tab has
+        // larger problems than one unrendered diff.
+        Err(_) => return diff,
+    };
 
-    // Walk `similar`'s hunk/change iterators rather than rendering the unified
-    // diff with `to_string()` and re-splitting it: that would build the entire
-    // diff as one allocation and then copy every line out of it again, so a
-    // large diff was held in memory twice over before a row was rendered. The
-    // output is byte-for-byte what `UnifiedDiff`'s `Display` would have
-    // produced (see `test_diff_file_matches_unified_diff`), just emitted one
-    // `PatchLine` at a time: file headers before the first hunk, the `@@`
-    // header before a hunk's first change, and the "no newline" hint after a
-    // change that lacks one.
-    let mut file_header_pending = true;
-    for hunk in text_diff.unified_diff().iter_hunks() {
-        if std::mem::take(&mut file_header_pending) {
-            diff.lines
-                .push(PatchLine::new(LineKind::Delete, format!("--- {left}")));
-            diff.lines
-                .push(PatchLine::new(LineKind::Insert, format!("+++ {right}")));
-        }
-        let mut hunk_header_pending = true;
-        for change in hunk.iter_changes() {
-            if std::mem::take(&mut hunk_header_pending) {
-                diff.lines
-                    .push(PatchLine::new(LineKind::Meta, hunk.header().to_string()));
+    // Two sides with the same content produce no hunks, and then no file
+    // headers either — a mode-only change is a header block and nothing else.
+    if body.is_empty() {
+        return diff;
+    }
+
+    // The file headers precede the first hunk.
+    diff.lines
+        .push(PatchLine::new(LineKind::Delete, format!("--- {left}")));
+    diff.lines
+        .push(PatchLine::new(LineKind::Insert, format!("+++ {right}")));
+
+    // xdiff terminates every line it emits, so the trailing newline would
+    // otherwise split into a final empty line that is not part of the diff.
+    let body = body.strip_suffix(b"\n").unwrap_or(&body);
+    for line in body.split(|&b| b == b'\n') {
+        // A line's first byte is its marker, exactly as it will be rendered:
+        // `@` for a hunk header, `+`/`-` for a change, a space for context and
+        // a backslash for the no-newline note. Counts exclude the `---`/`+++`
+        // headers above, which is what git's diffstat does.
+        let kind = match line.first() {
+            Some(b'@') => LineKind::Meta,
+            Some(b'+') => {
+                diff.additions += 1;
+                LineKind::Insert
             }
-            let (kind, marker) = match change.tag() {
-                ChangeTag::Insert => {
-                    diff.additions += 1;
-                    (LineKind::Insert, '+')
-                }
-                ChangeTag::Delete => {
-                    diff.deletions += 1;
-                    (LineKind::Delete, '-')
-                }
-                ChangeTag::Equal => (LineKind::Context, ' '),
-            };
-            // Each value carries its own line terminator; strip it (and a
-            // CRLF's `\r`, which `str::lines` would also have dropped) so the
-            // content is one line.
-            let value = change.to_string_lossy();
-            let value = value.strip_suffix('\n').unwrap_or(&value);
-            let value = value.strip_suffix('\r').unwrap_or(value);
-            let mut text = String::with_capacity(value.len() + 1);
-            text.push(marker);
-            text.push_str(value);
-            diff.lines.push(PatchLine::new(kind, text));
-            if text_diff.newline_terminated() && change.missing_newline() {
-                diff.lines.push(PatchLine::new(
-                    LineKind::Context,
-                    "\\ No newline at end of file",
-                ));
+            Some(b'-') => {
+                diff.deletions += 1;
+                LineKind::Delete
             }
-        }
+            _ => LineKind::Context,
+        };
+        // A blob is not required to be UTF-8, and a patch of one still has to
+        // render; git passes the bytes through and so would we, but `PatchLine`
+        // holds a `String`.
+        diff.lines
+            .push(PatchLine::new(kind, String::from_utf8_lossy(line)));
     }
 
     diff
@@ -931,59 +926,88 @@ mod tests {
         assert_eq!(diff.lines[2].kind, LineKind::Context);
     }
 
-    /// [`diff_file`] emits the unified diff line by line instead of rendering
-    /// it into one string and re-splitting it. That's only safe while the two
-    /// agree exactly, so pin them against each other over the cases where the
-    /// hand-rolled emission could drift: a plain modification, a file with no
-    /// trailing newline on either side, CRLF endings, multiple hunks (the file
-    /// header must appear once, each `@@` header once), an identical pair (no
-    /// hunks at all, so no header), and invalid UTF-8 (lossy decoding).
+    /// The shapes the line-by-line emission has to get right, now that the
+    /// hunks themselves come from xdiff: a plain modification, a file with no
+    /// trailing newline on either side, CRLF endings (the CR belongs to the
+    /// line and git keeps it), multiple hunks (one file header, one `@@` per
+    /// hunk), an identical pair (no hunks, so no header at all), and invalid
+    /// UTF-8, which decodes lossily rather than being dropped.
+    ///
+    /// Agreement with git itself is the differential suite's job; this pins the
+    /// framing around what xdiff hands back.
     #[test]
-    fn test_diff_file_matches_unified_diff() {
-        let cases: &[(&[u8], &[u8])] = &[
-            (b"alpha\nbeta\n", b"alpha\nbeta changed\n"),
-            (b"alpha\nbeta", b"alpha\nbeta changed"),
-            (b"alpha\nbeta\n", b"alpha\nbeta"),
-            (b"alpha\r\nbeta\r\n", b"alpha\r\nbeta changed\r\n"),
-            (
-                b"1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n",
-                b"1\n2\nx\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\ny\n20\n",
-            ),
-            (b"same\n", b"same\n"),
-            (b"", b"only\n"),
-            (b"caf\xc3\xa9\n", b"caf\xff\n"),
-        ];
+    fn test_diff_file_emission() {
+        let modified = edit("foo.txt", b"alpha\nbeta\n", b"alpha\nbeta changed\n");
+        let lines = texts(&modified);
+        assert_eq!(lines[2], "--- a/foo.txt");
+        assert_eq!(lines[3], "+++ b/foo.txt");
+        assert_eq!(lines[4], "@@ -1,2 +1,2 @@");
+        assert_eq!(lines[5], " alpha");
+        assert_eq!(lines[6], "-beta");
+        assert_eq!(lines[7], "+beta changed");
+        assert_eq!((modified.additions, modified.deletions), (1, 1));
 
-        for (old, new) in cases {
-            let diff = edit("foo.txt", old, new);
-            // The reference rendering, produced the way `diff_file` used to.
-            let text_diff = TextDiffConfig::default().diff_lines(*old, *new);
-            let expected = text_diff
-                .unified_diff()
-                .header("a/foo.txt", "b/foo.txt")
-                .to_string();
+        // The marker is xdiff's, and it is a context line so a viewer does not
+        // colour it as a change.
+        let no_newline = edit("foo.txt", b"alpha\nbeta\n", b"alpha\nbeta");
+        let lines = texts(&no_newline);
+        assert!(
+            lines.contains(&"\\ No newline at end of file"),
+            "expected a no-newline marker in {lines:?}"
+        );
+        let marker = no_newline
+            .lines
+            .iter()
+            .find(|l| l.text.starts_with('\\'))
+            .expect("marker present");
+        assert_eq!(marker.kind, LineKind::Context);
 
-            // The first two lines are the header block, which `similar` never
-            // emits; the rest must match the reference line for line.
-            let got = &texts(&diff)[2..];
-            let want: Vec<&str> = expected.lines().collect();
-            assert_eq!(got, want, "line mismatch for {old:?} -> {new:?}");
+        // A CR is part of the line's content, and git leaves it there.
+        let crlf = edit(
+            "foo.txt",
+            b"alpha\r\nbeta\r\n",
+            b"alpha\r\nbeta changed\r\n",
+        );
+        assert!(
+            texts(&crlf).contains(&"-beta\r"),
+            "expected the CR to survive in {:?}",
+            texts(&crlf)
+        );
 
-            // Counts exclude the `---`/`+++` headers, matching git's diffstat.
-            let want_add = want
+        // Two well-separated edits: one file header, two hunk headers.
+        let two_hunks = edit(
+            "foo.txt",
+            b"1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n",
+            b"1\n2\nx\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\ny\n20\n",
+        );
+        let lines = texts(&two_hunks);
+        assert_eq!(lines.iter().filter(|l| l.starts_with("--- ")).count(), 1);
+        assert_eq!(lines.iter().filter(|l| l.starts_with("@@")).count(), 2);
+        assert_eq!((two_hunks.additions, two_hunks.deletions), (2, 2));
+
+        // Identical content produces no hunks, and so no file header either.
+        let same = edit("foo.txt", b"same\n", b"same\n");
+        let lines = texts(&same);
+        assert!(
+            !lines.iter().any(|l| l.starts_with("--- ")),
+            "expected no file header in {lines:?}"
+        );
+        assert_eq!((same.additions, same.deletions), (0, 0));
+
+        // Creation from nothing: every line is an addition.
+        let created = edit("foo.txt", b"", b"only\n");
+        assert_eq!((created.additions, created.deletions), (1, 0));
+
+        // Invalid UTF-8 decodes lossily instead of panicking or vanishing.
+        let lossy = edit("foo.txt", b"caf\xc3\xa9\n", b"caf\xff\n");
+        assert_eq!((lossy.additions, lossy.deletions), (1, 1));
+        assert!(
+            texts(&lossy)
                 .iter()
-                .filter(|l| l.starts_with('+') && !l.starts_with("+++"))
-                .count();
-            let want_del = want
-                .iter()
-                .filter(|l| l.starts_with('-') && !l.starts_with("---"))
-                .count();
-            assert_eq!(
-                (diff.additions, diff.deletions),
-                (want_add, want_del),
-                "count mismatch for {old:?} -> {new:?}"
-            );
-        }
+                .any(|l| l.starts_with('+') && !l.starts_with("+++") && l.contains('\u{fffd}')),
+            "expected a replacement character in {:?}",
+            texts(&lossy)
+        );
     }
 
     #[test]
