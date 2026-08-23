@@ -83,8 +83,9 @@ pub(crate) enum Route {
     Tree {
         path: String,
         head: Option<String>,
-        /// Show a markdown blob rendered rather than as source (`?render=1`).
-        /// Ignored when the path resolves to anything else.
+        /// Show a blob rendered rather than as source (`?render=1`) — markdown
+        /// as a document, SVG as a picture. Ignored when the path resolves to
+        /// anything else.
         render: bool,
     },
     /// A `.tar.gz` of a ref's tree (HEAD's, when there is no `?h=`), built on
@@ -744,7 +745,7 @@ pub(crate) fn snapshot_url(head: &str) -> String {
 
 /// The URL for a tree view — a directory listing, or a blob. `path` and `head`
 /// are the decoded values (a real path, a real ref name); both are encoded
-/// here. `render` asks for a markdown blob's rendered form.
+/// here. `render` asks for a blob's rendered form.
 pub(crate) fn tree_url(path: &str, head: Option<&str>, render: bool) -> String {
     let base = if path.is_empty() {
         "#!/tree".to_string()

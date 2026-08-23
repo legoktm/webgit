@@ -33,19 +33,13 @@ const MAX_BLOB_BYTES: usize = 1024 * 1024;
 /// where a click freezes the tab.
 const MAX_BLOB_LINES: usize = 20_000;
 
-/// An image format rendered inline rather than reported as binary.
-///
-/// Deliberately only the three raster formats git repositories actually carry
-/// in bulk. SVG is absent and should stay absent: it is text, so it already
-/// renders as source, and showing it instead means handing repository-controlled
-/// XML to the browser's parser. An `<img>` is a passive context — no scripts,
-/// no external fetches — so that would not be *unsafe*, but it is a bigger
-/// decision than "PNGs should look like PNGs" and shouldn't ride along with it.
+/// An image format the blob view shows as a picture.
 #[derive(PartialEq, Clone, Copy, Debug)]
 pub(crate) enum ImageFormat {
     Png,
     Jpeg,
     Gif,
+    Svg,
 }
 
 impl ImageFormat {
@@ -56,9 +50,11 @@ impl ImageFormat {
             ImageFormat::Png => "image/png",
             ImageFormat::Jpeg => "image/jpeg",
             ImageFormat::Gif => "image/gif",
+            ImageFormat::Svg => "image/svg+xml",
         }
     }
 
+    /// The format `filename`'s extension claims (but not SVG)
     fn from_extension(filename: &str) -> Option<Self> {
         let (_, ext) = filename.rsplit_once('.')?;
         match ext.to_ascii_lowercase().as_str() {
@@ -79,12 +75,15 @@ impl ImageFormat {
             // (JFIF, Exif, raw) shares this prefix and differs after it.
             ImageFormat::Jpeg => data.starts_with(b"\xff\xd8\xff"),
             ImageFormat::Gif => data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a"),
+            // Unreachable, since `from_extension` never yields `Svg`: an XML
+            // document has no fixed opening bytes to be told apart by.
+            ImageFormat::Svg => false,
         }
     }
 }
 
-/// The format to render `filename` as, or `None` to fall through to the normal
-/// text/binary handling.
+/// The raster format to draw `filename` as unasked, or `None` to fall through
+/// to the normal text/binary handling.
 ///
 /// Both the extension and the signature have to agree. Either alone would be
 /// enough to pick a MIME type, but requiring both keeps the two failure modes
@@ -111,7 +110,9 @@ pub(crate) enum BlobContent {
     /// A markdown blob asked for with `?render=1`, already rendered to HTML and
     /// bound for the sandboxed frame.
     Markdown(String),
-    /// A blob to render as an image, in the format its object URL should claim.
+    /// A blob to draw as an image, in the format its object URL should claim.
+    /// A raster format arrives here by being one; [`ImageFormat::Svg`] only by
+    /// having been asked for with `?render=1`.
     Image { format: ImageFormat },
     /// A blob git's heuristic calls binary, with its size in bytes.
     Binary { bytes: usize },
@@ -136,8 +137,8 @@ impl BlobContent {
     }
 }
 
-/// The blob's other view — rendered markdown from the source, or the source
-/// from the rendered markdown — as the link that reaches it.
+/// The blob's other view — the rendered form from the source, or the source
+/// from the rendered form — as the link that reaches it.
 #[derive(PartialEq, Clone)]
 pub(crate) struct AltView {
     pub url: String,
@@ -158,7 +159,8 @@ pub(crate) struct BlobProps {
     /// file.
     pub data: Rc<Vec<u8>>,
     pub content: BlobContent,
-    /// The link to the blob's other view, for a markdown blob that has one.
+    /// The link to the blob's other view, for a markdown or SVG blob that has
+    /// one.
     pub alt_view: Option<AltView>,
     /// This blob's own source-view URL, without a line anchor: what every line
     /// number's link is built on top of.
@@ -170,6 +172,13 @@ pub(crate) struct BlobProps {
     /// [`build_blob_props`], because changing the selection must not re-resolve
     /// the route: the blob is already on screen and only its highlight moves.
     pub lines: Option<LineRange>,
+}
+
+/// Whether a file name is one this view will render as a picture on request.
+fn is_svg(filename: &str) -> bool {
+    filename
+        .rsplit_once('.')
+        .is_some_and(|(_, ext)| ext.eq_ignore_ascii_case("svg"))
 }
 
 /// Whether a file name is one this view will render as markdown.
@@ -185,10 +194,10 @@ fn is_markdown(filename: &str) -> bool {
 /// other view; the path's last component recognises an image by extension and
 /// names the download.
 ///
-/// `render` is the route's `?render=1`: show a markdown blob rendered rather
-/// than as source. It is a request, not a promise — a file that isn't markdown,
-/// or one too large for the text view, is classified as it would have been
-/// anyway.
+/// `render` is the route's `?render=1`: show a blob rendered rather than as
+/// source — markdown as a document, SVG as a picture. It is a request, not a
+/// promise — a file that is neither, or a markdown file too large for the text
+/// view, is classified as it would have been anyway.
 pub(crate) fn build_blob_props(
     blob_id: ObjectId,
     path: &str,
@@ -206,7 +215,12 @@ pub(crate) fn build_blob_props(
     let source_url = tree_url(path, head, false);
     let content = blob_content(filename, &data, render.then_some(&base));
     let alt_view = match &content {
-        BlobContent::Markdown(_) => Some(AltView {
+        // Back to the source, from either of the two rendered forms. A raster
+        // image has no source view to go back to and doesn't match here.
+        BlobContent::Markdown(_)
+        | BlobContent::Image {
+            format: ImageFormat::Svg,
+        } => Some(AltView {
             url: source_url.clone(),
             label: "source",
         }),
@@ -214,6 +228,13 @@ pub(crate) fn build_blob_props(
         // actually render: otherwise the link leads back to the page the reader
         // is already on.
         BlobContent::Text(_) if is_markdown(filename) && !render => Some(AltView {
+            url: base.self_url,
+            label: "rendered",
+        }),
+        // An SVG's rendered view is an `<img>`, which doesn't depend on the
+        // source view having fit — so unlike markdown it is still worth
+        // offering from a blob the text view turned down as binary or oversized.
+        _ if is_svg(filename) && !render => Some(AltView {
             url: base.self_url,
             label: "rendered",
         }),
@@ -245,14 +266,22 @@ pub(crate) fn build_blob_props(
 /// how large. The browser decodes it lazily and can drop it again, which is
 /// more than can be said for the `String`s the text path would allocate.
 ///
-/// `render` is `Some` when the route asked for markdown to be rendered, and
-/// carries where the document's links resolve from. Rendering sits *after* the
-/// caps rather than beside the image check: comrak's output is a DOM the browser
-/// has to lay out like any other, so an over-cap markdown file is refused for
-/// the same reason an over-cap source file is.
+/// `render` is `Some` when the route asked for a blob's rendered form, and
+/// carries where a markdown document's links resolve from. A requested SVG
+/// joins the images rather than the markdown, and for the reason they are
+/// exempt: it becomes one `<img>` too, so the caps have nothing to say about it
+/// and an SVG too large to read as source still draws. Markdown rendering sits
+/// *after* the caps instead: comrak's output is a DOM the browser has to lay
+/// out like any other, so an over-cap markdown file is refused for the same
+/// reason an over-cap source file is.
 fn blob_content(filename: &str, data: &[u8], render: Option<&LinkBase>) -> BlobContent {
     if let Some(format) = image_format(filename, data) {
         return BlobContent::Image { format };
+    }
+    if render.is_some() && is_svg(filename) {
+        return BlobContent::Image {
+            format: ImageFormat::Svg,
+        };
     }
     if is_binary(data) {
         return BlobContent::Binary { bytes: data.len() };
@@ -571,13 +600,19 @@ mod tests {
 
     /// As [`render_path`], but with `url` standing in for the object URL.
     fn render_with_url(path: &str, data: &[u8], url: &str) -> String {
+        render_route_with_url(path, data, false, url)
+    }
+
+    /// As [`render_with_url`], but for the `?render=1` view — which an SVG
+    /// needs the object URL for, the same way a raster image does.
+    fn render_route_with_url(path: &str, data: &[u8], render: bool, url: &str) -> String {
         let id = ObjectId::from_hex(b"e69de29bb2d1d6434b8b29ae775ad8c2e48c5391").unwrap();
         let path = path.to_string();
         let data = data.to_vec();
         let url = url.to_string();
         let html = futures::executor::block_on(
             yew::ServerRenderer::<BlobViewWithUrl>::with_props(move || WithUrlProps {
-                blob: build_blob_props(id, &path, data, None, false),
+                blob: build_blob_props(id, &path, data, None, render),
                 url,
             })
             .hydratable(false)
@@ -632,6 +667,25 @@ mod tests {
     #[test]
     fn test_blob_html_image_with_url() {
         insta::assert_snapshot!(render_with_url("docs/logo.png", PNG, "blob:fake-url"));
+    }
+
+    /// An SVG's source view: an ordinary text blob, plus the link to the
+    /// picture.
+    #[test]
+    fn test_blob_html_svg_source() {
+        insta::assert_snapshot!(render_path("img/logo.svg", SVG));
+    }
+
+    /// The picture: an `<img>` over the same object URL the download link uses,
+    /// and a link back to the source.
+    #[test]
+    fn test_blob_html_svg_rendered() {
+        insta::assert_snapshot!(render_route_with_url(
+            "img/logo.svg",
+            SVG,
+            true,
+            "blob:fake-url"
+        ));
     }
 
     /// A range selects every line between its ends, inclusive, and leaves the
@@ -753,6 +807,36 @@ mod tests {
             rendered.alt_view.map(|a| (a.label, a.url)),
             Some(("source", "#!/tree/docs/a.md?h=v1.0".to_string()))
         );
+    }
+
+    /// An SVG toggles both ways too, and on the same ref.
+    #[test]
+    fn test_blob_svg_alt_view_toggles_both_ways() {
+        let id = ObjectId::from_hex(b"e69de29bb2d1d6434b8b29ae775ad8c2e48c5391").unwrap();
+        let source = build_blob_props(id, "img/a.svg", SVG.to_vec(), Some("v1.0"), false);
+        assert_eq!(
+            source.alt_view.map(|a| (a.label, a.url)),
+            Some(("rendered", "#!/tree/img/a.svg?h=v1.0&render=1".to_string()))
+        );
+        let rendered = build_blob_props(id, "img/a.svg", SVG.to_vec(), Some("v1.0"), true);
+        assert_eq!(
+            rendered.alt_view.map(|a| (a.label, a.url)),
+            Some(("source", "#!/tree/img/a.svg?h=v1.0".to_string()))
+        );
+    }
+
+    /// The link markdown wouldn't get: an SVG the text view refuses still has a
+    /// working rendered view, so it is still offered one.
+    #[test]
+    fn test_blob_svg_offers_rendered_even_when_source_is_refused() {
+        let id = ObjectId::from_hex(b"e69de29bb2d1d6434b8b29ae775ad8c2e48c5391").unwrap();
+        for (case, data) in [
+            ("oversized", vec![b'x'; MAX_BLOB_BYTES + 1]),
+            ("binary", b"<svg\0/>".to_vec()),
+        ] {
+            let props = build_blob_props(id, "big.svg", data, None, false);
+            assert_eq!(props.alt_view.map(|a| a.label), Some("rendered"), "{case}");
+        }
     }
 
     /// A document below the root has its relative links resolved against its
@@ -941,6 +1025,13 @@ mod tests {
             .mime(),
             "image/png"
         );
+        assert_eq!(
+            BlobContent::Image {
+                format: ImageFormat::Svg
+            }
+            .mime(),
+            "image/svg+xml"
+        );
         assert_eq!(BlobContent::Text(vec![]).mime(), "application/octet-stream");
         assert_eq!(
             BlobContent::Binary { bytes: 1 }.mime(),
@@ -983,14 +1074,68 @@ mod tests {
         ));
     }
 
-    /// SVG is text and stays text. See [`ImageFormat`] for why it is excluded.
+    const SVG: &[u8] = b"<svg xmlns=\"http://www.w3.org/2000/svg\"><rect/></svg>\n";
+
+    /// SVG is text, so the source view is what it gets by default — the same
+    /// treatment markdown gets, and for the same reason.
     #[test]
-    fn test_svg_renders_as_text() {
-        let svg = b"<svg xmlns=\"http://www.w3.org/2000/svg\"><rect/></svg>\n";
+    fn test_svg_is_source_until_asked() {
         assert!(matches!(
-            blob_content_source("icon.svg", svg),
+            blob_content_source("icon.svg", SVG),
             BlobContent::Text(_)
         ));
+        assert!(matches!(
+            blob_content("icon.svg", SVG, Some(&root_base())),
+            BlobContent::Image {
+                format: ImageFormat::Svg
+            }
+        ));
+    }
+
+    /// The request is what promotes it, not the bytes: no signature is checked,
+    /// so a `.svg` holding anything at all draws (or fails to draw) as one.
+    #[test]
+    fn test_svg_render_does_not_sniff() {
+        assert!(matches!(
+            blob_content("lies.svg", b"not xml at all\n", Some(&root_base())),
+            BlobContent::Image {
+                format: ImageFormat::Svg
+            }
+        ));
+        // And the extension is required: SVG bytes under another name stay text.
+        assert!(matches!(
+            blob_content("icon.txt", SVG, Some(&root_base())),
+            BlobContent::Text(_)
+        ));
+    }
+
+    /// Unlike markdown, the rendered view sits ahead of the binary check and
+    /// the caps — it is one `<img>`, whatever the file's size or bytes — so an
+    /// SVG the text view would refuse still draws.
+    #[test]
+    fn test_svg_render_is_not_capped_or_sniffed() {
+        for data in [
+            vec![b'x'; MAX_BLOB_BYTES + 1],
+            b"x\n".repeat(MAX_BLOB_LINES + 1),
+            b"<svg\0/>".to_vec(),
+        ] {
+            assert!(matches!(
+                blob_content("big.svg", &data, Some(&root_base())),
+                BlobContent::Image {
+                    format: ImageFormat::Svg
+                }
+            ));
+        }
+    }
+
+    #[test]
+    fn test_is_svg() {
+        assert!(is_svg("icon.svg"));
+        assert!(is_svg("ICON.SVG"));
+        assert!(is_svg("a/b/c.Svg"));
+        for name in ["icon", "svg", "icon.svgz", "icon.svg.gz", "icon.png"] {
+            assert!(!is_svg(name), "{name}");
+        }
     }
 
     /// Images are exempt from the caps that govern the text view: they cost one
@@ -1010,8 +1155,11 @@ mod tests {
         assert_eq!(ImageFormat::Png.mime(), "image/png");
         assert_eq!(ImageFormat::Jpeg.mime(), "image/jpeg");
         assert_eq!(ImageFormat::Gif.mime(), "image/gif");
+        assert_eq!(ImageFormat::Svg.mime(), "image/svg+xml");
     }
 
+    /// `.svg` included: it is deliberately not part of the sniffing path, since
+    /// there is no signature to hold the extension to.
     #[test]
     fn test_image_format_from_extension_rejects_others() {
         for name in ["a.svg", "a.txt", "a.webp", "a.png.txt", "a", "a."] {
