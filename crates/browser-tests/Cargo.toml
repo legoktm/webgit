@@ -12,6 +12,7 @@ publish = false
 #   cargo test -p browser-tests --features browser -- --test-threads=1
 #
 # which is what scripts/browser-tests.sh does inside the container.
+license.workspace = true
 [dependencies]
 anyhow = { workspace = true, optional = true }
 fantoccini = { workspace = true, optional = true }

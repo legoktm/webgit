@@ -4,7 +4,7 @@ version = "0.0.0"
 edition = "2024"
 publish = false
 description = "An async-first library for reading git repositories"
-license = "MIT OR Apache-2.0"
+license.workspace = true
 
 [dependencies]
 gib-commitgraph.workspace = true

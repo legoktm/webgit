@@ -4,6 +4,7 @@ version = "0.0.0"
 edition = "2024"
 publish = false
 
+license.workspace = true
 [dependencies]
 gib-parse.workspace = true
 hex.workspace = true

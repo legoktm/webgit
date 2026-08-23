@@ -29,6 +29,9 @@ default-members = [
     "crates/gib-xdiff",
 ]
 
+[workspace.package]
+license = "GPL-2.0-or-later"
+
 [workspace.dependencies]
 anyhow = "1"
 cc = "1.2"
@@ -118,6 +121,7 @@ name = "webgit"
 version = "0.1.0"
 edition = "2024"
 
+license.workspace = true
 [lib]
 crate-type = ["cdylib"]
 

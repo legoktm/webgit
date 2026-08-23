@@ -3,8 +3,8 @@ name = "gib-xdiff"
 version = "0.0.0"
 edition = "2024"
 publish = false
-# The vendored library this wraps is LGPL-2.1, unlike the rest of the workspace.
-license = "LGPL-2.1-or-later"
+# The vendored library is LGPL-2.1-or-later
+license.workspace = true
 links = "gib_xdiff"
 
 [dependencies]

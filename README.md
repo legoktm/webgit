@@ -10,7 +10,7 @@ For the most part webgit is aiming to imitate cgit (<https://git.zx2c4.com/cgit/
 as closely as possible because it's probably my favorite Git viewer.
 
 In as much as there is copyrightable code in this repository, it's available under the GPL v2
-as a derivative work of Git and/or cgit. Some of the git handling code originated from <https://github.com/cyberia-ng/git-async>,
+as a derivative work of Git and/or cgit. It vendors git's [xdiff](https://github.com/libgit2/xdiff) code, which is LGPL v2.1 or later. Some of the git handling code originated from <https://github.com/cyberia-ng/git-async>,
 which is also available under the MIT or Apache 2.0 licenses.
 
 ### Set up
