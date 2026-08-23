@@ -12,7 +12,7 @@
 use crate::{DiffEntry, TreeDiff, test_support::open_odb, test_support::tree_at};
 use futures::executor::block_on;
 use gib_hash::ObjectId;
-use gib_object::TreeEntryType;
+use gib_object::{Tree, TreeEntryType};
 use gib_testkit::{TestRepo, make_basic_repo, make_similar_commits};
 use std::collections::BTreeSet;
 
@@ -239,4 +239,44 @@ fn diff_against_empty_tree() {
         .unwrap();
     let empty = String::from_utf8(empty.trim_ascii_end().to_vec()).unwrap();
     check(&test_repo, &empty, "HEAD");
+}
+
+/// A root commit is diffed against the empty tree, and every file it adds has
+/// to come out as an addition — the same set `git diff-tree --root` reports.
+///
+/// The empty tree here is [`Tree::empty`] rather than one read back from the
+/// odb, because that is what the root-commit path actually has: repositories
+/// seldom store the empty tree, so it cannot be looked up.
+#[test]
+fn diff_root_commit_against_the_constructed_empty_tree() {
+    let test_repo = mixed_repo();
+    let root = test_repo
+        .run_git(["rev-list", "--max-parents=0", "HEAD"])
+        .unwrap();
+    let root = String::from_utf8(root.trim_ascii_end().to_vec()).unwrap();
+
+    let expected: BTreeSet<String> = String::from_utf8(
+        test_repo
+            .run_git(["diff-tree", "--raw", "-r", "--root", &root])
+            .unwrap(),
+    )
+    .unwrap()
+    .lines()
+    // `--root` prints the commit's own ID on the first line; the rest are the
+    // raw diff lines.
+    .filter(|line| line.starts_with(':'))
+    .map(parse_raw_line)
+    .collect();
+    assert!(!expected.is_empty(), "the root commit added no files");
+
+    let odb = open_odb(&test_repo);
+    let tree = tree_at(&test_repo, &odb, &root);
+    let diff = block_on(TreeDiff::new(&odb, &Tree::empty(), &tree)).unwrap();
+    let actual: BTreeSet<String> = diff.entries().iter().map(render).collect();
+
+    assert_eq!(actual, expected);
+    assert!(
+        actual.iter().all(|line| line.starts_with("A ")),
+        "everything in a root commit is an addition: {actual:?}"
+    );
 }

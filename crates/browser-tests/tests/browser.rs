@@ -71,6 +71,7 @@ route_test!(tree_renders_real_content, check_tree);
 route_test!(blob_renders_real_content, check_blob);
 route_test!(blob_line_anchors_select_lines, check_line_anchors);
 route_test!(commit_renders_real_content, check_commit);
+route_test!(root_commit_diffs_against_the_empty_tree, check_root_commit);
 route_test!(refs_render_real_content, check_refs);
 route_test!(about_renders_real_content, check_about);
 
@@ -315,6 +316,48 @@ async fn check_commit(h: &Harness, repo: &RepoFixture) -> Result<()> {
     assert!(
         text.contains(fixtures::HEAD_NOTE),
         "[{}] commit page did not show the commit's note",
+        repo.name
+    );
+    Ok(())
+}
+
+/// The root commit has no parent to diff against, so it is diffed against the
+/// empty tree: every file it introduces shows up as an addition, with a
+/// diffstat over them, and no `parent` row in the header.
+async fn check_root_commit(h: &Harness, repo: &RepoFixture) -> Result<()> {
+    let root = repo.commits.last().expect("fixture has no commits");
+    h.open(repo, &format!("#!/commit/{}", root.sha)).await?;
+    h.wait_for(".diffstat-table").await?;
+    h.assert_no_error().await?;
+
+    // What git says the root commit added, as `<path>` lines.
+    let expected = repo.root_commit_files()?;
+    let names = h.texts_of(".diffstat-name").await?;
+    assert_eq!(
+        names, expected,
+        "[{}] root commit's diffstat did not list the files it adds",
+        repo.name
+    );
+
+    let labels = h.texts_of(".tag-table .label").await?;
+    assert!(
+        !labels.iter().any(|l| l == "parent"),
+        "[{}] root commit showed a parent row: {labels:?}",
+        repo.name
+    );
+
+    let text = h.content_text().await?;
+    // Added files, so the diff bodies are all `/dev/null` on the left.
+    for path in &expected {
+        assert!(
+            text.contains(&format!("+++ b/{path}")),
+            "[{}] root commit's diff is missing the addition of {path}",
+            repo.name
+        );
+    }
+    assert!(
+        text.contains("--- /dev/null"),
+        "[{}] root commit's diff did not add its files from nothing: {text}",
         repo.name
     );
     Ok(())

@@ -4,7 +4,7 @@ use crate::render::{download_bytes, format_datetime, mapped_ident, yield_to_brow
 use futures::stream::{FuturesOrdered, StreamExt};
 use gib::diff::{DiffEntry, TreeDiff};
 use gib::error::Error as GitError;
-use gib::object::{Object, ObjectId, ObjectIdPrefix, PrefixResolution};
+use gib::object::{Object, ObjectId, ObjectIdPrefix, PrefixResolution, Tree};
 use gib_mailmap::Mailmap;
 use gib_patch::{FileDiff, LineKind, PatchLine, PatchMeta, Side};
 use std::cell::RefCell;
@@ -145,18 +145,17 @@ pub(crate) async fn build_commit(
     };
 
     let build_diff = async {
-        let Some(parent) = parent_commits.first() else {
-            // Root commit: nothing to diff against.
-            return anyhow::Ok(Vec::new());
+        let parent_tree = match parent_commits.first() {
+            Some(parent) => repo
+                .lookup_object(parent.tree())
+                .await
+                .context("lookup parent tree")?
+                .tree()
+                .map_err(GitError::from)
+                .context("unexpected object type")?,
+            // A root commit is diffed against the empty tree
+            None => Tree::empty(),
         };
-
-        let parent_tree = repo
-            .lookup_object(parent.tree())
-            .await
-            .context("lookup parent tree")?
-            .tree()
-            .map_err(GitError::from)
-            .context("unexpected object type")?;
         let td = repo
             .tree_diff(&parent_tree, &commit_tree)
             .await
@@ -887,6 +886,17 @@ mod tests {
     fn test_commit_html_root_commit() {
         // No parents and no diff: the diffstat section should be absent.
         insta::assert_snapshot!(render(base_fixture()));
+    }
+
+    #[test]
+    fn test_commit_html_root_commit_with_diff() {
+        // A root commit is diffed against the empty tree, so it has files like
+        // any other commit: the diffstat and the diff itself both render, with
+        // no `parent` row above them.
+        let mut props = base_fixture();
+        props.files = vec![row("src/main.rs", b"", b"alpha\nbeta\n", 40, 0)];
+        props.total_additions = 2;
+        insta::assert_snapshot!(render(props));
     }
 
     #[test]

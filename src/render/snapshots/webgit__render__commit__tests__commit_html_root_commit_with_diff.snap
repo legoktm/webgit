@@ -1,0 +1,56 @@
+---
+source: src/render/commit.rs
+expression: render(props)
+---
+<table class="tag-table">
+<tbody>
+<tr>
+<td class="label">author</td>
+<td>Kunal Mehta &lt;author@example.org&gt; 2026-01-15 12:34:56 +00:00</td>
+</tr>
+<tr>
+<td class="label">committer</td>
+<td>Committer Person &lt;committer@example.org&gt; 2026-01-15 13:00:00 +00:00</td>
+</tr>
+<tr>
+<td class="label">commit</td>
+<td class="mono">0123abcd0123abcd0123abcd0123abcd0123abcd (<a href="#" class="patch-link">patch</a>)</td>
+</tr>
+<tr>
+<td class="label">tree</td>
+<td class="mono">
+<a href="#!/tree?h=0123abcd0123abcd0123abcd0123abcd0123abcd">fedcba98fedcba98fedcba98fedcba98fedcba98</a>
+</td>
+</tr>
+</tbody>
+</table><pre class="tag-message">Fix the thing
+
+Longer explanation with &lt;html&gt; &amp; "chars".
+See <a href="#!/commit/0123abcd">0123abcd</a> for context.</pre><div class="diffstat">
+<p class="diffstat-summary">1 file changed, 2 insertions(+), 0 deletions(-)</p>
+<table class="diffstat-table">
+<tr>
+<td class="diffstat-name">src/main.rs</td>
+<td class="diffstat-count">2</td>
+<td class="diffstat-bar-cell">
+<span class="diffstat-bar">
+<span class="bar-add bar-w-40">
+</span>
+<span class="bar-del bar-w-0">
+</span>
+</span>
+</td>
+<td class="diffstat-pm">
+<span class="add-count">+2</span>
+</td>
+</tr>
+</table>
+</div><pre class="diff-pre"><span class="diff-hunk">diff --git a/src/main.rs b/src/main.rs
+</span><span class="diff-hunk">new file mode 100644
+</span><span class="diff-hunk">index 0000000..2222222
+</span><span class="diff-del">--- /dev/null
+</span><span class="diff-add">+++ b/src/main.rs
+</span><span class="diff-hunk">@@ -0,0 +1,2 @@
+</span><span class="diff-add">+alpha
+</span><span class="diff-add">+beta
+</span></pre>

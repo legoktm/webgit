@@ -158,6 +158,12 @@ impl<'a> Iterator for TreeEntryIter<'a> {
 impl FusedIterator for TreeEntryIter<'_> {}
 impl ExactSizeIterator for TreeEntryIter<'_> {}
 
+/// The SHA-1 of the empty tree, `4b825dc642cb6eb9a060e54bf8d69288fbee4904`.
+const EMPTY_TREE_BYTES: [u8; 20] = [
+    0x4b, 0x82, 0x5d, 0xc6, 0x42, 0xcb, 0x6e, 0xb9, 0xa0, 0x60, 0xe5, 0x4b, 0xf8, 0xd6, 0x92, 0x88,
+    0xfb, 0xee, 0x49, 0x04,
+];
+
 /// A tree object
 #[derive(Clone)]
 pub struct Tree {
@@ -188,6 +194,14 @@ impl Ord for Tree {
 }
 
 impl Tree {
+    pub fn empty() -> Self {
+        Self {
+            id: ObjectId::from_bytes(EMPTY_TREE_BYTES),
+            body: Vec::new(),
+            entries: Vec::new(),
+        }
+    }
+
     /// The [`ObjectId`] of the tree
     pub fn id(&self) -> ObjectId {
         self.id
@@ -221,6 +235,21 @@ mod tests {
     use hex_literal::hex;
 
     const ZERO_OID: ObjectId = ObjectId::from_bytes([0; 20]);
+
+    #[test]
+    fn empty_tree() {
+        let test_repo = TestRepo::new().unwrap();
+        let expected = test_repo
+            .run_git(["hash-object", "-t", "tree", "/dev/null"])
+            .unwrap();
+        let tree = Tree::empty();
+        assert_eq!(
+            tree.id().to_string().as_bytes(),
+            expected.trim_ascii_end(),
+            "the constructed ID has to be the one git names the empty tree"
+        );
+        assert_eq!(tree.entries().count(), 0);
+    }
 
     #[test]
     fn parse_tree() {

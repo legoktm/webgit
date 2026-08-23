@@ -36,6 +36,8 @@ pub struct RepoFixture {
     pub name: &'static str,
     /// Commits on `main`, newest first — the order the log page renders them.
     pub commits: Vec<CommitFacts>,
+    /// Paths the root commit adds, as git lists them, in diff order.
+    pub root_files: Vec<String>,
     pub branches: Vec<String>,
     pub tags: Vec<String>,
 }
@@ -50,6 +52,14 @@ impl RepoFixture {
 
     pub fn head(&self) -> &CommitFacts {
         &self.commits[0]
+    }
+
+    /// Paths the root commit adds — every file in it, since it has no parent.
+    pub fn root_commit_files(&self) -> Result<Vec<String>> {
+        if self.root_files.is_empty() {
+            bail!("fixture {} has a root commit that adds nothing", self.name);
+        }
+        Ok(self.root_files.clone())
     }
 }
 
@@ -290,9 +300,25 @@ fn read_facts(repo: &TestRepo, name: &'static str) -> Result<RepoFixture> {
         bail!("fixture {name} has no commits");
     }
 
+    // `--root` makes git diff the first commit against the empty tree, which is
+    // exactly what the commit page does for it.
+    let root = commits.last().expect("checked non-empty above");
+    let root_files = String::from_utf8(repo.run_git([
+        "diff-tree",
+        "--root",
+        "-r",
+        "--name-only",
+        "--no-commit-id",
+        &root.sha,
+    ])?)?
+    .lines()
+    .map(str::to_string)
+    .collect();
+
     Ok(RepoFixture {
         name,
         commits,
+        root_files,
         branches: for_each_ref(repo, "refs/heads")?,
         tags: for_each_ref(repo, "refs/tags")?,
     })
