@@ -13,7 +13,7 @@
 //! nicety git applies to diffs a human will read, not to the hunks it
 //! attributes lines from.
 
-use crate::{hunks, unified};
+use crate::{Whitespace, hunks, unified};
 use std::process::Command;
 use tempfile::TempDir;
 
@@ -107,20 +107,30 @@ fn render(lines: &[String]) -> Vec<u8> {
 ///
 /// `--no-index` exits 1 when the files differ, which is the normal case here;
 /// anything above that is a real failure.
-fn git_diff(dir: &TempDir, before: &[u8], after: &[u8], context: usize) -> String {
+fn git_diff(
+    dir: &TempDir,
+    before: &[u8],
+    after: &[u8],
+    context: usize,
+    whitespace: Whitespace,
+) -> String {
     let a = dir.path().join("a");
     let b = dir.path().join("b");
     std::fs::write(&a, before).unwrap();
     std::fs::write(&b, after).unwrap();
 
-    let out = Command::new("git")
-        .args([
-            "diff",
-            "--no-index",
-            "--no-indent-heuristic",
-            &format!("-U{context}"),
-            "--",
-        ])
+    let mut cmd = Command::new("git");
+    cmd.args([
+        "diff",
+        "--no-index",
+        "--no-indent-heuristic",
+        &format!("-U{context}"),
+    ]);
+    if whitespace == Whitespace::Ignore {
+        cmd.arg("-w");
+    }
+    let out = cmd
+        .arg("--")
         .arg(&a)
         .arg(&b)
         .output()
@@ -193,7 +203,7 @@ fn diff_body(diff: &str) -> String {
 }
 
 fn check_hunks(dir: &TempDir, before: &[u8], after: &[u8], case: &str) {
-    let expected = git_hunks(&git_diff(dir, before, after, 0));
+    let expected = git_hunks(&git_diff(dir, before, after, 0, Whitespace::Significant));
     let got = our_hunks(before, after);
     assert_eq!(
         got,
@@ -258,12 +268,60 @@ fn unified_output_matches_git() {
         if before == after {
             continue;
         }
-        let expected = diff_body(&git_diff(&dir, &before, &after, 3));
-        let got = String::from_utf8(unified(&before, &after, 3).unwrap()).unwrap();
+        let expected = diff_body(&git_diff(&dir, &before, &after, 3, Whitespace::Significant));
+        let got = String::from_utf8(unified(&before, &after, 3, Whitespace::Significant).unwrap())
+            .unwrap();
         assert_eq!(
             got,
             expected,
             "unified diff disagrees with git for case {i}\nbefore:\n{}\nafter:\n{}",
+            String::from_utf8_lossy(&before),
+            String::from_utf8_lossy(&after)
+        );
+    }
+}
+
+/// Re-space every line without touching a single non-blank character: the
+/// leading indent, the runs of spaces between words, and the trailing spaces
+/// all move. None of that is a change under `-w`.
+fn respace(rng: &mut Rng, lines: &[String]) -> Vec<String> {
+    lines
+        .iter()
+        .map(|line| {
+            let mut out = " ".repeat(rng.below(6));
+            for (i, word) in line.split_whitespace().enumerate() {
+                if i > 0 {
+                    out.push_str(&" ".repeat(1 + rng.below(4)));
+                }
+                out.push_str(word);
+            }
+            out.push_str(&" ".repeat(rng.below(3)));
+            out
+        })
+        .collect()
+}
+
+#[test]
+fn unified_output_matches_git_when_ignoring_whitespace() {
+    let dir = TempDir::new().unwrap();
+    let mut rng = Rng::new(0xD1FF_5AAC);
+    for i in 0..300 {
+        let before = source_file(&mut rng, 40);
+        // Real edits *and* whitespace noise, so the diff has to tell the two
+        // apart rather than come back empty.
+        let edited = edit(&mut rng, &before);
+        let after = respace(&mut rng, &edited);
+        let (before, after) = (render(&before), render(&after));
+        if before == after {
+            continue;
+        }
+        let expected = diff_body(&git_diff(&dir, &before, &after, 3, Whitespace::Ignore));
+        let got =
+            String::from_utf8(unified(&before, &after, 3, Whitespace::Ignore).unwrap()).unwrap();
+        assert_eq!(
+            got,
+            expected,
+            "ignore-whitespace diff disagrees with git for case {i}\nbefore:\n{}\nafter:\n{}",
             String::from_utf8_lossy(&before),
             String::from_utf8_lossy(&after)
         );

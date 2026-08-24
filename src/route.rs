@@ -69,6 +69,129 @@ pub(crate) enum RefsRoute {
     Tag(String),
 }
 
+/// How much of a commit's diff to show.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub(crate) enum DiffMode {
+    /// The diff itself, under the diffstat.
+    #[default]
+    Unified,
+    /// The diffstat alone — cgit's `dt=2`, for reading which files a commit
+    /// touched without paying for the diff.
+    StatOnly,
+}
+
+/// The knobs on a commit's diff, as `?context=`, `?ignorews=`, `?dt=` and
+/// `?ss=` carry them. [`Default`] is git's own default view, and the state in
+/// which none of them appear in the URL.
+///
+/// The names and values are cgit's, so a link from a cgit instance lands on the
+/// same view here — including `dt=1`, which cgit spells "side by side" as a
+/// third diff type where this splits it out into its own flag.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub(crate) struct DiffView {
+    /// Lines of context around each hunk. `None` is git's default of three,
+    /// held apart from an explicit `context=3` only so the URL can stay clean.
+    pub(crate) context: Option<usize>,
+    /// Ignore whitespace-only changes (`ignorews=1`, git's `-w`).
+    pub(crate) ignore_whitespace: bool,
+    /// Which parts of the diff to render (`dt=`).
+    pub(crate) mode: DiffMode,
+    /// Lay the diff out in two columns (`ss=1`). Meaningless — and dropped from
+    /// the URL — when [`mode`](DiffView::mode) hides the diff.
+    pub(crate) side_by_side: bool,
+}
+
+/// The context widths the control offers, which are cgit's: every width up to
+/// ten, then in fives. A URL may name any width in `1..=CONTEXT_MAX`; these are
+/// only what the buttons step through.
+pub(crate) const CONTEXT_CHOICES: &[usize] =
+    &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 25, 30, 35, 40];
+
+/// git's default, and the width that is left out of a URL.
+const CONTEXT_DEFAULT: usize = 3;
+/// The widest context a URL may ask for. cgit's control stops here too; the cap
+/// matters because context is a per-hunk cost paid on every file in the commit.
+const CONTEXT_MAX: usize = 40;
+
+impl DiffView {
+    /// The context width to diff at, with the unset case resolved to git's.
+    pub(crate) fn context_lines(self) -> usize {
+        self.context.unwrap_or(CONTEXT_DEFAULT)
+    }
+
+    /// The same settings in the form the diff machinery takes them.
+    pub(crate) fn diff_options(self) -> gib_patch::DiffOptions {
+        gib_patch::DiffOptions {
+            context: self.context_lines(),
+            whitespace: if self.ignore_whitespace {
+                gib_patch::Whitespace::Ignore
+            } else {
+                gib_patch::Whitespace::Significant
+            },
+        }
+    }
+
+    /// Whether the diff body is rendered at all. Stat-only hides it, which is
+    /// what makes `ss` meaningless in that mode.
+    pub(crate) fn shows_diff(self) -> bool {
+        self.mode == DiffMode::Unified
+    }
+
+    /// The query string for this view, `?` included, or empty when every
+    /// setting is at its default.
+    ///
+    /// Parameter order and the rules for leaving one out are cgit's
+    /// (`ui-shared.c`): a default is absent rather than spelled out, so the
+    /// plain `#!/commit/<sha>` stays the URL of the ordinary view.
+    fn query(self) -> String {
+        let mut parts: Vec<String> = Vec::new();
+        if self.mode == DiffMode::StatOnly {
+            parts.push("dt=2".to_string());
+        }
+        if let Some(n) = self.context.filter(|&n| n != CONTEXT_DEFAULT) {
+            parts.push(format!("context={n}"));
+        }
+        if self.ignore_whitespace {
+            parts.push("ignorews=1".to_string());
+        }
+        // A hidden diff has no layout, so the flag would only be a setting the
+        // reader cannot see the effect of.
+        if self.side_by_side && self.shows_diff() {
+            parts.push("ss=1".to_string());
+        }
+        if parts.is_empty() {
+            String::new()
+        } else {
+            format!("?{}", parts.join("&"))
+        }
+    }
+
+    /// Read the settings out of a commit URL's query string.
+    fn parse(query_string: &str) -> Self {
+        let mut view = Self::default();
+        for part in query_string.split('&') {
+            if let Some(v) = part.strip_prefix("context=") {
+                // Out-of-range and unparseable widths fall back to the default
+                // rather than to an error page: a diff is still a diff.
+                view.context = v.parse().ok().filter(|&n| (1..=CONTEXT_MAX).contains(&n));
+            } else if let Some(v) = part.strip_prefix("ignorews=") {
+                view.ignore_whitespace = v == "1";
+            } else if let Some(v) = part.strip_prefix("ss=") {
+                view.side_by_side = v == "1";
+            } else if let Some(v) = part.strip_prefix("dt=") {
+                match v {
+                    // cgit spells side-by-side as a third diff type. Read it as
+                    // one here so its links land on the view they name.
+                    "1" => view.side_by_side = true,
+                    "2" => view.mode = DiffMode::StatOnly,
+                    _ => view.mode = DiffMode::Unified,
+                }
+            }
+        }
+        view
+    }
+}
+
 pub(crate) enum Route {
     About,
     Readme,
@@ -79,8 +202,8 @@ pub(crate) enum Route {
         path: String,
         showmsg: bool,
     },
-    CommitHead,
-    Commit(String),
+    CommitHead(DiffView),
+    Commit(String, DiffView),
     Refs(RefsRoute),
     Tree {
         path: String,
@@ -343,8 +466,10 @@ pub(crate) fn parse_index_hash(hash: &str) -> IndexRoute {
 /// #!/about                         the about page
 /// #!/summary                       the summary
 /// #!/log[/<path>][?…]              the log; query: h=<rev>, offset=<n>, showmsg=1
-/// #!/commit[/]                     HEAD's commit
-/// #!/commit/<sha>                  one commit
+/// #!/commit[/][?…]                 HEAD's commit
+/// #!/commit/<sha>[?…]              one commit
+///                                  query: dt=<0|1|2>, context=<n>,
+///                                         ignorews=1, ss=1
 /// #!/refs[/]                       all refs
 /// #!/refs/heads[/]                 the branch list
 /// #!/refs/tags[/]                  the tag list
@@ -396,14 +521,19 @@ pub(crate) fn parse_hash(hash: &str) -> Route {
         };
     }
 
-    // No query on this route, so the whole remainder is the id; an empty one
-    // (`#!/commit` or `#!/commit/`) means HEAD's commit.
-    if let Some(rest) = strip_route_prefix(hash, "#!/commit", &['/']) {
-        let sha = rest.trim_start_matches('/');
+    // The id runs to the query, if there is one; an empty id (`#!/commit`,
+    // `#!/commit/`, or either carrying only diff options) means HEAD's commit.
+    if let Some(rest) = strip_route_prefix(hash, "#!/commit", &['/', '?']) {
+        let (sha_part, query_string) = match rest.find('?') {
+            Some(i) => (&rest[..i], &rest[i + 1..]),
+            None => (rest, ""),
+        };
+        let sha = sha_part.trim_start_matches('/');
+        let view = DiffView::parse(query_string);
         return if sha.is_empty() {
-            Route::CommitHead
+            Route::CommitHead(view)
         } else {
-            Route::Commit(sha.to_string())
+            Route::Commit(sha.to_string(), view)
         };
     }
 
@@ -510,7 +640,7 @@ pub(crate) fn active_tab(route: &Route) -> &'static str {
         Route::Readme => "#!/readme",
         Route::Summary => "#!/summary",
         Route::Log { .. } => "#!/log",
-        Route::CommitHead | Route::Commit(_) => "#!/commit",
+        Route::CommitHead(_) | Route::Commit(..) => "#!/commit",
         Route::Refs(_) => "#!/refs",
         // A snapshot is an action on the tree being browsed, and blame is a
         // way of reading one of its files, so the tree tab stays lit for both.
@@ -692,14 +822,22 @@ pub(crate) async fn build_route(
                 .await,
             ))
         }
-        Route::CommitHead => Ok(LoadedView::Commit(Box::new(
-            build_commit(repo, mailmap, &format!("{}", head_commit.id()), |p| {
-                on_partial(LoadedView::Commit(Box::new(p)))
-            })
+        // `#!/commit` with no id follows HEAD, so the diff controls have to
+        // rebuild it without an id too — hence the empty `url_sha`, which is
+        // what [`commit_url`] turns back into the id-less form.
+        Route::CommitHead(view) => Ok(LoadedView::Commit(Box::new(
+            build_commit(
+                repo,
+                mailmap,
+                &format!("{}", head_commit.id()),
+                "",
+                view,
+                |p| on_partial(LoadedView::Commit(Box::new(p))),
+            )
             .await?,
         ))),
-        Route::Commit(sha) => Ok(LoadedView::Commit(Box::new(
-            build_commit(repo, mailmap, &sha, |p| {
+        Route::Commit(sha, view) => Ok(LoadedView::Commit(Box::new(
+            build_commit(repo, mailmap, &sha, &sha, view, |p| {
                 on_partial(LoadedView::Commit(Box::new(p)))
             })
             .await?,
@@ -893,6 +1031,19 @@ pub(crate) fn log_url(path: &str, offset: usize, head: Option<&str>, showmsg: bo
     } else {
         format!("{base}?{}", params.join("&"))
     }
+}
+
+/// The URL for a commit, viewed with `view`. An empty `sha` names HEAD's
+/// commit, which is the one URL the diff controls have to keep working on:
+/// they rebuild the current URL with one setting changed, and the reader may
+/// well have arrived at `#!/commit` without a hash in it.
+pub(crate) fn commit_url(sha: &str, view: DiffView) -> String {
+    let base = if sha.is_empty() {
+        "#!/commit".to_string()
+    } else {
+        format!("#!/commit/{}", encode_component(sha))
+    };
+    format!("{base}{}", view.query())
 }
 
 #[cfg(test)]
@@ -1180,15 +1331,132 @@ mod tests {
 
     #[test]
     fn test_parse_hash_commit() {
-        assert!(matches!(parse_hash("#!/commit"), Route::CommitHead));
-        assert!(matches!(parse_hash("#!/commit/abc123"), Route::Commit(_)));
+        assert!(matches!(parse_hash("#!/commit"), Route::CommitHead(_)));
+        assert!(matches!(parse_hash("#!/commit/abc123"), Route::Commit(..)));
     }
 
     /// An empty id is not a commit to look up, so the bare route's meaning
     /// (HEAD's commit) survives a trailing slash.
     #[test]
     fn test_parse_hash_commit_trailing_slash() {
-        assert!(matches!(parse_hash("#!/commit/"), Route::CommitHead));
+        assert!(matches!(parse_hash("#!/commit/"), Route::CommitHead(_)));
+    }
+
+    /// The id runs to the query, not to the end of the hash.
+    #[test]
+    fn test_parse_hash_commit_query_is_not_part_of_the_id() {
+        match parse_hash("#!/commit/abc123?context=8&ignorews=1&ss=1") {
+            Route::Commit(sha, view) => {
+                assert_eq!(sha, "abc123");
+                assert_eq!(view.context, Some(8));
+                assert!(view.ignore_whitespace);
+                assert!(view.side_by_side);
+                assert_eq!(view.mode, DiffMode::Unified);
+            }
+            _ => panic!("expected a commit route"),
+        }
+        // …including on the id-less form, which still follows HEAD.
+        match parse_hash("#!/commit?dt=2") {
+            Route::CommitHead(view) => assert_eq!(view.mode, DiffMode::StatOnly),
+            _ => panic!("expected HEAD's commit"),
+        }
+    }
+
+    /// cgit spells side-by-side as a third `dt`, so its links have to land on
+    /// the same view here.
+    #[test]
+    fn test_parse_hash_commit_accepts_cgits_ssdiff_difftype() {
+        match parse_hash("#!/commit/abc?dt=1") {
+            Route::Commit(_, view) => {
+                assert!(view.side_by_side);
+                assert_eq!(view.mode, DiffMode::Unified);
+            }
+            _ => panic!("expected a commit route"),
+        }
+    }
+
+    /// A hand-edited width should not produce an error page, and should not be
+    /// able to ask for a diff wide enough to hang the tab.
+    #[test]
+    fn test_parse_hash_commit_rejects_an_impossible_context() {
+        for hash in [
+            "#!/commit/abc?context=0",
+            "#!/commit/abc?context=9999",
+            "#!/commit/abc?context=x",
+        ] {
+            match parse_hash(hash) {
+                Route::Commit(_, view) => {
+                    assert_eq!(view.context, None, "{hash}");
+                    assert_eq!(view.context_lines(), 3, "{hash}");
+                }
+                _ => panic!("expected a commit route"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_commit_url() {
+        // Every setting at its default leaves the URL alone.
+        assert_eq!(commit_url("abc", DiffView::default()), "#!/commit/abc");
+        assert_eq!(commit_url("", DiffView::default()), "#!/commit");
+        // …and an explicit `context=3` is a default too, so it is not written.
+        assert_eq!(
+            commit_url(
+                "abc",
+                DiffView {
+                    context: Some(3),
+                    ..DiffView::default()
+                }
+            ),
+            "#!/commit/abc"
+        );
+        // Order is cgit's: dt, context, ignorews, then ss.
+        assert_eq!(
+            commit_url(
+                "abc",
+                DiffView {
+                    context: Some(10),
+                    ignore_whitespace: true,
+                    mode: DiffMode::Unified,
+                    side_by_side: true,
+                }
+            ),
+            "#!/commit/abc?context=10&ignorews=1&ss=1"
+        );
+    }
+
+    /// Stat-only hides the diff, so there is no layout for `ss` to name and it
+    /// drops out rather than lingering as a setting with no visible effect.
+    #[test]
+    fn test_commit_url_drops_side_by_side_when_the_diff_is_hidden() {
+        assert_eq!(
+            commit_url(
+                "abc",
+                DiffView {
+                    mode: DiffMode::StatOnly,
+                    side_by_side: true,
+                    ..DiffView::default()
+                }
+            ),
+            "#!/commit/abc?dt=2"
+        );
+    }
+
+    #[test]
+    fn test_commit_url_round_trips_through_the_router() {
+        let view = DiffView {
+            context: Some(15),
+            ignore_whitespace: true,
+            mode: DiffMode::StatOnly,
+            side_by_side: false,
+        };
+        match parse_hash(&commit_url("abc", view)) {
+            Route::Commit(sha, got) => {
+                assert_eq!(sha, "abc");
+                assert_eq!(got, view);
+            }
+            _ => panic!("expected a commit route"),
+        }
     }
 
     #[test]
@@ -1485,7 +1753,7 @@ mod tests {
             parse_hash("#!/snapshot?h=v1"),
             Route::Snapshot { head: Some(_) }
         ));
-        assert!(matches!(parse_hash("#!/commit/abc"), Route::Commit(_)));
+        assert!(matches!(parse_hash("#!/commit/abc"), Route::Commit(..)));
         assert!(matches!(parse_hash("#!/refs/tags"), Route::Refs(_)));
     }
 

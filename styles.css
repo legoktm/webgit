@@ -557,6 +557,9 @@ a.ref-label:hover {
 /* ── Diffstat ────────────────────────────────────────────────── */
 .diffstat {
     margin: 1rem 0;
+    /* Full width, so it starts below the commit view's floated options panel
+       rather than being squeezed beside it. */
+    clear: right;
 }
 
 .diffstat-summary {
@@ -660,6 +663,146 @@ a.ref-label:hover {
 .diff-del  { background: #fef2f2; color: #b91c1c; }
 .diff-hunk { background: var(--bg-nav); color: var(--text-dim); }
 
+/* ── Side-by-side diff ───────────────────────────────────────── */
+/* Two equal columns, each scrolling nothing of its own: the table takes the
+   page's horizontal scroll so the two halves always stay aligned. */
+.diff-ss {
+    width: 100%;
+    table-layout: fixed;
+    border-collapse: collapse;
+    font-family: var(--mono);
+    font-size: 0.82rem;
+    line-height: 1.45;
+}
+
+.diff-ss td {
+    width: 50%;
+    padding: 0 0.5rem;
+    vertical-align: top;
+    /* Long lines wrap rather than widening a fixed column, which would push
+       the other half off the page. */
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    border-left: 1px solid var(--border);
+}
+
+.diff-ss td:first-child {
+    border-left: 0;
+}
+
+.diff-ss-span {
+    border-left: 0 !important;
+}
+
+/* The side that has no line opposite the other's. Hatched rather than blank so
+   an uneven replacement reads as "nothing here", not "end of file". */
+.diff-ss-none {
+    background: repeating-linear-gradient(
+        45deg,
+        var(--bg-alt) 0 6px,
+        transparent 6px 12px
+    );
+}
+
+/* ── Diff options panel ──────────────────────────────────────── */
+/* cgit floats the same panel to the top right of the commit page
+   (`div.cgit-panel`); this wears a card instead of cgit's bare table. */
+.diff-opts {
+    float: right;
+    margin: 0 0 0.75rem 1rem;
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    box-shadow: 0 4px 14px rgba(17, 24, 39, 0.12);
+    padding: 0.6rem 0.7rem;
+    display: grid;
+    gap: 0.45rem;
+    min-width: 17rem;
+}
+
+.diff-opts-title {
+    font-weight: 600;
+}
+
+.diff-opts-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.8rem;
+}
+
+.diff-opts-label {
+    color: var(--text-dim);
+}
+
+.diff-opts-reset {
+    border-top: 1px solid var(--border);
+    padding-top: 0.45rem;
+    text-align: right;
+}
+
+.diff-opts-dim {
+    color: var(--text-dim);
+}
+
+/* A row of segments sharing one border, each a link that takes the accent
+   colour when it is the setting in force. */
+.seg {
+    display: flex;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    overflow: hidden;
+    background: #fff;
+}
+
+.seg-btn,
+.seg-num {
+    padding: 0.1rem 0.5rem;
+    line-height: 1.6;
+    border-left: 1px solid var(--border);
+    white-space: nowrap;
+}
+
+.seg > :first-child {
+    border-left: 0;
+}
+
+.seg-btn {
+    color: var(--link);
+    text-decoration: none;
+}
+
+.seg-btn:hover {
+    background: var(--bg-alt);
+}
+
+.seg-btn.on {
+    background: var(--accent);
+    color: var(--accent-fg);
+}
+
+.seg-btn.on:hover {
+    background: var(--accent);
+}
+
+/* A setting that would change nothing: the end of the context ladder, or a
+   layout choice while the diff is hidden. */
+.seg-btn.off {
+    color: var(--text-dim);
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+.seg-btn.off:hover {
+    background: none;
+}
+
+.seg-num {
+    min-width: 2.2em;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+}
+
 /* ── Inline action button (looks like a link) ────────────────── */
 .clear-btn {
     background: none;
@@ -700,6 +843,11 @@ a.ref-label:hover {
 .tag-message {
     font-family: var(--mono);
     font-size: 0.85rem;
+    /* The commit view floats its diff-options panel to the top right, and this
+       block has a background of its own, so it starts below rather than sliding
+       under it. The header table above is about the panel's height, so in
+       practice this clears nothing. */
+    clear: right;
     background: var(--bg-header);
     border: 1px solid var(--border);
     border-radius: 3px;

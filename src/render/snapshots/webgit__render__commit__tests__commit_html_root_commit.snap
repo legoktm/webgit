@@ -2,6 +2,41 @@
 source: src/render/commit.rs
 expression: render(base_fixture())
 ---
+<div class="diff-opts">
+<b class="diff-opts-title">diff options</b>
+<div class="diff-opts-row">
+<span class="diff-opts-label">context</span>
+<span class="seg">
+<a href="#!/commit/abcdef01abcdef01abcdef01abcdef01abcdef01?context=2" class="seg-btn">−</a>
+<span class="seg-num">3</span>
+<a href="#!/commit/abcdef01abcdef01abcdef01abcdef01abcdef01?context=4" class="seg-btn">+</a>
+</span>
+</div>
+<div class="diff-opts-row">
+<span class="diff-opts-label">space</span>
+<span class="seg">
+<span class="seg-btn on">include</span>
+<a href="#!/commit/abcdef01abcdef01abcdef01abcdef01abcdef01?ignorews=1" class="seg-btn">ignore</a>
+</span>
+</div>
+<div class="diff-opts-row">
+<span class="diff-opts-label">mode</span>
+<span class="seg">
+<span class="seg-btn on">unified</span>
+<a href="#!/commit/abcdef01abcdef01abcdef01abcdef01abcdef01?dt=2" class="seg-btn">stat only</a>
+</span>
+</div>
+<div class="diff-opts-row">
+<span class="diff-opts-label">layout</span>
+<span class="seg">
+<span class="seg-btn on">inline</span>
+<a href="#!/commit/abcdef01abcdef01abcdef01abcdef01abcdef01?ss=1" class="seg-btn">side by side</a>
+</span>
+</div>
+<div class="diff-opts-reset">
+<span class="diff-opts-dim">reset to defaults</span>
+</div>
+</div>
 <table class="tag-table">
 <tbody>
 <tr>

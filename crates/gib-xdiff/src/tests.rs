@@ -2,7 +2,7 @@
 //! we claim, and that the emitter's output is shaped the way a patch writer
 //! expects. Agreement with git itself is `differential.rs`'s job.
 
-use crate::{hunks, unified};
+use crate::{Whitespace, hunks, unified};
 
 fn text(lines: &[&str]) -> Vec<u8> {
     lines
@@ -15,7 +15,11 @@ fn text(lines: &[&str]) -> Vec<u8> {
 fn identical_files_have_no_hunks() {
     let a = text(&["one", "two"]);
     assert_eq!(hunks(&a, &a).unwrap(), vec![]);
-    assert!(unified(&a, &a, 3).unwrap().is_empty());
+    assert!(
+        unified(&a, &a, 3, Whitespace::Significant)
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -91,10 +95,10 @@ fn the_change_is_slid_the_way_git_slides_it() {
 fn unified_output_carries_hunk_headers_and_markers() {
     let before = text(&["one", "two", "three"]);
     let after = text(&["one", "TWO", "three"]);
-    let out = String::from_utf8(unified(&before, &after, 1).unwrap()).unwrap();
+    let out =
+        String::from_utf8(unified(&before, &after, 1, Whitespace::Significant).unwrap()).unwrap();
     assert_eq!(
-        out,
-        "@@ -1,3 +1,3 @@\n one\n-two\n+TWO\n three\n",
+        out, "@@ -1,3 +1,3 @@\n one\n-two\n+TWO\n three\n",
         "got:\n{out}"
     );
 }
@@ -103,10 +107,12 @@ fn unified_output_carries_hunk_headers_and_markers() {
 fn unified_context_width_is_honoured() {
     let before = text(&["1", "2", "3", "4", "5", "6", "7", "8", "9"]);
     let after = text(&["1", "2", "3", "4", "X", "6", "7", "8", "9"]);
-    let tight = String::from_utf8(unified(&before, &after, 1).unwrap()).unwrap();
+    let tight =
+        String::from_utf8(unified(&before, &after, 1, Whitespace::Significant).unwrap()).unwrap();
     assert!(tight.starts_with("@@ -4,3 +4,3 @@"), "got:\n{tight}");
 
-    let wide = String::from_utf8(unified(&before, &after, 3).unwrap()).unwrap();
+    let wide =
+        String::from_utf8(unified(&before, &after, 3, Whitespace::Significant).unwrap()).unwrap();
     assert!(wide.starts_with("@@ -2,7 +2,7 @@"), "got:\n{wide}");
 }
 
@@ -117,7 +123,8 @@ fn unified_emits_the_enclosing_function_suffix() {
     // unified-diff writer tends not to have.
     let before = text(&["fn outer() {", "    let x = 1;", "    let y = 2;", "}"]);
     let after = text(&["fn outer() {", "    let x = 1;", "    let y = 3;", "}"]);
-    let out = String::from_utf8(unified(&before, &after, 1).unwrap()).unwrap();
+    let out =
+        String::from_utf8(unified(&before, &after, 1, Whitespace::Significant).unwrap()).unwrap();
     assert!(
         out.starts_with("@@ -2,3 +2,3 @@ fn outer() {"),
         "expected a function-context suffix, got:\n{out}"
@@ -128,7 +135,8 @@ fn unified_emits_the_enclosing_function_suffix() {
 fn a_missing_trailing_newline_is_marked() {
     // xdiff appends the marker itself (xutils.c), so a caller assembling a
     // patch gets git's exact wording without having to detect the case.
-    let out = String::from_utf8(unified(b"a\n", b"a", 3).unwrap()).unwrap();
+    let out =
+        String::from_utf8(unified(b"a\n", b"a", 3, Whitespace::Significant).unwrap()).unwrap();
     assert_eq!(
         out, "@@ -1 +1 @@\n-a\n+a\n\\ No newline at end of file\n",
         "got:\n{out}"
@@ -153,4 +161,36 @@ fn a_large_input_round_trips() {
         .collect();
     let got = hunks(&before, &after).unwrap();
     assert_eq!(got.len(), 10);
+}
+
+#[test]
+fn ignoring_whitespace_drops_an_indentation_only_change() {
+    let before = text(&["fn f() {", "    body();", "}"]);
+    let after = text(&["fn f() {", "        body();", "}"]);
+
+    let strict =
+        String::from_utf8(unified(&before, &after, 3, Whitespace::Significant).unwrap()).unwrap();
+    assert!(strict.contains("-    body();"), "got:\n{strict}");
+
+    let loose = unified(&before, &after, 3, Whitespace::Ignore).unwrap();
+    assert!(
+        loose.is_empty(),
+        "got:\n{}",
+        String::from_utf8_lossy(&loose)
+    );
+}
+
+#[test]
+fn ignoring_whitespace_keeps_a_real_change_and_its_own_bytes() {
+    // The reindented line is not a change; the renamed call is. What gets
+    // printed is the line as written, tabs and all — xdiff only collapses
+    // whitespace to decide what matches.
+    let before = text(&["fn f() {", "    a();", "    b();", "}"]);
+    let after = text(&["fn f() {", "\ta();", "    c();", "}"]);
+
+    let out = String::from_utf8(unified(&before, &after, 3, Whitespace::Ignore).unwrap()).unwrap();
+    assert_eq!(
+        out, "@@ -1,4 +1,4 @@\n fn f() {\n \ta();\n-    b();\n+    c();\n }\n",
+        "got:\n{out}"
+    );
 }

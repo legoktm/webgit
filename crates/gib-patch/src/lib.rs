@@ -27,10 +27,31 @@
 
 use gib_hash::ObjectId;
 use gib_object::{Commit, TreeEntryType};
+pub use gib_xdiff::Whitespace;
 use gib_xdiff::unified;
 
-/// Lines of context around each hunk (git's default)
-const CONTEXT: usize = 3;
+/// How to read the two sides of a file.
+///
+/// [`Default`] is git's default, and the only setting a downloadable `.patch`
+/// may be built with — see [`format_patch`], which does not take these at all.
+/// They exist for the on-screen diff, where a reader may want wider context or
+/// a reindentation hidden.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DiffOptions {
+    /// Lines of context around each hunk. git's `-U`.
+    pub context: usize,
+    /// Whether a line that differs only in whitespace is a change. git's `-w`.
+    pub whitespace: Whitespace,
+}
+
+impl Default for DiffOptions {
+    fn default() -> Self {
+        Self {
+            context: 3,
+            whitespace: Whitespace::Significant,
+        }
+    }
+}
 
 /// How to read a line of a patch: which of the four things it is that a diff
 /// viewer colours differently.
@@ -141,6 +162,11 @@ fn abbrev(side: Option<Side>) -> String {
 /// `index` line whenever the two sides are different objects. A file detected
 /// as binary gets that header and git's "Binary files ... differ" note in place
 /// of hunks, and no counts.
+///
+/// `options` shapes the hunks and so the counts with them: a diff read with
+/// [`Whitespace::Ignore`] reports fewer changed lines than the same file read
+/// with [`DiffOptions::default`]. Pass the default for anything that has to be
+/// a patch rather than a view of one.
 #[must_use]
 pub fn diff_file(
     path: &str,
@@ -148,6 +174,7 @@ pub fn diff_file(
     new: Option<Side>,
     old_data: &[u8],
     new_data: &[u8],
+    options: DiffOptions,
 ) -> FileDiff {
     let mut diff = FileDiff {
         path: path.to_string(),
@@ -167,8 +194,8 @@ pub fn diff_file(
     if let (Some(old_side), Some(new_side)) = (old, new)
         && kind(old_side.entry_type) != kind(new_side.entry_type)
     {
-        let removal = file_block(path, old, None, old_data, &[]);
-        let addition = file_block(path, None, new, &[], new_data);
+        let removal = file_block(path, old, None, old_data, &[], options);
+        let addition = file_block(path, None, new, &[], new_data, options);
         diff.deletions = removal.deletions;
         diff.additions = addition.additions;
         diff.binary_sizes = match (removal.binary_sizes, addition.binary_sizes) {
@@ -180,7 +207,7 @@ pub fn diff_file(
         return diff;
     }
 
-    let block = file_block(path, old, new, old_data, new_data);
+    let block = file_block(path, old, new, old_data, new_data, options);
     diff.lines = block.lines;
     diff.additions = block.additions;
     diff.deletions = block.deletions;
@@ -209,6 +236,7 @@ fn file_block(
     new: Option<Side>,
     old_data: &[u8],
     new_data: &[u8],
+    options: DiffOptions,
 ) -> Block {
     let mut lines = vec![PatchLine::new(
         LineKind::Meta,
@@ -287,7 +315,7 @@ fn file_block(
     }
 
     // Render the diff with xdiff
-    let body = match unified(old_data, new_data, CONTEXT) {
+    let body = match unified(old_data, new_data, options.context, options.whitespace) {
         Ok(body) => body,
         // xdiff only fails when an allocation does, at which point the tab has
         // larger problems than one unrendered diff.
@@ -384,6 +412,11 @@ const STAT_PADDING: usize = 6;
 ///
 /// `generator` names what produced the patch and goes in the mail signature at
 /// the foot, where git writes its own version.
+///
+/// The `files` must have been diffed with [`DiffOptions::default`]. A patch is
+/// applied, not read: `git apply` matches the bytes it is given, so a diff
+/// taken at any other context width — or with whitespace ignored — is a
+/// document that looks like a patch and does not apply as one.
 #[must_use]
 pub fn format_patch<'a>(
     meta: &PatchMeta,
@@ -770,6 +803,7 @@ mod tests {
             ),
             old_data,
             new_data,
+            DiffOptions::default(),
         )
     }
 
@@ -818,6 +852,7 @@ mod tests {
             ),
             b"",
             b"one\ntwo\nthree\n",
+            DiffOptions::default(),
         );
         assert_eq!((created.additions, created.deletions), (3, 0));
         assert_eq!(
@@ -841,6 +876,7 @@ mod tests {
             None,
             b"one\ntwo\n",
             b"",
+            DiffOptions::default(),
         );
         assert_eq!((deleted.additions, deleted.deletions), (0, 2));
         assert_eq!(
@@ -871,6 +907,7 @@ mod tests {
             ),
             b"#!/bin/sh\n",
             b"#!/bin/sh\n",
+            DiffOptions::default(),
         );
         assert_eq!((diff.additions, diff.deletions), (0, 0));
         assert_eq!(
@@ -899,6 +936,7 @@ mod tests {
             ),
             b"a regular file\n",
             b"target",
+            DiffOptions::default(),
         );
         assert_eq!((diff.additions, diff.deletions), (1, 1));
         let texts = texts(&diff);

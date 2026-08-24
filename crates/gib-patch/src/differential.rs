@@ -13,7 +13,7 @@
 //! line, a non-ASCII subject and author, and a change wide enough to make the
 //! diffstat scale its bars.
 
-use crate::{FileDiff, PatchMeta, Side, diff_file, format_patch};
+use crate::{DiffOptions, FileDiff, PatchMeta, Side, diff_file, format_patch};
 use futures::executor::block_on;
 use gib_diff::{DiffEntry, TreeDiff};
 use gib_fs::Directory;
@@ -117,6 +117,7 @@ fn our_patch(test_repo: &TestRepo, odb: &Odb, rev: &str, generator: &str) -> Str
                 new,
                 &blob(odb, old),
                 &blob(odb, new),
+                DiffOptions::default(),
             )
         })
         .collect();

@@ -88,6 +88,12 @@ struct XdEmitCb {
 /// each `@@` header, as git does.
 const XDL_EMIT_FUNCNAMES: c_ulong = 1 << 0;
 
+/// `xdiff.h`'s `XDF_IGNORE_WHITESPACE`, which git's `-w` and cgit's
+/// `ignorews=1` both set. It is an *input* flag, not an emit flag: xdiff hashes
+/// each line with its whitespace collapsed before diffing, so two lines that
+/// differ only in indentation never enter the edit script at all.
+const XDF_IGNORE_WHITESPACE: c_ulong = 1 << 1;
+
 unsafe extern "C" {
     fn xdl_diff(
         mf1: *mut MmFile,
@@ -101,6 +107,28 @@ unsafe extern "C" {
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
+
+/// Whether whitespace counts as content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Whitespace {
+    /// A line that differs only in whitespace is a change. git's default, and
+    /// the only setting a patch may be built with: `git apply` matches the
+    /// bytes it is given.
+    #[default]
+    Significant,
+    /// Whitespace differences are not changes (git's `-w`).
+    Ignore,
+}
+
+impl Whitespace {
+    /// The `xpparam_t` flag bits this setting contributes.
+    fn flags(self) -> c_ulong {
+        match self {
+            Self::Significant => 0,
+            Self::Ignore => XDF_IGNORE_WHITESPACE,
+        }
+    }
+}
 
 /// One run of changed lines, as the two sides' line ranges.
 ///
@@ -166,7 +194,9 @@ pub fn hunks(before: &[u8], after: &[u8]) -> Result<Vec<Hunk>, DiffFailed> {
         out_hunk: std::ptr::null_mut(),
         out_line: None,
     };
-    run(before, after, &mut emit, &mut cb)?;
+    // Blame compares what is written, whitespace included, so this side never
+    // takes a whitespace setting.
+    run(before, after, 0, &mut emit, &mut cb)?;
     Ok(out)
 }
 
@@ -177,10 +207,22 @@ pub fn hunks(before: &[u8], after: &[u8]) -> Result<Vec<Hunk>, DiffFailed> {
 /// `@@` header carries git's enclosing-function suffix, because it is written
 /// by the same code that writes git's.
 ///
+/// `whitespace` decides whether a line that differs only in whitespace is a
+/// change at all. The `@@` headers follow from that, so the same two files read
+/// with [`Whitespace::Ignore`] report fewer changed lines — and different hunk
+/// boundaries — than with [`Whitespace::Significant`]. The lines that do get
+/// printed keep their own bytes either way; xdiff ignores whitespace when
+/// matching lines, never when writing them.
+///
 /// A line without a trailing newline is followed by xdiff's own
 /// `\ No newline at end of file` marker (`xutils.c`), so a caller assembling a
 /// patch does not have to add one.
-pub fn unified(before: &[u8], after: &[u8], context: usize) -> Result<Vec<u8>, DiffFailed> {
+pub fn unified(
+    before: &[u8],
+    after: &[u8],
+    context: usize,
+    whitespace: Whitespace,
+) -> Result<Vec<u8>, DiffFailed> {
     extern "C" fn write_line(data: *mut c_void, mb: *mut MmBuffer, nbuf: c_int) -> c_int {
         // SAFETY: `data` is the output `Vec<u8>`, and xdiff hands us `nbuf`
         // buffers, each describing `size` readable bytes at `ptr`.
@@ -207,6 +249,7 @@ pub fn unified(before: &[u8], after: &[u8], context: usize) -> Result<Vec<u8>, D
         flags: XDL_EMIT_FUNCNAMES,
         ..emit_conf(context as c_long)
     };
+
     // With `out_hunk` left null, xdiff formats the `@@` header itself and sends
     // it through `out_line` (`xdl_emit_hunk_hdr`), which is what we want: the
     // header comes out already carrying its function-context suffix.
@@ -215,7 +258,7 @@ pub fn unified(before: &[u8], after: &[u8], context: usize) -> Result<Vec<u8>, D
         out_hunk: std::ptr::null_mut(),
         out_line: Some(write_line),
     };
-    run(before, after, &mut emit, &mut cb)?;
+    run(before, after, whitespace.flags(), &mut emit, &mut cb)?;
     Ok(out)
 }
 
@@ -238,12 +281,15 @@ fn emit_conf(ctxlen: c_long) -> XdEmitConf {
 
 /// Drive `xdl_diff` over two byte slices.
 ///
-/// `flags` is left at zero throughout: that is what git's blame passes, and it
-/// selects Myers with no whitespace handling and no indent heuristic. Changing
-/// it changes which lines a diff reports, so it is deliberately not a knob.
+/// `xpp_flags` is the `xpparam_t` flag word. Zero selects Myers with no
+/// whitespace handling and no indent heuristic, which is what git's blame
+/// passes; the only bit any caller here sets is [`XDF_IGNORE_WHITESPACE`].
+/// The algorithm bits are deliberately not exposed: which lines a diff reports
+/// is what blame attributes, and that has to stay git's default choice.
 fn run(
     before: &[u8],
     after: &[u8],
+    xpp_flags: c_ulong,
     emit: &mut XdEmitConf,
     cb: &mut XdEmitCb,
 ) -> Result<(), DiffFailed> {
@@ -261,7 +307,7 @@ fn run(
         size: after.len() as c_long,
     };
     let params = XpParam {
-        flags: 0,
+        flags: xpp_flags,
         ignore_regex: std::ptr::null_mut(),
         ignore_regex_nr: 0,
         anchors: std::ptr::null_mut(),

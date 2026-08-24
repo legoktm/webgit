@@ -7,16 +7,16 @@ expression: render(props)
 <div class="diff-opts-row">
 <span class="diff-opts-label">context</span>
 <span class="seg">
-<a href="#!/commit/abcdef01abcdef01abcdef01abcdef01abcdef01?context=2" class="seg-btn">−</a>
+<a href="#!/commit/abcdef01abcdef01abcdef01abcdef01abcdef01?context=2&amp;ss=1" class="seg-btn">−</a>
 <span class="seg-num">3</span>
-<a href="#!/commit/abcdef01abcdef01abcdef01abcdef01abcdef01?context=4" class="seg-btn">+</a>
+<a href="#!/commit/abcdef01abcdef01abcdef01abcdef01abcdef01?context=4&amp;ss=1" class="seg-btn">+</a>
 </span>
 </div>
 <div class="diff-opts-row">
 <span class="diff-opts-label">space</span>
 <span class="seg">
 <span class="seg-btn on">include</span>
-<a href="#!/commit/abcdef01abcdef01abcdef01abcdef01abcdef01?ignorews=1" class="seg-btn">ignore</a>
+<a href="#!/commit/abcdef01abcdef01abcdef01abcdef01abcdef01?ignorews=1&amp;ss=1" class="seg-btn">ignore</a>
 </span>
 </div>
 <div class="diff-opts-row">
@@ -29,12 +29,12 @@ expression: render(props)
 <div class="diff-opts-row">
 <span class="diff-opts-label">layout</span>
 <span class="seg">
-<span class="seg-btn on">inline</span>
-<a href="#!/commit/abcdef01abcdef01abcdef01abcdef01abcdef01?ss=1" class="seg-btn">side by side</a>
+<a href="#!/commit/abcdef01abcdef01abcdef01abcdef01abcdef01" class="seg-btn">inline</a>
+<span class="seg-btn on">side by side</span>
 </span>
 </div>
 <div class="diff-opts-reset">
-<span class="diff-opts-dim">reset to defaults</span>
+<a href="#!/commit/abcdef01abcdef01abcdef01abcdef01abcdef01">reset to defaults</a>
 </div>
 </div>
 <table class="tag-table">
@@ -62,30 +62,67 @@ expression: render(props)
 
 Longer explanation with &lt;html&gt; &amp; "chars".
 See <a href="#!/commit/0123abcd">0123abcd</a> for context.</pre><div class="diffstat">
-<p class="diffstat-summary">1 file changed, 2 insertions(+), 0 deletions(-)</p>
+<p class="diffstat-summary">1 file changed, 3 insertions(+), 3 deletions(-)</p>
 <table class="diffstat-table">
 <tr>
 <td class="diffstat-name">src/main.rs</td>
-<td class="diffstat-count">2</td>
+<td class="diffstat-count">5</td>
 <td class="diffstat-bar-cell">
 <span class="diffstat-bar">
-<span class="bar-add bar-w-40">
+<span class="bar-add bar-w-30">
 </span>
-<span class="bar-del bar-w-0">
+<span class="bar-del bar-w-10">
 </span>
 </span>
 </td>
 <td class="diffstat-pm">
-<span class="add-count">+2</span>
+<span class="add-count">+3</span>
+<span class="del-count">-2</span>
 </td>
 </tr>
 </table>
-</div><pre class="diff-pre"><span class="diff-hunk">diff --git a/src/main.rs b/src/main.rs
-</span><span class="diff-hunk">new file mode 100644
-</span><span class="diff-hunk">index 0000000..2222222
-</span><span class="diff-del">--- /dev/null
-</span><span class="diff-add">+++ b/src/main.rs
-</span><span class="diff-hunk">@@ -0,0 +1,2 @@
-</span><span class="diff-add">+alpha
-</span><span class="diff-add">+beta
-</span></pre>
+</div>
+<table class="diff-ss">
+<tbody>
+<tr>
+<td colspan="2" class="diff-ss-span diff-hunk">diff --git a/src/main.rs b/src/main.rs</td>
+</tr>
+<tr>
+<td colspan="2" class="diff-ss-span diff-hunk">index 1111111..2222222 100644</td>
+</tr>
+<tr>
+<td colspan="2" class="diff-ss-span diff-del">--- a/src/main.rs</td>
+</tr>
+<tr>
+<td colspan="2" class="diff-ss-span diff-add">+++ b/src/main.rs</td>
+</tr>
+<tr>
+<td colspan="2" class="diff-ss-span diff-hunk">@@ -1,5 +1,6 @@</td>
+</tr>
+<tr>
+<td class="diff-ctx">fn main() {</td>
+<td class="diff-ctx">fn main() {</td>
+</tr>
+<tr>
+<td class="diff-del">    a();</td>
+<td class="diff-add">    A();</td>
+</tr>
+<tr>
+<td class="diff-del">    b();</td>
+<td class="diff-add">    merged();</td>
+</tr>
+<tr>
+<td class="diff-ctx">    c();</td>
+<td class="diff-ctx">    c();</td>
+</tr>
+<tr>
+<td class="diff-ss-none">
+</td>
+<td class="diff-add">    extra();</td>
+</tr>
+<tr>
+<td class="diff-ctx">}</td>
+<td class="diff-ctx">}</td>
+</tr>
+</tbody>
+</table>

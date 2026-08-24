@@ -78,6 +78,7 @@ route_test!(
 );
 route_test!(commit_renders_real_content, check_commit);
 route_test!(root_commit_diffs_against_the_empty_tree, check_root_commit);
+route_test!(diff_controls_change_the_diff, check_diff_controls);
 route_test!(refs_render_real_content, check_refs);
 route_test!(about_renders_real_content, check_about);
 
@@ -560,6 +561,99 @@ async fn check_root_commit(h: &Harness, repo: &RepoFixture) -> Result<()> {
         repo.name
     );
     Ok(())
+}
+
+/// The diff options panel drives the view through the URL rather than a form —
+/// the CSP forbids `form-action` — so every setting has to survive a click, a
+/// reload, and the back button, and has to actually change the diff.
+async fn check_diff_controls(h: &Harness, repo: &RepoFixture) -> Result<()> {
+    let root = repo.commits.last().expect("fixture has no commits");
+    let commit = format!("#!/commit/{}", root.sha);
+
+    h.open(repo, &commit).await?;
+    h.wait_for(".diff-pre").await?;
+    h.assert_no_error().await?;
+
+    // Every setting starts at its default, so nothing is in the URL and the
+    // reset link is inert.
+    let on = h.texts_of(".seg-btn.on").await?;
+    assert_eq!(
+        on,
+        vec!["include", "unified", "inline"],
+        "[{}] the panel did not open at git's defaults",
+        repo.name
+    );
+
+    // "side by side" swaps the layout, and says so in the URL.
+    click_seg(h, "side by side").await?;
+    await_hash(h, &format!("{commit}?ss=1")).await?;
+    h.wait_for(".diff-ss").await?;
+    h.assert_no_error().await?;
+    assert!(
+        h.texts_of(".diff-pre").await?.is_empty(),
+        "[{}] the inline diff survived the switch to two columns",
+        repo.name
+    );
+
+    // A reload lands on the same view: the setting lives in the URL, not in
+    // anything the page is holding.
+    h.reload().await?;
+    h.wait_for(".diff-ss").await?;
+    h.assert_no_error().await?;
+
+    // Widening the context adds lines to the diff without changing what it
+    // says was added — the root commit's files arrive whole either way.
+    h.open(repo, &commit).await?;
+    let narrow = h.text_of(".diff-pre").await?.lines().count();
+    h.open(repo, &format!("{commit}?context=10")).await?;
+    h.wait_for(".diff-pre").await?;
+    h.assert_no_error().await?;
+    let wide = h.text_of(".diff-pre").await?.lines().count();
+    assert!(
+        wide >= narrow,
+        "[{}] context=10 rendered {wide} lines, fewer than the default's {narrow}",
+        repo.name
+    );
+
+    // Stat-only keeps the diffstat and drops the diff, and with no diff on
+    // screen there is no layout left to pick.
+    h.open(repo, &format!("{commit}?dt=2")).await?;
+    h.wait_for(".diffstat-table").await?;
+    h.assert_no_error().await?;
+    assert!(
+        h.texts_of(".diff-pre").await?.is_empty() && h.texts_of(".diff-ss").await?.is_empty(),
+        "[{}] stat-only still rendered a diff body",
+        repo.name
+    );
+    let dead = h.texts_of(".seg-btn.off").await?;
+    assert!(
+        dead.contains(&"inline".to_string()) && dead.contains(&"side by side".to_string()),
+        "[{}] stat-only left the layout control live: {dead:?}",
+        repo.name
+    );
+
+    // "reset to defaults" goes back to the plain commit URL.
+    h.wait_for(".diff-opts-reset a").await?.click().await?;
+    await_hash(h, &commit).await?;
+    h.wait_for(".diff-pre").await?;
+    h.assert_no_error().await?;
+    Ok(())
+}
+
+/// Click the segment with this label. The panel's segments are anchors, so a
+/// plain click is a navigation.
+async fn click_seg(h: &Harness, label: &str) -> Result<()> {
+    for el in h
+        .client
+        .find_all(Locator::Css(".diff-opts a.seg-btn"))
+        .await?
+    {
+        if el.text().await? == label {
+            el.click().await?;
+            return Ok(());
+        }
+    }
+    anyhow::bail!("no `{label}` segment to click in the diff options panel")
 }
 
 async fn check_refs(h: &Harness, repo: &RepoFixture) -> Result<()> {

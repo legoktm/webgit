@@ -1,12 +1,13 @@
 use crate::cache::CachingRepo;
 use crate::error::GitContext;
 use crate::render::{download_bytes, format_datetime, mapped_ident, yield_to_browser};
+use crate::route::{CONTEXT_CHOICES, DiffMode, DiffView, commit_url};
 use futures::stream::{FuturesOrdered, StreamExt};
 use gib::diff::{DiffEntry, TreeDiff};
 use gib::error::Error as GitError;
 use gib::object::{Object, ObjectId, ObjectIdPrefix, PrefixResolution, Tree};
 use gib_mailmap::Mailmap;
-use gib_patch::{FileDiff, LineKind, PatchLine, PatchMeta, Side};
+use gib_patch::{DiffOptions, FileDiff, LineKind, PatchLine, PatchMeta, Side};
 use std::cell::RefCell;
 use yew::prelude::*;
 
@@ -24,6 +25,12 @@ struct FileRow {
     /// and this file's blobs loading (which give us everything else): the row
     /// shows the name with the stats column blank until they arrive.
     diff: Option<FileDiff>,
+    /// The same file diffed at git's defaults, kept only when the view is *not*
+    /// at them. A `.patch` is applied rather than read, so it cannot be the one
+    /// on screen once the reader has widened the context or hidden whitespace —
+    /// cgit draws the same line, its patch endpoint ignoring the diff controls
+    /// entirely.
+    patch_diff: Option<FileDiff>,
     /// The two halves of the diffstat bar, in columns. Recomputed as files
     /// arrive, so they are the view's own and not the patch's.
     bar_add: usize,
@@ -31,6 +38,11 @@ struct FileRow {
 }
 
 impl FileRow {
+    /// The diff to put in a `.patch`: git's defaults, whatever the view shows.
+    fn for_patch(&self) -> Option<&FileDiff> {
+        self.patch_diff.as_ref().or(self.diff.as_ref())
+    }
+
     fn additions(&self) -> usize {
         self.diff.as_ref().map_or(0, |d| d.additions)
     }
@@ -70,6 +82,13 @@ pub(crate) struct CommitProps {
     total_deletions: usize,
     files: Vec<FileRow>,
     complete: bool,
+    /// The commit as the URL names it — empty when the URL is the id-less
+    /// `#!/commit`, which follows HEAD. The diff controls rebuild the current
+    /// URL from this, so a HEAD-following view keeps following HEAD.
+    url_sha: String,
+    /// The diff settings this view was built with, and the state the controls
+    /// show as current.
+    view: DiffView,
 }
 
 /// Build a commit view, calling `on_partial` first with the metadata alone
@@ -80,6 +99,8 @@ pub(crate) async fn build_commit(
     repo: &CachingRepo,
     mailmap: &Mailmap,
     sha: &str,
+    url_sha: &str,
+    view: DiffView,
     on_partial: impl Fn(CommitProps),
 ) -> anyhow::Result<CommitProps> {
     let oid = resolve_sha(repo, sha).await?;
@@ -135,6 +156,8 @@ pub(crate) async fn build_commit(
         total_deletions: 0,
         files: Vec::new(),
         complete: false,
+        url_sha: url_sha.to_string(),
+        view,
     };
     on_partial(base.clone());
 
@@ -162,7 +185,7 @@ pub(crate) async fn build_commit(
             .context("tree diff")?;
 
         anyhow::Ok(
-            stream_diff(repo, &td, |files| {
+            stream_diff(repo, &td, view.diff_options(), |files| {
                 on_partial(CommitProps {
                     total_additions: files.iter().map(FileRow::additions).sum(),
                     total_deletions: files.iter().map(FileRow::deletions).sum(),
@@ -373,6 +396,7 @@ const DIFF_EMIT_INTERVAL_MS: f64 = 50.0;
 async fn stream_diff(
     repo: &CachingRepo,
     td: &TreeDiff,
+    options: DiffOptions,
     on_progress: impl Fn(&[FileRow]),
 ) -> Vec<FileRow> {
     // The changed-file list is known from the tree diff before any blob loads,
@@ -383,6 +407,7 @@ async fn stream_diff(
         .map(|entry| FileRow {
             path: String::from_utf8_lossy(entry.path().as_slice()).into_owned(),
             diff: None,
+            patch_diff: None,
             bar_add: 0,
             bar_del: 0,
         })
@@ -410,7 +435,21 @@ async fn stream_diff(
             new,
             &old_data,
             &new_data,
+            options,
         ));
+        // Only the reader who has changed the controls pays for the second
+        // diff, and only they need it: at the defaults the view's own diff is
+        // already the patch.
+        if options != DiffOptions::default() {
+            files[idx].patch_diff = Some(gib_patch::diff_file(
+                &files[idx].path,
+                old,
+                new,
+                &old_data,
+                &new_data,
+                DiffOptions::default(),
+            ));
+        }
         idx += 1;
         // Paint progressively, but only every ~50ms so a large diff isn't
         // re-rendered (and the growing line list re-cloned) once per file. Yield
@@ -453,10 +492,17 @@ pub(crate) fn commit_view(props: &CommitProps) -> Html {
         total_deletions,
         files,
         complete: _,
+        url_sha,
+        view,
     } = props;
 
     html! {
         <>
+            // Before the header table and floated right, where cgit puts it
+            // (`ui-commit.c`), so the controls sit level with the top of the
+            // commit rather than chasing the diff down the page.
+            { diff_controls(url_sha, *view) }
+
             <table class="tag-table">
                 <tbody>
                     <tr>
@@ -500,10 +546,9 @@ pub(crate) fn commit_view(props: &CommitProps) -> Html {
                             { for files.iter().map(diffstat_row) }
                         </table>
                     </div>
-                    <pre class="diff-pre">
-                        { for files.iter().filter_map(|f| f.diff.as_ref())
-                            .flat_map(|d| d.lines.iter()).map(diff_line) }
-                    </pre>
+                    if view.shows_diff() {
+                        { diff_body(files, view.side_by_side) }
+                    }
                 </>
             }
         </>
@@ -582,6 +627,233 @@ fn diff_line(line: &PatchLine) -> Html {
     html! { <span class={class}>{ content }</span> }
 }
 
+// ---------------------------------------------------------------------------
+// The diff body, inline or in two columns
+// ---------------------------------------------------------------------------
+
+/// The diff under the diffstat, in whichever layout the reader asked for.
+fn diff_body(files: &[FileRow], side_by_side: bool) -> Html {
+    let lines = || {
+        files
+            .iter()
+            .filter_map(|f| f.diff.as_ref())
+            .flat_map(|d| d.lines.iter())
+    };
+    if side_by_side {
+        html! {
+            <table class="diff-ss">
+                <tbody>{ for side_rows(lines()).into_iter().map(side_row) }</tbody>
+            </table>
+        }
+    } else {
+        html! { <pre class="diff-pre">{ for lines().map(diff_line) }</pre> }
+    }
+}
+
+/// One row of a two-column diff.
+enum SideRow<'a> {
+    /// A line belonging to neither side on its own — a `diff --git` header, the
+    /// block under it, or a `@@` marker — laid across both columns.
+    Span(&'a PatchLine),
+    /// An unchanged line, which both columns show.
+    Both(&'a str),
+    /// A change. Either side is absent where the two runs are uneven: three
+    /// lines replaced by one leaves two rows with nothing on the right.
+    Change {
+        del: Option<&'a str>,
+        ins: Option<&'a str>,
+    },
+}
+
+/// Fold a unified diff's lines into two-column rows.
+///
+/// A hunk arrives as a run of removed lines followed by a run of added ones, so
+/// the two runs are collected and then zipped: the *n*th removal sits opposite
+/// the *n*th addition, and the longer run's tail gets blank cells. This is the
+/// pairing cgit's `ssdiff.c` makes, and it is a presentational guess rather
+/// than a claim about the edit — xdiff never said line 3 became line 3.
+fn side_rows<'a>(lines: impl Iterator<Item = &'a PatchLine>) -> Vec<SideRow<'a>> {
+    let mut rows = Vec::new();
+    let mut dels: Vec<&str> = Vec::new();
+    let mut inss: Vec<&str> = Vec::new();
+
+    // `text` carries the `+`/`-`/space marker a unified diff needs; the column
+    // a cell lands in says the same thing, so it comes off here.
+    fn body(line: &PatchLine) -> &str {
+        line.text.get(1..).unwrap_or("")
+    }
+
+    fn flush<'a>(rows: &mut Vec<SideRow<'a>>, dels: &mut Vec<&'a str>, inss: &mut Vec<&'a str>) {
+        for i in 0..dels.len().max(inss.len()) {
+            rows.push(SideRow::Change {
+                del: dels.get(i).copied(),
+                ins: inss.get(i).copied(),
+            });
+        }
+        dels.clear();
+        inss.clear();
+    }
+
+    for line in lines {
+        match line.kind {
+            LineKind::Delete if line.text.starts_with('-') && !line.text.starts_with("---") => {
+                dels.push(body(line));
+            }
+            LineKind::Insert if line.text.starts_with('+') && !line.text.starts_with("+++") => {
+                inss.push(body(line));
+            }
+            // A context line closes the pairing before it, and so does every
+            // header: a run never spans a hunk boundary.
+            LineKind::Context if line.text.starts_with(' ') => {
+                flush(&mut rows, &mut dels, &mut inss);
+                rows.push(SideRow::Both(body(line)));
+            }
+            _ => {
+                flush(&mut rows, &mut dels, &mut inss);
+                rows.push(SideRow::Span(line));
+            }
+        }
+    }
+    flush(&mut rows, &mut dels, &mut inss);
+    rows
+}
+
+fn side_row(row: SideRow<'_>) -> Html {
+    match row {
+        SideRow::Span(line) => {
+            let class = match line.kind {
+                LineKind::Meta => "diff-hunk",
+                LineKind::Insert => "diff-add",
+                LineKind::Delete => "diff-del",
+                LineKind::Context => "diff-ctx",
+            };
+            html! {
+                <tr><td class={classes!("diff-ss-span", class)} colspan="2">
+                    { line.text.clone() }
+                </td></tr>
+            }
+        }
+        SideRow::Both(text) => html! {
+            <tr>
+                <td class="diff-ctx">{ text.to_string() }</td>
+                <td class="diff-ctx">{ text.to_string() }</td>
+            </tr>
+        },
+        SideRow::Change { del, ins } => html! {
+            <tr>
+                { side_cell(del, "diff-del") }
+                { side_cell(ins, "diff-add") }
+            </tr>
+        },
+    }
+}
+
+/// One half of a changed row. An absent side is a filled-in blank rather than
+/// an empty cell, so the eye can see that there is nothing there to compare.
+fn side_cell(text: Option<&str>, class: &'static str) -> Html {
+    match text {
+        Some(text) => html! { <td class={class}>{ text.to_string() }</td> },
+        None => html! { <td class="diff-ss-none"></td> },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The diff options panel
+// ---------------------------------------------------------------------------
+
+/// cgit's "diff options" panel, as links rather than a form.
+///
+/// cgit submits a `<select>` on change; the CSP here forbids that outright
+/// (`form-action 'none'`), so every setting is instead an anchor to the URL
+/// that view has. That is the better shape for a hash-routed app anyway: each
+/// state is addressable, the back button walks the settings, and a reader can
+/// copy the link to the view they are looking at.
+fn diff_controls(url_sha: &str, view: DiffView) -> Html {
+    let url = |v: DiffView| commit_url(url_sha, v);
+    let context = view.context_lines();
+
+    // The ladder is cgit's (1..10, then fives); stepping walks it rather than
+    // adding one, so the wide end is a few clicks away instead of thirty.
+    let step = |delta: isize| -> Option<DiffView> {
+        let at = CONTEXT_CHOICES.iter().position(|&n| n >= context)?;
+        let to = CONTEXT_CHOICES.get(at.checked_add_signed(delta)?)?;
+        Some(DiffView {
+            context: Some(*to),
+            ..view
+        })
+    };
+
+    html! {
+        <div class="diff-opts">
+            <b class="diff-opts-title">{ "diff options" }</b>
+
+            <div class="diff-opts-row">
+                <span class="diff-opts-label">{ "context" }</span>
+                <span class="seg">
+                    { seg_step("−", step(-1).map(url)) }
+                    <span class="seg-num">{ context }</span>
+                    { seg_step("+", step(1).map(url)) }
+                </span>
+            </div>
+
+            <div class="diff-opts-row">
+                <span class="diff-opts-label">{ "space" }</span>
+                <span class="seg">
+                    { seg("include", !view.ignore_whitespace, Some(url(DiffView { ignore_whitespace: false, ..view }))) }
+                    { seg("ignore", view.ignore_whitespace, Some(url(DiffView { ignore_whitespace: true, ..view }))) }
+                </span>
+            </div>
+
+            <div class="diff-opts-row">
+                <span class="diff-opts-label">{ "mode" }</span>
+                <span class="seg">
+                    { seg("unified", view.shows_diff(), Some(url(DiffView { mode: DiffMode::Unified, ..view }))) }
+                    { seg("stat only", !view.shows_diff(), Some(url(DiffView { mode: DiffMode::StatOnly, ..view }))) }
+                </span>
+            </div>
+
+            <div class="diff-opts-row">
+                <span class="diff-opts-label">{ "layout" }</span>
+                <span class="seg">
+                    // With the diff hidden there is no layout to choose, so
+                    // both sides go dead rather than offering a setting that
+                    // would change nothing on the page.
+                    { seg("inline", view.shows_diff() && !view.side_by_side,
+                          view.shows_diff().then(|| url(DiffView { side_by_side: false, ..view }))) }
+                    { seg("side by side", view.shows_diff() && view.side_by_side,
+                          view.shows_diff().then(|| url(DiffView { side_by_side: true, ..view }))) }
+                </span>
+            </div>
+
+            <div class="diff-opts-reset">
+                if view == DiffView::default() {
+                    <span class="diff-opts-dim">{ "reset to defaults" }</span>
+                } else {
+                    <a href={url(DiffView::default())}>{ "reset to defaults" }</a>
+                }
+            </div>
+        </div>
+    }
+}
+
+/// One segment of a control. The current setting is not a link — it is where
+/// the reader already is — and neither is one that would do nothing.
+fn seg(label: &'static str, active: bool, href: Option<String>) -> Html {
+    match (active, href) {
+        (true, _) => html! { <span class="seg-btn on">{ label }</span> },
+        (false, Some(href)) => html! { <a class="seg-btn" {href}>{ label }</a> },
+        (false, None) => html! { <span class="seg-btn off">{ label }</span> },
+    }
+}
+
+/// A `−`/`+` end of the context stepper, dead at the end of the ladder.
+fn seg_step(label: &'static str, href: Option<String>) -> Html {
+    match href {
+        Some(href) => html! { <a class="seg-btn" {href}>{ label }</a> },
+        None => html! { <span class="seg-btn off">{ label }</span> },
+    }
+}
+
 /// The `(patch)` link beside the commit hash, where cgit's commit view puts it.
 fn patch_link(props: &CommitProps) -> Html {
     if !props.complete {
@@ -607,7 +879,7 @@ fn patch_link(props: &CommitProps) -> Html {
 fn build_patch(props: &CommitProps) -> String {
     gib_patch::format_patch(
         &props.meta,
-        props.files.iter().filter_map(|f| f.diff.as_ref()),
+        props.files.iter().filter_map(FileRow::for_patch),
         &format!("webgit {}", crate::render::about::COMMIT),
     )
 }
@@ -690,6 +962,8 @@ mod tests {
             total_deletions: 0,
             files: vec![],
             complete: true,
+            url_sha: "abcdef01abcdef01abcdef01abcdef01abcdef01".to_string(),
+            view: DiffView::default(),
         }
     }
 
@@ -715,7 +989,9 @@ mod tests {
                 blob(new, b"2222222222222222222222222222222222222222"),
                 old,
                 new,
+                DiffOptions::default(),
             )),
+            patch_diff: None,
             bar_add,
             bar_del,
         }
@@ -927,6 +1203,180 @@ mod tests {
         insta::assert_snapshot!(render(props));
     }
 
+    /// A commit whose diff exercises the side-by-side cases at once: two lines
+    /// that pair one-for-one, an unchanged line between the changes, and a pure
+    /// insertion, which leaves the left column with nothing to show.
+    fn uneven_fixture() -> CommitProps {
+        let mut props = base_fixture();
+        props.files = vec![row(
+            "src/main.rs",
+            b"fn main() {\n    a();\n    b();\n    c();\n}\n",
+            b"fn main() {\n    A();\n    merged();\n    c();\n    extra();\n}\n",
+            30,
+            10,
+        )];
+        props.total_additions = 3;
+        props.total_deletions = 3;
+        props
+    }
+
+    #[test]
+    fn test_commit_html_side_by_side() {
+        // Two columns, with a hatched cell wherever one side's run is shorter
+        // than the other's. The panel shows "side by side" as the setting in
+        // force, and every link it offers carries `ss=1` forward.
+        let mut props = uneven_fixture();
+        props.view = DiffView {
+            side_by_side: true,
+            ..DiffView::default()
+        };
+        insta::assert_snapshot!(render(props));
+    }
+
+    #[test]
+    fn test_commit_html_stat_only() {
+        // The diffstat alone. The diff body is gone, both layout segments are
+        // dead because there is no layout left to choose, and `ss` has dropped
+        // out of every URL the panel builds.
+        let mut props = uneven_fixture();
+        props.view = DiffView {
+            mode: DiffMode::StatOnly,
+            side_by_side: true,
+            ..DiffView::default()
+        };
+        insta::assert_snapshot!(render(props));
+    }
+
+    #[test]
+    fn test_commit_html_wide_context_and_ignored_whitespace() {
+        // Non-default settings: the panel shows them as current, the stepper's
+        // `+` has run off the end of the ladder, and "reset to defaults" is a
+        // live link for the first time.
+        let mut props = uneven_fixture();
+        props.view = DiffView {
+            context: Some(40),
+            ignore_whitespace: true,
+            ..DiffView::default()
+        };
+        insta::assert_snapshot!(render(props));
+    }
+
+    #[test]
+    fn side_by_side_pairs_runs_and_blanks_the_shorter_one() {
+        let props = uneven_fixture();
+        let lines = &props.files[0].diff.as_ref().unwrap().lines;
+        let rows = side_rows(lines.iter());
+
+        let changes: Vec<(Option<&str>, Option<&str>)> = rows
+            .iter()
+            .filter_map(|r| match r {
+                SideRow::Change { del, ins } => Some((*del, *ins)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            changes,
+            vec![
+                // A run of two removals against a run of two additions pairs
+                // up in order...
+                (Some("    a();"), Some("    A();")),
+                (Some("    b();"), Some("    merged();")),
+                // ...and an addition with no removal opposite it leaves the
+                // left column blank.
+                (None, Some("    extra();")),
+            ]
+        );
+
+        // The `---`/`+++` headers are Delete/Insert lines but not part of any
+        // run: they span both columns, as the `@@` marker does.
+        let spans: Vec<&str> = rows
+            .iter()
+            .filter_map(|r| match r {
+                SideRow::Span(line) => Some(line.text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(spans.contains(&"--- a/src/main.rs"), "got {spans:?}");
+        assert!(spans.contains(&"+++ b/src/main.rs"), "got {spans:?}");
+    }
+
+    #[test]
+    fn side_by_side_blanks_the_right_when_lines_are_only_removed() {
+        // The mirror of the case above: three lines collapse to one, so two
+        // rows have nothing on the right.
+        let file = row(
+            "src/main.rs",
+            b"keep\na\nb\nc\nkeep\n",
+            b"keep\nonly\nkeep\n",
+            40,
+            0,
+        );
+        let rows = side_rows(file.diff.as_ref().unwrap().lines.iter());
+        let changes: Vec<(Option<&str>, Option<&str>)> = rows
+            .iter()
+            .filter_map(|r| match r {
+                SideRow::Change { del, ins } => Some((*del, *ins)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            changes,
+            vec![
+                (Some("a"), Some("only")),
+                (Some("b"), None),
+                (Some("c"), None),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_patch_download_stays_at_gits_defaults() {
+        // What the reader sees and what `git apply` can consume are two
+        // different documents once the controls have moved: a `-w` diff prints
+        // one side's bytes for a line both sides have, and would not apply.
+        let mut props = base_fixture();
+        let options = DiffOptions {
+            context: 1,
+            whitespace: gib_patch::Whitespace::Ignore,
+        };
+        let before = b"fn f() {\n    a();\n    b();\n}\n";
+        let after = b"fn f() {\n\ta();\n    c();\n}\n";
+        let side = |hex: &[u8]| {
+            Some(Side {
+                id: ObjectId::from_hex(hex).unwrap(),
+                entry_type: gib::object::TreeEntryType::File,
+            })
+        };
+        let (old, new) = (
+            side(b"1111111111111111111111111111111111111111"),
+            side(b"2222222222222222222222222222222222222222"),
+        );
+        let diff = |options| {
+            Some(gib_patch::diff_file(
+                "src/main.rs",
+                old,
+                new,
+                before,
+                after,
+                options,
+            ))
+        };
+        props.files = vec![FileRow {
+            path: "src/main.rs".to_string(),
+            diff: diff(options),
+            patch_diff: diff(DiffOptions::default()),
+            bar_add: 40,
+            bar_del: 0,
+        }];
+
+        // On screen the reindented `a();` is not a change; in the patch it is.
+        let shown = render(props.clone());
+        assert!(!shown.contains("-    a();"), "got:\n{shown}");
+        let patch = build_patch(&props);
+        assert!(patch.contains("-    a();"), "got:\n{patch}");
+        assert!(patch.contains("+\ta();"), "got:\n{patch}");
+    }
+
     #[test]
     fn test_commit_html_diff_pending() {
         // The streamed first frame: the changed-file list is known (from the
@@ -944,6 +1394,7 @@ mod tests {
             .map(|path| FileRow {
                 path: path.to_string(),
                 diff: None,
+                patch_diff: None,
                 bar_add: 0,
                 bar_del: 0,
             })
