@@ -205,9 +205,12 @@ fn tree_row(entry: &TreeEntryRow, head_suffix: &str) -> Html {
                 } }
             </td>
             <td class="links">
-                // Only what has lines to attribute: a directory has none, and
-                // a submodule's are in another repository.
+                <a class="log-link"
+                   href={format!("#!/log/{}{head_suffix}", encode_path(&entry.path))}>
+                    { "log" }
+                </a>
                 if matches!(entry.kind, RowKind::File | RowKind::Symlink(_)) {
+                    { " · " }
                     <a class="blame-link"
                        href={format!("#!/blame/{}{head_suffix}", encode_path(&entry.path))}>
                         { "blame" }

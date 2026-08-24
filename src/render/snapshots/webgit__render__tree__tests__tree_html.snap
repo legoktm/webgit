@@ -18,6 +18,7 @@ expression: "render(TreeProps { entries: fixture_rows(), head_suffix: String::ne
 <a href="#!/tree/src">src</a>
 </td>
 <td class="links">
+<a href="#!/log/src" class="log-link">log</a>
 </td>
 </tr>
 <tr>
@@ -26,7 +27,7 @@ expression: "render(TreeProps { entries: fixture_rows(), head_suffix: String::ne
 <a href="#!/tree/README.md" class="file">README.md</a>
 </td>
 <td class="links">
-<a href="#!/blame/README.md" class="blame-link">blame</a>
+<a href="#!/log/README.md" class="log-link">log</a> · <a href="#!/blame/README.md" class="blame-link">blame</a>
 </td>
 </tr>
 <tr>
@@ -35,7 +36,7 @@ expression: "render(TreeProps { entries: fixture_rows(), head_suffix: String::ne
 <a href="#!/tree/scripts/build.sh" class="file">build.sh</a>
 </td>
 <td class="links">
-<a href="#!/blame/scripts/build.sh" class="blame-link">blame</a>
+<a href="#!/log/scripts/build.sh" class="log-link">log</a> · <a href="#!/blame/scripts/build.sh" class="blame-link">blame</a>
 </td>
 </tr>
 </tbody>

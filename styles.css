@@ -397,14 +397,18 @@ code {
     color: var(--text-dim);
 }
 
-/* The per-file blame link, in the tree listing and beside a blob's own info. */
-.blame-link {
+/* The per-file blame link, in the tree listing and beside a blob's own info,
+   and the per-entry log link beside it in the listing. */
+.blame-link,
+.log-link {
     color: var(--link);
     font-size: 0.85rem;
 }
 .tree-table td.links {
     text-align: right;
     white-space: nowrap;
+    /* Matches the links, so the separator between them doesn't tower. */
+    font-size: 0.85rem;
 }
 
 /* ── Summary page ────────────────────────────────────────────── */

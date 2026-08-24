@@ -19,6 +19,7 @@ expression: "render(TreeProps { entries: special_rows(), head_suffix: String::ne
 <span class="submodule-commit"> @ 1a3e64c6</span>
 </td>
 <td class="links">
+<a href="#!/log/vendor" class="log-link">log</a>
 </td>
 </tr>
 <tr>
@@ -27,7 +28,7 @@ expression: "render(TreeProps { entries: special_rows(), head_suffix: String::ne
 <a href="#!/tree/src/pending" class="file">pending</a>
 </td>
 <td class="links">
-<a href="#!/blame/src/pending" class="blame-link">blame</a>
+<a href="#!/log/src/pending" class="log-link">log</a> · <a href="#!/blame/src/pending" class="blame-link">blame</a>
 </td>
 </tr>
 <tr>
@@ -38,7 +39,7 @@ expression: "render(TreeProps { entries: special_rows(), head_suffix: String::ne
 <a href="#!/tree/lib.rs" class="file">../lib.rs</a>
 </td>
 <td class="links">
-<a href="#!/blame/src/lib.rs" class="blame-link">blame</a>
+<a href="#!/log/src/lib.rs" class="log-link">log</a> · <a href="#!/blame/src/lib.rs" class="blame-link">blame</a>
 </td>
 </tr>
 <tr>
@@ -49,7 +50,7 @@ expression: "render(TreeProps { entries: special_rows(), head_suffix: String::ne
 <span class="symlink-target">/etc/passwd</span>
 </td>
 <td class="links">
-<a href="#!/blame/src/outside" class="blame-link">blame</a>
+<a href="#!/log/src/outside" class="log-link">log</a> · <a href="#!/blame/src/outside" class="blame-link">blame</a>
 </td>
 </tr>
 </tbody>

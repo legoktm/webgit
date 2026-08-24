@@ -18,6 +18,7 @@ expression: "render(TreeProps\n{ entries: fixture_rows(), head_suffix: \"?h=stab
 <a href="#!/tree/src?h=stable">src</a>
 </td>
 <td class="links">
+<a href="#!/log/src?h=stable" class="log-link">log</a>
 </td>
 </tr>
 <tr>
@@ -26,7 +27,7 @@ expression: "render(TreeProps\n{ entries: fixture_rows(), head_suffix: \"?h=stab
 <a href="#!/tree/README.md?h=stable" class="file">README.md</a>
 </td>
 <td class="links">
-<a href="#!/blame/README.md?h=stable" class="blame-link">blame</a>
+<a href="#!/log/README.md?h=stable" class="log-link">log</a> · <a href="#!/blame/README.md?h=stable" class="blame-link">blame</a>
 </td>
 </tr>
 <tr>
@@ -35,7 +36,7 @@ expression: "render(TreeProps\n{ entries: fixture_rows(), head_suffix: \"?h=stab
 <a href="#!/tree/scripts/build.sh?h=stable" class="file">build.sh</a>
 </td>
 <td class="links">
-<a href="#!/blame/scripts/build.sh?h=stable" class="blame-link">blame</a>
+<a href="#!/log/scripts/build.sh?h=stable" class="log-link">log</a> · <a href="#!/blame/scripts/build.sh?h=stable" class="blame-link">blame</a>
 </td>
 </tr>
 </tbody>
