@@ -868,12 +868,14 @@ async fn repository_index_lists_the_fixtures() -> Result<()> {
     }
 
     // The listing's links must be the ones that actually resolve to a repo.
+    // A bare repository URL carries no hash, so it lands on the default view,
+    // which is the README.
     h.client
         .find(Locator::Css(".repo-listing a[href='/repos/basic.git/']"))
         .await?
         .click()
         .await?;
-    h.wait_for(".summary-table").await?;
+    h.wait_for("iframe.markdown-frame").await?;
     h.assert_no_error().await?;
 
     h.finish().await
