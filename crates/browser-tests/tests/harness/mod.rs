@@ -6,7 +6,7 @@ pub mod fixtures;
 pub mod server;
 
 use anyhow::{Context, Result, bail};
-use fantoccini::{Client, Locator, elements::Element};
+use fantoccini::{Client, Locator, elements::Element, error::CmdError};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -16,6 +16,25 @@ pub use fixtures::{Fixtures, RepoFixture};
 /// How long to wait for a route's content to appear. Generous: a cold first
 /// load has to fetch and inflate git objects before it can render anything.
 const SETTLE: Duration = Duration::from_secs(30);
+
+/// How many times a text read is retried after the page re-rendered under it.
+const STALE_RETRIES: usize = 10;
+
+/// How long to leave the next attempt, so a burst of partial renders is not
+/// simply spun through.
+const STALE_RETRY_DELAY: Duration = Duration::from_millis(50);
+
+/// Whether `e` is WebDriver's "stale element reference" — the element was found
+/// and then detached before it could be read, which is what a partial render
+/// replacing the rows looks like from out here. Counts the attempt, so this is
+/// only worth another try while there are retries left.
+fn retry_stale(e: &CmdError, attempts: &mut usize) -> bool {
+    if !e.is_stale_element_reference() || *attempts >= STALE_RETRIES {
+        return false;
+    }
+    *attempts += 1;
+    true
+}
 
 pub struct Harness {
     pub fixtures: &'static Fixtures,
@@ -157,11 +176,35 @@ impl Harness {
 
     /// Wait for an element and return its rendered text.
     pub async fn text_of(&self, css: &str) -> Result<String> {
-        Ok(self.wait_for(css).await?.text().await?)
+        let mut attempts = 0;
+        loop {
+            match self.wait_for(css).await?.text().await {
+                Ok(text) => return Ok(text),
+                Err(e) if retry_stale(&e, &mut attempts) => {
+                    tokio::time::sleep(STALE_RETRY_DELAY).await;
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
     }
 
     /// The rendered text of every element matching `css`, in document order.
     pub async fn texts_of(&self, css: &str) -> Result<Vec<String>> {
+        let mut attempts = 0;
+        loop {
+            match self.read_texts(css).await {
+                Ok(texts) => return Ok(texts),
+                Err(e) if retry_stale(&e, &mut attempts) => {
+                    tokio::time::sleep(STALE_RETRY_DELAY).await;
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+    }
+
+    /// One attempt at [`texts_of`](Self::texts_of), with the driver's own error
+    /// kept so the caller can tell a stale element from a real failure.
+    async fn read_texts(&self, css: &str) -> Result<Vec<String>, CmdError> {
         let mut out = Vec::new();
         for el in self.client.find_all(Locator::Css(css)).await? {
             out.push(el.text().await?);
