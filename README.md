@@ -9,7 +9,7 @@ it for your own purposes, that would be sick, but it may not be super mature.
 For the most part webgit is aiming to imitate cgit (<https://git.zx2c4.com/cgit/about/>)
 as closely as possible because it's probably my favorite Git viewer.
 
-In as much as there is copyrightable code in this repository, it's available under the GPL v2
+In as much as there is copyrightable code in this repository (most of it is vibecoded), it's available under the GPL v2
 as a derivative work of Git and/or cgit. It vendors git's [xdiff](https://github.com/libgit2/xdiff) code, which is LGPL v2.1 or later. Some of the git handling code originated from <https://github.com/cyberia-ng/git-async>,
 which is also available under the MIT or Apache 2.0 licenses.
 
@@ -40,11 +40,11 @@ You should definitely enable HTTP/2 on your webserver too.
 Your webserver should be set up to serve bare Git repositories. It's strongly recommended that you
 run `git update-server-info` in each.
 
-I merely rsync the repositories from Forgejo's storage to my webserver and it seems to work fine.
+I rsync the repositories from Forgejo's storage to my webserver and it seems to work fine.
 
 #### Commit Graph
 
-To optimize looking up the `git log` for specific paths, you should generate a "commit-graph" file
+To optimize a number of git operations, you should generate a "commit-graph" file
 by running `git commit-graph write --reachable --changed-paths`.
 
 ### Index listing
@@ -54,15 +54,12 @@ directory prefix to the repositories under it:
 
 ```json
 [
-    {"": ["standalone.git"]},
     {"public": ["foo.git", "bar.git"]},
     {"mirrors": ["linux.git"]}
 ]
 ```
 
-The page renders exactly what the file says: sections and repositories appear in the order they're
-written, not sorted. An empty prefix puts repositories at the web root, so the example above links
-to `/standalone.git/`, `/public/foo.git/`, `/public/bar.git/` and `/mirrors/linux.git/`.
+This will be transformed into the index.
 
 If your repositories already sit in a directory tree, you can generate the file from it, using each
 repository's parent directory as its prefix:
@@ -71,13 +68,6 @@ repository's parent directory as its prefix:
 find /var/www/repos -type d -name '*.git' -prune -printf '%P\n' | sort |
     jq -R -s '[splits("\n")|select(. != "")]|map(split("/"))|group_by(.[:-1])|map({(.[0][:-1]|join("/")): map(.[-1])})' > /var/www/repos/listing.json
 ```
-
-That sorts everything by path, which is only a starting point — the file is the authority on order,
-so reorder it by hand (or generate it some other way) if you want something other than alphabetical.
-`-printf` is a GNU find extension, and repository names are assumed not to contain newlines.
-
-Then you can serve the same dist/index.html under your webroot and it will automatically render
-the listing instead.
 
 ### WEBCAT
 
