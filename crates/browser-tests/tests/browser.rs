@@ -190,6 +190,7 @@ async fn check_log(h: &Harness, repo: &RepoFixture) -> Result<()> {
 async fn check_log_showmsg(h: &Harness, repo: &RepoFixture) -> Result<()> {
     h.open(repo, "#!/log?showmsg=1").await?;
     h.wait_for(".summary-table.log-expanded").await?;
+    wait_for_settled_log(h, repo).await?;
     h.assert_no_error().await?;
 
     // Every fixture's history is `write_history`'s, so exactly one commit has a
@@ -245,7 +246,7 @@ async fn check_log_showmsg(h: &Harness, repo: &RepoFixture) -> Result<()> {
         .await?
         .click()
         .await?;
-    h.wait_for(".summary-table").await?;
+    h.wait_for(".summary-table:not(.log-expanded)").await?;
     assert_eq!(
         h.hash().await?,
         "#!/log",
