@@ -328,6 +328,84 @@ code {
     width: 100%;
 }
 
+/* ── Blame ───────────────────────────────────────────────────── */
+/* The same table as the blob view, with a gutter column in front of the line
+   numbers: one cell per run of lines, spanning them with `rowspan`. */
+.blame-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+    font-family: var(--mono);
+}
+
+.blame-table td {
+    padding: 0 0.5rem;
+    vertical-align: top;
+    white-space: pre;
+    line-height: 1.5;
+}
+
+.blame-table td.hashes {
+    border-right: 1px solid var(--border);
+    white-space: nowrap;
+    user-select: none;
+}
+
+.blame-table td.hashes a.oid {
+    color: var(--link);
+    text-decoration: none;
+}
+.blame-table td.hashes a.blame-prev {
+    color: var(--text-dim);
+    text-decoration: none;
+}
+.blame-table td.hashes a:hover {
+    text-decoration: underline;
+}
+
+.blame-table td.lno {
+    text-align: right;
+    color: var(--text-dim);
+    border-right: 1px solid var(--border);
+    user-select: none;
+    min-width: 3em;
+}
+
+.blame-table td.lno a {
+    color: var(--text-dim);
+    text-decoration: none;
+}
+.blame-table td.lno a:hover {
+    color: var(--link);
+}
+
+.blame-table td.code {
+    padding-left: 1em;
+    width: 100%;
+}
+
+/* cgit shades alternate runs so a run's extent is visible without reading the
+   hashes; here the shading is on the rows of every other run rather than on a
+   column of bars of its own. */
+.blame-table tr.alt td {
+    background: var(--bg-alt);
+}
+
+/* While the walk is still running. */
+.blame-pending {
+    color: var(--text-dim);
+}
+
+/* The per-file blame link, in the tree listing and beside a blob's own info. */
+.blame-link {
+    color: var(--link);
+    font-size: 0.85rem;
+}
+.tree-table td.links {
+    text-align: right;
+    white-space: nowrap;
+}
+
 /* ── Summary page ────────────────────────────────────────────── */
 .summary-heading {
     font-size: 0.85rem;

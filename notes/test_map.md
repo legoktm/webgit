@@ -378,6 +378,13 @@ Do not add new kinds of tests, just focus on snapshot + browser.
     - directories and files are linked with different classes
       - snapshot:
         - test_tree_html
+    - a "blame" link on every row with lines to attribute — files and symlinks,
+      not directories or submodules — carrying `?h=` forward
+      - snapshot:
+        - test_tree_html
+        - test_tree_html_with_head
+      - browser:
+        - blame_is_linked_from_the_tree_and_the_blob
     - a submodule — the name unlinked, then `@ <abbreviated commit>`; the commit
       lives in a repository this one doesn't have, so it links nowhere
       - snapshot:
@@ -464,11 +471,53 @@ Do not add new kinds of tests, just focus on snapshot + browser.
     - no toggle on anything that is not renderable markdown
     - the bytes are retained for the download link whatever the classification
     - the filename comes from the path's last component
+    - a "blame" link beside the download, on a file that has lines to attribute
+      - snapshot:
+        - test_blob_html
+      - browser:
+        - blame_is_linked_from_the_tree_and_the_blob
   - neither a subtree nor a blob — "Not found: <path>"
   - `?h=` naming nothing resolvable — the error reaches the content area
     - browser:
       - h_reports_an_unknown_abbreviated_commit
   - `?h=` naming a ref whose object is not a tree — reported
+- `#!/blame/<path>[?h=<rev>]`
+  - reached from the tree listing's per-file link and from the blob view
+    - browser:
+      - blame_is_linked_from_the_tree_and_the_blob
+  - lives under the tree tab, with the tree's breadcrumb
+  - a path or ref containing route syntax survives the round trip
+  - a path that is not a file — a directory, a submodule, or nothing —
+    "Not found: <path>"
+  - attribution — every line's commit, and where the line sat in it
+    - matches `git blame` run against the same revision: the same runs, the
+      same line numbers on both sides, coalesced the same way
+    - over branches and merges, at HEAD and at older revisions
+    - answered identically with no commit-graph, with one, and with one
+      carrying changed-path Bloom filters
+    - a file whose history starts at the revision blamed — one run
+    - a file with no trailing newline — the last line is still blamed
+    - each run's `^` names its commit's first parent
+    - browser:
+      - blame_renders_real_content
+  - the file paints before the walk finishes; the gutter fills in behind it
+    - a settled run is never taken back
+    - lines not yet attributed keep an empty gutter cell, so the columns hold
+      - snapshot:
+        - test_blame_html_partial
+        - test_blame_html_nothing_attributed_yet
+    - "blaming…" while the walk runs
+  - the finished view — a gutter cell per run, spanning its lines, alternately
+    shaded
+    - snapshot:
+      - test_blame_html
+  - a run from a root commit has no `^`
+  - binary, over 1 MiB, or over 20 000 lines — refused as the blob view refuses
+    it, with no walk at all
+    - snapshot:
+      - test_blame_html_binary
+      - test_blame_html_too_many_lines
+  - an empty file — no runs, and no error
 - `#!/snapshot[?h=<rev>]`
   - a path component in the route is ignored
   - `render=1` is ignored

@@ -1,6 +1,6 @@
 use crate::render::markdown::{LinkBase, MarkdownFrame, markdown_to_html};
 use crate::render::{is_binary, use_object_url};
-use crate::route::{LineRange, tree_url};
+use crate::route::{LineRange, blame_url, tree_url};
 use gib::object::ObjectId;
 use std::rc::Rc;
 use wasm_bindgen::JsCast;
@@ -20,7 +20,7 @@ use yew::prelude::*;
 /// most repositories is a few hundred KiB, and what exceeds 1 MiB is generated,
 /// vendored or minified. Under the cap the copy costs a millisecond or so,
 /// which is not worth reasoning about further.
-const MAX_BLOB_BYTES: usize = 1024 * 1024;
+pub(crate) const MAX_BLOB_BYTES: usize = 1024 * 1024;
 
 /// The largest blob rendered as text, in lines.
 ///
@@ -31,7 +31,7 @@ const MAX_BLOB_BYTES: usize = 1024 * 1024;
 /// (the row, two cells and the line-number anchor), so 20 000 lines is ~80 000
 /// nodes — heavy but survivable, and an order of magnitude short of the point
 /// where a click freezes the tab.
-const MAX_BLOB_LINES: usize = 20_000;
+pub(crate) const MAX_BLOB_LINES: usize = 20_000;
 
 /// An image format the blob view shows as a picture.
 #[derive(PartialEq, Clone, Copy, Debug)]
@@ -162,6 +162,10 @@ pub(crate) struct BlobProps {
     /// The link to the blob's other view, for a markdown or SVG blob that has
     /// one.
     pub alt_view: Option<AltView>,
+    /// The blame view of the same file, linked beside the download. `None`
+    /// when there are no lines to attribute — an image, or a file the text
+    /// view turned down — since blame would only refuse it again.
+    pub blame_url: Option<String>,
     /// This blob's own source-view URL, without a line anchor: what every line
     /// number's link is built on top of.
     ///
@@ -243,6 +247,7 @@ pub(crate) fn build_blob_props(
     BlobProps {
         blob_id: blob_id.to_string(),
         name: filename.to_string(),
+        blame_url: matches!(content, BlobContent::Text(_)).then(|| blame_url(path, head)),
         content,
         alt_view,
         source_url,
@@ -300,20 +305,28 @@ fn blob_content(filename: &str, data: &[u8], render: Option<&LinkBase>) -> BlobC
     {
         return BlobContent::Markdown(markdown_to_html(&text, base));
     }
+    BlobContent::Text(split_lines(&text))
+}
+
+/// Split a file into the lines a view renders, one per row.
+///
+/// A trailing newline yields a spurious empty final element; dropping it makes
+/// a file ending in '\n' render the same as one that doesn't, and leaves the
+/// count matching [`count_lines`] — which is what the caps above are checked
+/// against, and how git counts a file's lines.
+pub(crate) fn split_lines(text: &str) -> Vec<String> {
     let mut lines: Vec<&str> = text.split('\n').collect();
-    // A trailing newline yields a spurious empty final element; drop it so a
-    // file ending in '\n' renders the same as one that doesn't.
     if lines.last() == Some(&"") {
         lines.pop();
     }
-    BlobContent::Text(lines.into_iter().map(String::from).collect())
+    lines.into_iter().map(String::from).collect()
 }
 
 /// How many rows `data` would render as, counted without decoding it: one per
 /// '\n', plus one more for a final line that isn't newline-terminated. Kept in
 /// step with the split in [`blob_content`], which drops that same trailing
 /// empty element.
-fn count_lines(data: &[u8]) -> usize {
+pub(crate) fn count_lines(data: &[u8]) -> usize {
     let newlines = data.iter().filter(|&&b| b == b'\n').count();
     if data.last().is_some_and(|&b| b != b'\n') {
         newlines + 1
@@ -414,6 +427,7 @@ pub(crate) fn blob_view(props: &BlobProps, url: &str) -> Html {
         name,
         content,
         alt_view,
+        blame_url,
         source_url,
         lines: selected,
         data: _,
@@ -433,6 +447,10 @@ pub(crate) fn blob_view(props: &BlobProps, url: &str) -> Html {
                 if let Some(alt) = alt_view {
                     { " · " }
                     <a class="blob-alt-view" href={alt.url.clone()}>{ alt.label }</a>
+                }
+                if let Some(blame) = blame_url {
+                    { " · " }
+                    <a class="blame-link" href={blame.clone()}>{ "blame" }</a>
                 }
             </div>
             { match content {

@@ -1,0 +1,7 @@
+---
+source: src/render/blame.rs
+expression: "render(props(BlameContent::Binary { bytes: 4096 }, Vec::new(), false,))"
+---
+<div class="blob-info">blob: e69de29bb2d1d6434b8b29ae775ad8c2e48c5391 · <a href="#!/tree/src/lib.rs" class="blob-alt-view">source</a>
+</div>
+<p class="msg">Binary file (4096 bytes).</p>

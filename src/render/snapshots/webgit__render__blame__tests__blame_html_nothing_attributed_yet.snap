@@ -1,0 +1,26 @@
+---
+source: src/render/blame.rs
+expression: "render(props(lines(2), Vec::new(), true))"
+---
+<div class="blob-info">blob: e69de29bb2d1d6434b8b29ae775ad8c2e48c5391 · <a href="#!/tree/src/lib.rs" class="blob-alt-view">source</a> · <span class="blame-pending">blaming…</span>
+</div>
+<table class="blame-table">
+<tbody>
+<tr>
+<td class="hashes">
+</td>
+<td class="lno">
+<a id="n1" href="#!/blame/src/lib.rs#n1">1</a>
+</td>
+<td class="code">line 1</td>
+</tr>
+<tr>
+<td class="hashes">
+</td>
+<td class="lno">
+<a id="n2" href="#!/blame/src/lib.rs#n2">2</a>
+</td>
+<td class="code">line 2</td>
+</tr>
+</tbody>
+</table>

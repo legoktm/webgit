@@ -2,7 +2,8 @@
 source: src/render/blob.rs
 expression: "render_selection(\"src/main.rs\", b\"one\\ntwo\\nthree\\n\", None, false,\nSome(LineRange::single(2)),)"
 ---
-<div class="blob-info">blob: e69de29bb2d1d6434b8b29ae775ad8c2e48c5391</div>
+<div class="blob-info">blob: e69de29bb2d1d6434b8b29ae775ad8c2e48c5391 · <a href="#!/blame/src/main.rs" class="blame-link">blame</a>
+</div>
 <table class="blob-table">
 <tbody>
 <tr id="n1">

@@ -7,6 +7,8 @@ expression: "render(TreeProps { entries: fixture_rows(), head_suffix: String::ne
 <tr>
 <th>Mode</th>
 <th>Name</th>
+<th>
+</th>
 </tr>
 </thead>
 <tbody>
@@ -15,17 +17,25 @@ expression: "render(TreeProps { entries: fixture_rows(), head_suffix: String::ne
 <td class="name">
 <a href="#!/tree/src">src</a>
 </td>
+<td class="links">
+</td>
 </tr>
 <tr>
 <td class="mode">-rw-r--r--</td>
 <td class="name">
 <a href="#!/tree/README.md" class="file">README.md</a>
 </td>
+<td class="links">
+<a href="#!/blame/README.md" class="blame-link">blame</a>
+</td>
 </tr>
 <tr>
 <td class="mode">-rwxr-xr-x</td>
 <td class="name">
 <a href="#!/tree/scripts/build.sh" class="file">build.sh</a>
+</td>
+<td class="links">
+<a href="#!/blame/scripts/build.sh" class="blame-link">blame</a>
 </td>
 </tr>
 </tbody>

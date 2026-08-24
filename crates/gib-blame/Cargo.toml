@@ -1,0 +1,21 @@
+[package]
+name = "gib-blame"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+futures = { workspace = true, features = ["alloc", "async-await"] }
+gib-commitgraph.workspace = true
+gib-log.workspace = true
+gib-object.workspace = true
+gib-xdiff.workspace = true
+
+[dev-dependencies]
+futures = { workspace = true, features = ["async-await", "executor"] }
+gib-fs.workspace = true
+gib-odb.workspace = true
+gib-testkit.workspace = true

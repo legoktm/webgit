@@ -14,6 +14,7 @@ default-members = [
     "crates/gib",
     "crates/gib-archive",
     "crates/gib-attributes",
+    "crates/gib-blame",
     "crates/gib-commitgraph",
     "crates/gib-diff",
     "crates/gib-fs",
@@ -42,6 +43,7 @@ futures = { version = "0.3.32", default-features = false }
 gib = { path = "crates/gib" }
 gib-archive = { path = "crates/gib-archive" }
 gib-attributes = { path = "crates/gib-attributes" }
+gib-blame = { path = "crates/gib-blame" }
 gib-commitgraph = { path = "crates/gib-commitgraph" }
 gib-diff = { path = "crates/gib-diff" }
 gib-fs = { path = "crates/gib-fs" }
@@ -130,6 +132,7 @@ anyhow.workspace = true
 futures = { workspace = true, features = ["alloc", "async-await"] }
 gib.workspace = true
 gib-archive.workspace = true
+gib-blame.workspace = true
 gib-log.workspace = true
 gib-mailmap.workspace = true
 gib-patch.workspace = true

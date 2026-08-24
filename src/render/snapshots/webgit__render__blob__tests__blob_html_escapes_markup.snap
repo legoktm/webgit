@@ -2,7 +2,8 @@
 source: src/render/blob.rs
 expression: "render(b\"<script>alert(1)</script> & <b>bold</b>\\n\")"
 ---
-<div class="blob-info">blob: e69de29bb2d1d6434b8b29ae775ad8c2e48c5391</div>
+<div class="blob-info">blob: e69de29bb2d1d6434b8b29ae775ad8c2e48c5391 · <a href="#!/blame/file.txt" class="blame-link">blame</a>
+</div>
 <table class="blob-table">
 <tbody>
 <tr id="n1">

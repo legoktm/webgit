@@ -150,7 +150,12 @@ async fn path_differs<S: CommitSource>(
 /// Whether `bloom` (a commit's changed-path filter, read with `settings`)
 /// definitively says the path did not change. `false` means "unknown" — no
 /// filter, no settings, or a possible match — so the caller must diff.
-fn bloom_says_unchanged(
+///
+/// Public because the blame walk asks the same question of the same filters
+/// (git's blame consults them through `maybe_changed_path`), and one definition
+/// of "the filter ruled this out" is what keeps the two walks skipping the same
+/// commits.
+pub fn bloom_says_unchanged(
     settings: Option<&BloomSettings>,
     bloom: Option<&[u8]>,
     path: &str,
@@ -227,13 +232,24 @@ struct FrontierKey {
 }
 
 /// The commits a walk still has to visit, ordered as git orders them.
-struct Frontier {
+///
+/// Public because git's blame walks its own history through a `prio_queue`
+/// ordered by the very same comparison (`blame.c`'s `sb->commits`), so
+/// `gib-blame` reuses this rather than growing a second heap that has to be
+/// kept in step with it.
+pub struct Frontier {
     heap: BinaryHeap<FrontierKey>,
     discovered: u64,
 }
 
+impl Default for Frontier {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Frontier {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             heap: BinaryHeap::new(),
             discovered: 0,
@@ -241,7 +257,11 @@ impl Frontier {
     }
 
     /// Add a commit, stamping it with the next discovery counter.
-    fn push(&mut self, time: i64, id: ObjectId) {
+    ///
+    /// A commit may be pushed more than once, as git's own queue allows: the
+    /// blame scoreboard re-queues a commit whenever a fresh batch of lines is
+    /// passed to it, and pops that find nothing left to do are simply skipped.
+    pub fn push(&mut self, time: i64, id: ObjectId) {
         self.discovered += 1;
         let discovered = Reverse(self.discovered);
         self.heap.push(FrontierKey {
@@ -251,64 +271,108 @@ impl Frontier {
         });
     }
 
-    fn pop(&mut self) -> Option<ObjectId> {
+    pub fn pop(&mut self) -> Option<ObjectId> {
         self.heap.pop().map(|key| key.id)
     }
 }
 
-/// The traversal data a single commit contributes to a log walk: enough to
-/// order the frontier (`time`), continue it (`parents`), filter by path
-/// (`tree`, plus `bloom` for the Bloom filter), all without re-parsing objects.
-struct WalkNode {
-    tree: ObjectId,
-    parents: Vec<ObjectId>,
-    time: i64,
+/// The traversal data a single commit contributes to a walk: enough to order
+/// the frontier (`time`), continue it (`parents`), and filter by path (`tree`,
+/// plus `bloom` for the Bloom filter), all without re-parsing objects.
+///
+/// The log walk and the blame walk need exactly the same four fields, and both
+/// read them through [`MetaCache`].
+pub struct CommitMeta {
+    pub tree: ObjectId,
+    pub parents: Vec<ObjectId>,
+    pub time: i64,
     /// The commit's changed-path Bloom filter, if the commit-graph has one.
-    bloom: Option<Vec<u8>>,
+    pub bloom: Option<Vec<u8>>,
 }
 
-/// Look up a commit's [`WalkNode`], memoised in `cache`. Prefers the
-/// commit-graph (no object fetch); otherwise falls back to the commit object,
-/// using `known` when the caller already holds it (the walk's starting commit).
-/// `None` only if the commit can be found neither way.
+/// Per-commit metadata, memoised by object id, so that a commit reached along
+/// several edges is resolved once.
 ///
-/// Whether [`CommitSource::graph_record`] is a cheap in-memory hit is the
-/// implementation's business — in webgit the graph is bulk-loaded once and
-/// persisted, so traversal is in-memory and survives reloads.
+/// The two counters are what a caller reports: whether the commit-graph is
+/// actually carrying the traversal (`graph_hits` should dominate) or whether it
+/// is falling back to reading commit objects.
+#[derive(Default)]
+pub struct MetaCache {
+    entries: BTreeMap<ObjectId, Rc<CommitMeta>>,
+    /// Commits whose metadata came from the commit-graph (no object fetch).
+    pub graph_hits: usize,
+    /// Commits whose metadata required fetching the commit object instead.
+    pub object_fallbacks: usize,
+}
+
+impl MetaCache {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The metadata already held for `id`, without reading anything. For the
+    /// commits a walk has just enqueued, which it resolved on the way in.
+    pub fn cached(&self, id: &ObjectId) -> Option<Rc<CommitMeta>> {
+        self.entries.get(id).map(Rc::clone)
+    }
+
+    /// Look up a commit's [`CommitMeta`], memoised. Prefers the commit-graph
+    /// (no object fetch); otherwise falls back to the commit object, using
+    /// `known` when the caller already holds it (the walk's starting commit).
+    /// `None` only if the commit can be found neither way.
+    ///
+    /// Whether [`CommitSource::graph_record`] is a cheap in-memory hit is the
+    /// implementation's business — in webgit the graph is bulk-loaded once and
+    /// persisted, so traversal is in-memory and survives reloads.
+    pub async fn get<S: CommitSource>(
+        &mut self,
+        source: &S,
+        id: ObjectId,
+        known: Option<&Commit>,
+    ) -> Option<Rc<CommitMeta>> {
+        if let Some(node) = self.entries.get(&id) {
+            return Some(Rc::clone(node));
+        }
+        let node = if let Some(rec) = source.graph_record(id).await {
+            self.graph_hits += 1;
+            CommitMeta {
+                tree: rec.tree,
+                parents: rec.parents.clone(),
+                time: rec.commit_time,
+                bloom: rec.bloom.clone(),
+            }
+        } else {
+            self.object_fallbacks += 1;
+            let commit = match known {
+                Some(c) => c.clone(),
+                None => source.object(id).await.ok()?.commit().ok()?,
+            };
+            CommitMeta {
+                tree: commit.tree(),
+                parents: commit.parents().to_vec(),
+                time: commit.commit_date().timestamp().as_second(),
+                bloom: None,
+            }
+        };
+        let node = Rc::new(node);
+        self.entries.insert(id, Rc::clone(&node));
+        Some(node)
+    }
+}
+
+/// [`MetaCache::get`], folding its counters into a log walk's [`WalkStats`].
 async fn ensure_node<S: CommitSource>(
     source: &S,
-    cache: &mut BTreeMap<ObjectId, Rc<WalkNode>>,
+    cache: &mut MetaCache,
     id: ObjectId,
     known: Option<&Commit>,
     stats: &mut WalkStats,
-) -> Option<Rc<WalkNode>> {
-    if let Some(node) = cache.get(&id) {
-        return Some(Rc::clone(node));
-    }
-    let node = if let Some(rec) = source.graph_record(id).await {
-        stats.graph_meta_hits += 1;
-        WalkNode {
-            tree: rec.tree,
-            parents: rec.parents.clone(),
-            time: rec.commit_time,
-            bloom: rec.bloom.clone(),
-        }
-    } else {
-        stats.object_meta_fallbacks += 1;
-        let commit = match known {
-            Some(c) => c.clone(),
-            None => source.object(id).await.ok()?.commit().ok()?,
-        };
-        WalkNode {
-            tree: commit.tree(),
-            parents: commit.parents().to_vec(),
-            time: commit.commit_date().timestamp().as_second(),
-            bloom: None,
-        }
-    };
-    let node = Rc::new(node);
-    cache.insert(id, Rc::clone(&node));
-    Some(node)
+) -> Option<Rc<CommitMeta>> {
+    let (graph, object) = (cache.graph_hits, cache.object_fallbacks);
+    let node = cache.get(source, id, known).await;
+    stats.graph_meta_hits += cache.graph_hits - graph;
+    stats.object_meta_fallbacks += cache.object_fallbacks - object;
+    node
 }
 
 /// What a candidate commit's tree is compared against to decide whether the
@@ -383,9 +447,9 @@ const STREAM_BATCH: usize = 10;
 /// buys the whole answer in a single round-trip instead of one per parent.
 async fn resolve_merge<S: CommitSource>(
     source: &S,
-    meta: &mut BTreeMap<ObjectId, Rc<WalkNode>>,
+    meta: &mut MetaCache,
     stats: &mut WalkStats,
-    node: &WalkNode,
+    node: &CommitMeta,
     components: &[&str],
 ) -> Option<ObjectId> {
     let mut parents: Vec<(ObjectId, ObjectId)> = Vec::with_capacity(node.parents.len());
@@ -433,7 +497,7 @@ pub async fn walk_commits<S: CommitSource>(
     // `meta`.
     let mut frontier = Frontier::new();
     let mut visited: BTreeSet<ObjectId> = BTreeSet::new();
-    let mut meta: BTreeMap<ObjectId, Rc<WalkNode>> = BTreeMap::new();
+    let mut meta = MetaCache::new();
     let mut stats = WalkStats::default();
 
     if let Some(node) = ensure_node(
@@ -464,7 +528,7 @@ pub async fn walk_commits<S: CommitSource>(
         None => {
             while let Some(id) = frontier.pop() {
                 stats.traversed += 1;
-                let node = meta.get(&id).map(Rc::clone).unwrap();
+                let node = meta.cached(&id).unwrap();
                 if matched.len() == want {
                     has_more = true;
                     break;
@@ -490,7 +554,7 @@ pub async fn walk_commits<S: CommitSource>(
             // A merge whose parent diffs have to be resolved before the walk
             // may go any further, because which of its parents reach the
             // frontier depends on them.
-            let mut stalled: Option<(ObjectId, Rc<WalkNode>)> = None;
+            let mut stalled: Option<(ObjectId, Rc<CommitMeta>)> = None;
             'outer: loop {
                 // Refill the candidate buffer by traversing (in-memory)
                 // commits, enqueueing parents and Bloom-skipping non-matches as
@@ -498,7 +562,7 @@ pub async fn walk_commits<S: CommitSource>(
                 while pending.len() < CONFIRM_BATCH {
                     let Some(id) = frontier.pop() else { break };
                     stats.traversed += 1;
-                    let node = meta.get(&id).map(Rc::clone).unwrap();
+                    let node = meta.cached(&id).unwrap();
                     match node.parents.as_slice() {
                         // A root has no parent to diff against, and nothing to
                         // put on the frontier.
@@ -608,7 +672,7 @@ pub async fn walk_commits<S: CommitSource>(
                         None => &node.parents,
                     };
                     for parent in follow.iter().copied() {
-                        if let Some(parent_node) = meta.get(&parent).map(Rc::clone)
+                        if let Some(parent_node) = meta.cached(&parent)
                             && visited.insert(parent)
                         {
                             frontier.push(parent_node.time, parent);

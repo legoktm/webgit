@@ -222,6 +222,15 @@ fn write_history(repo: &TestRepo) -> Result<()> {
     // and a nested docs/ path for the path-scoped log.
     write_file(repo, "docs/guide.md", b"# Guide\n\nSome **docs**.\n")?;
     write_file(repo, "assets/logo.bin", &[0u8, 1, 2, 3, 0, 255, 254, 0])?;
+    // A second edit to a file the first commit introduced, so blame has a file
+    // whose lines come from two different commits rather than one. The braces
+    // stay where they were and a line is inserted between them, which is the
+    // shape that makes the attribution worth checking at all.
+    write_file(
+        repo,
+        "src/main.rs",
+        b"fn main() {\n    println!(\"hi\");\n    println!(\"bye\");\n}\n",
+    )?;
     repo.run_git(["add", "--all"])?;
     repo.commit(
         "Add docs and a binary asset",

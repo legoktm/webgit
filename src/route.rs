@@ -2,6 +2,7 @@ use crate::RepoBundle;
 use crate::cache::CachingRepo;
 use crate::error::GitContext;
 use crate::render::about::{AboutProps, build_about};
+use crate::render::blame::{BlameProps, build_blame};
 use crate::render::blob::{BlobProps, build_blob_props};
 use crate::render::commit::{CommitProps, build_commit, resolve_sha};
 use crate::render::log::{LogProps, LogQuery, build_log};
@@ -88,6 +89,12 @@ pub(crate) enum Route {
         /// as a document, SVG as a picture. Ignored when the path resolves to
         /// anything else.
         render: bool,
+    },
+    /// Per-line blame for one file: which commit last touched each line.
+    /// `head` is the revision blamed from, as everywhere else.
+    Blame {
+        path: String,
+        head: Option<String>,
     },
     /// A `.tar.gz` of a ref's tree (HEAD's, when there is no `?h=`), built on
     /// arrival. A route rather than a button because building one is exactly
@@ -343,6 +350,7 @@ pub(crate) fn parse_index_hash(hash: &str) -> IndexRoute {
 /// #!/refs/tags[/]                  the tag list
 /// #!/refs/tags/<tag>               one tag
 /// #!/tree[/<path>][?…]             the tree, or a blob; query: h=<rev>, render=1
+/// #!/blame/<path>[?h=<rev>]        per-line blame for one file
 /// #!/snapshot[/…][?h=<ref>]        a .tar.gz of a revision's tree (path ignored)
 /// ```
 ///
@@ -402,6 +410,12 @@ pub(crate) fn parse_hash(hash: &str) -> Route {
     if let Some(rest) = strip_route_prefix(hash, "#!/tree", &['/', '?']) {
         let (path, head, render) = parse_tree_rest(rest);
         return Route::Tree { path, head, render };
+    }
+
+    if let Some(rest) = strip_route_prefix(hash, "#!/blame", &['/', '?']) {
+        // Blame is always of one file, so `render=1` has nothing to mean here.
+        let (path, head, _) = parse_tree_rest(rest);
+        return Route::Blame { path, head };
     }
 
     if let Some(rest) = strip_route_prefix(hash, "#!/snapshot", &['/', '?']) {
@@ -498,9 +512,9 @@ pub(crate) fn active_tab(route: &Route) -> &'static str {
         Route::Log { .. } => "#!/log",
         Route::CommitHead | Route::Commit(_) => "#!/commit",
         Route::Refs(_) => "#!/refs",
-        // A snapshot is an action on the tree being browsed, so the tree tab
-        // stays lit while one is being built.
-        Route::Tree { .. } | Route::Snapshot { .. } => "#!/tree",
+        // A snapshot is an action on the tree being browsed, and blame is a
+        // way of reading one of its files, so the tree tab stays lit for both.
+        Route::Tree { .. } | Route::Snapshot { .. } | Route::Blame { .. } => "#!/tree",
     }
 }
 
@@ -620,6 +634,7 @@ pub(crate) enum LoadedView {
     Tag(TagProps),
     Tree(TreeProps),
     Blob(BlobProps),
+    Blame(Box<BlameProps>),
     Snapshot(SnapshotProps),
     /// A tree path that resolved to neither a subtree nor a blob.
     NotFound(String),
@@ -736,6 +751,37 @@ pub(crate) async fn build_route(
                 Ok(LoadedView::NotFound(path))
             }
         }
+        Route::Blame { path, head } => {
+            // Unlike the tree route this needs the commit itself, not just its
+            // tree: the walk starts from it.
+            let resolved;
+            let commit: &gib::object::Commit = match effective_head(repo, head.as_deref()).await {
+                Some(name) => {
+                    resolved = resolve_revision(repo, name).await?.0;
+                    &resolved
+                }
+                None => head_commit,
+            };
+            let tree = repo
+                .lookup_object(commit.tree())
+                .await
+                .context("lookup tree to blame")?
+                .tree()
+                .map_err(gib::error::Error::from)
+                .context("expected a tree to blame")?;
+            // Resolving the blob here rather than in the engine is what lets
+            // the file paint before the walk starts, and it decides "not a
+            // file" the same way every other path-shaped route does.
+            let Some((id, data)) = walk_to_blob(&tree, &path, repo).await else {
+                return Ok(LoadedView::NotFound(path));
+            };
+            let props = build_blame(repo, commit, &path, head.as_deref(), id, data, |p| {
+                on_partial(LoadedView::Blame(Box::new(p)))
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("blame {path}: {e}"))?;
+            Ok(LoadedView::Blame(Box::new(props)))
+        }
         Route::Snapshot { head } => {
             let head = effective_head(repo, head.as_deref()).await;
 
@@ -810,6 +856,16 @@ pub(crate) fn tree_url(path: &str, head: Option<&str>, render: bool) -> String {
         (None, true) => format!("{base}?render=1"),
         (Some(head), false) => format!("{base}?h={head}"),
         (Some(head), true) => format!("{base}?h={head}&render=1"),
+    }
+}
+
+/// The URL for a blame view. `path` and `head` are the decoded values, encoded
+/// here as [`tree_url`] encodes them.
+pub(crate) fn blame_url(path: &str, head: Option<&str>) -> String {
+    let base = format!("#!/blame/{}", encode_path(path));
+    match head.map(encode_component) {
+        None => base,
+        Some(head) => format!("{base}?h={head}"),
     }
 }
 
@@ -1170,6 +1226,57 @@ mod tests {
                 "{hash}"
             );
         }
+    }
+
+    #[test]
+    fn test_parse_hash_blame() {
+        assert!(matches!(
+            parse_hash("#!/blame/src/main.rs"),
+            Route::Blame { path, head: None } if path == "src/main.rs"
+        ));
+        assert!(matches!(
+            parse_hash("#!/blame/src/main.rs?h=v1.0"),
+            Route::Blame { path, head: Some(head) } if path == "src/main.rs" && head == "v1.0"
+        ));
+        // A line anchor selects lines within the blame, not another route.
+        assert!(matches!(
+            parse_hash("#!/blame/src/main.rs#n5"),
+            Route::Blame { path, .. } if path == "src/main.rs"
+        ));
+    }
+
+    #[test]
+    fn test_blame_url() {
+        assert_eq!(blame_url("src/main.rs", None), "#!/blame/src/main.rs");
+        assert_eq!(
+            blame_url("src/main.rs", Some("main")),
+            "#!/blame/src/main.rs?h=main"
+        );
+        assert_eq!(
+            blame_url("docs/a b.md", Some("release/2.0")),
+            "#!/blame/docs/a%20b.md?h=release%2F2.0",
+            "a slash in a ref name is encoded, not left to split the route"
+        );
+    }
+
+    /// The round trip that matters: a path and a ref carrying route syntax come
+    /// back out of the router as themselves.
+    #[test]
+    fn test_blame_url_round_trips_through_the_router() {
+        let url = blame_url("docs/a?b.md", Some("x&h=y"));
+        match parse_hash(&url) {
+            Route::Blame { path, head } => {
+                assert_eq!(path, "docs/a?b.md");
+                assert_eq!(head.as_deref(), Some("x&h=y"));
+            }
+            _ => panic!("expected a blame route from {url}"),
+        }
+    }
+
+    /// Blame is a way of reading a file in the tree, so the tree tab stays lit.
+    #[test]
+    fn test_blame_lives_under_the_tree_tab() {
+        assert_eq!(active_tab(&parse_hash("#!/blame/src/main.rs")), "#!/tree");
     }
 
     /// A snapshot is of a whole tree, so the flag means nothing there and must

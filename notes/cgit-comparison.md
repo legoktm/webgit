@@ -15,7 +15,6 @@ As things are implemented, remove them from this list.
 | `/patch/` | `git format-patch` output, plus patch ranges (`?id=..id2`) | partial — the commit page's "(patch)" link downloads the same bytes (`crates/gib-patch`, differential-tested against `git format-patch`), but there is no addressable URL and no ranges |
 | `/rawdiff/` | Raw unified diff, no HTML | missing |
 | `/plain/` | Raw blob at a URL, with mimetype dispatch | missing — `#!/tree/<path>` gives an in-page download button built from a Blob URL, but there's no addressable raw URL |
-| `/blame/` | Per-line blame with commit links | missing |
 | `/atom/` | Atom feed of a branch's log | missing |
 | `/stats/` | Commit stats per period (week/month/quarter/year), by author | missing |
 
@@ -34,7 +33,8 @@ As things are implemented, remove them from this list.
 
 - **Size column** — cgit shows blob size; webgit shows only Mode and Name
   (`src/render/tree.rs:171-175`).
-- **Per-file links** — cgit puts `log` / `plain` / `blame` links on every row.
+- **Per-file links** — cgit puts `log` / `plain` / `blame` links on every row;
+  webgit has the `blame` one.
 - **Submodule links** — no `repo.module-link` equivalent
 
 ## Blob
@@ -42,6 +42,19 @@ As things are implemented, remove them from this list.
 - **Syntax highlighting** (cgit's `source-filter`, e.g. highlight/pygments).
 - **HTML serving** (`enable-html-serving`) — deliberately unsafe, probably a
   permanent no.
+
+## Blame (`#!/blame`)
+
+The engine is a port of git's `blame.c` as cgit drives it (`assign_blame(&sb,
+0)`), differential-tested against `git blame` itself. What cgit's page has and
+this one does not:
+
+- **Author / committer / subject on hover** — cgit's hash links carry a title
+  built from the commit; webgit's carry the full hash. Filling one in costs a
+  commit object per run, which is the traffic this view is trying not to spend.
+- **Rename following** — cgit runs blame's second pass (`find_rename`), so a
+  renamed file keeps its history; webgit's blame stops at the rename.
+- **`enable-tree-linenumbers`** — cgit can drop the line-number column.
 
 ## Commit (`#!/commit`)
 
@@ -88,6 +101,9 @@ Currently just section + name derived from the paths in `listing.json`
 
 - **Atom feeds** and **auth-filter** are structurally server-side and probably
   out of scope for a static-hosted client.
-- **stats**, **blame**, and **log search** are all reachable but expensive: they
-  need a full-history walk rather than the bounded fetch webgit currently does,
-  so they'd want the commit-graph and some care around request volume.
+- **stats** and **log search** are both reachable but expensive: they need a
+  full-history walk rather than the bounded fetch webgit currently does, so
+  they'd want the commit-graph and some care around request volume. Blame has
+  the same shape and is built on exactly that footing — the commit-graph's
+  changed-path filters keep it from reading a tree per commit, and the view
+  streams its rows rather than waiting for the walk to finish.

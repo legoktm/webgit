@@ -9,6 +9,7 @@ use std::rc::Rc;
 use yew::{Html, classes, html};
 
 pub(crate) mod about;
+pub(crate) mod blame;
 pub(crate) mod blob;
 pub(crate) mod commit;
 pub(crate) mod listing;
@@ -263,7 +264,7 @@ fn commit_table_row(c: &CommitRow, expanded: bool) -> Html {
 
 /// The 8-character abbreviation of `id` displayed in commit tables. Rendered
 /// once when the row is built, so the full hex form is never retained.
-fn short_hash(id: ObjectId) -> String {
+pub(crate) fn short_hash(id: ObjectId) -> String {
     format!("{id}")[..8].to_string()
 }
 

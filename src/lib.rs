@@ -17,6 +17,7 @@ use gib::Repo;
 use gib::object::{Commit, Tree, TreeEntryType};
 use gib_mailmap::Mailmap;
 use render::about::{AboutProps, AboutView, build_index_about};
+use render::blame::BlameView;
 use render::blob::BlobView;
 use render::commit::CommitView;
 use render::listing::{ListingProps, ListingView, parse_listing};
@@ -472,6 +473,7 @@ fn render_loaded(view: &LoadedView, lines: Option<LineRange>) -> Html {
             p.lines = lines;
             html! { <BlobView ..p /> }
         }
+        LoadedView::Blame(p) => html! { <BlameView ..(**p).clone() /> },
         LoadedView::Snapshot(p) => html! { <SnapshotView ..p.clone() /> },
         LoadedView::NotFound(path) => html! {
             <p class="msg error">{ "Not found: " }<code>{ path.clone() }</code></p>
@@ -640,6 +642,16 @@ enum PathBar {
 async fn compute_path_bar(hash: &str, repo: &CachingRepo) -> PathBar {
     match parse_hash(hash) {
         Route::Tree { path, head, .. } => {
+            let display = resolve_display_head(repo, head.as_deref()).await;
+            PathBar::Crumbs {
+                display,
+                path,
+                head,
+            }
+        }
+        // Blame is a way of reading one file in the tree, so it gets the
+        // tree's breadcrumb: the trail back out of the file is the same one.
+        Route::Blame { path, head } => {
             let display = resolve_display_head(repo, head.as_deref()).await;
             PathBar::Crumbs {
                 display,

@@ -172,6 +172,9 @@ pub(crate) fn tree_view(props: &TreeProps) -> Html {
                 <tr>
                     <th>{ "Mode" }</th>
                     <th>{ "Name" }</th>
+                    // cgit's per-file link column, which carries no heading of
+                    // its own there either.
+                    <th></th>
                 </tr>
             </thead>
             <tbody>
@@ -200,6 +203,16 @@ fn tree_row(entry: &TreeEntryRow, head_suffix: &str) -> Html {
                     },
                     RowKind::Submodule(id) => submodule(&entry.name, *id),
                 } }
+            </td>
+            <td class="links">
+                // Only what has lines to attribute: a directory has none, and
+                // a submodule's are in another repository.
+                if matches!(entry.kind, RowKind::File | RowKind::Symlink(_)) {
+                    <a class="blame-link"
+                       href={format!("#!/blame/{}{head_suffix}", encode_path(&entry.path))}>
+                        { "blame" }
+                    </a>
+                }
             </td>
         </tr>
     }

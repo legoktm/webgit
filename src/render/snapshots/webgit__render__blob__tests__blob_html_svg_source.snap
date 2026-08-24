@@ -2,7 +2,7 @@
 source: src/render/blob.rs
 expression: "render_path(\"img/logo.svg\", SVG)"
 ---
-<div class="blob-info">blob: e69de29bb2d1d6434b8b29ae775ad8c2e48c5391 · <a href="#!/tree/img/logo.svg?render=1" class="blob-alt-view">rendered</a>
+<div class="blob-info">blob: e69de29bb2d1d6434b8b29ae775ad8c2e48c5391 · <a href="#!/tree/img/logo.svg?render=1" class="blob-alt-view">rendered</a> · <a href="#!/blame/img/logo.svg" class="blame-link">blame</a>
 </div>
 <table class="blob-table">
 <tbody>

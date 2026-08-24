@@ -562,6 +562,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "gib-blame"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "futures",
+ "gib-commitgraph",
+ "gib-fs",
+ "gib-log",
+ "gib-object",
+ "gib-odb",
+ "gib-testkit",
+ "gib-xdiff",
+]
+
+[[package]]
 name = "gib-commitgraph"
 version = "0.0.0"
 dependencies = [
@@ -2346,6 +2361,7 @@ dependencies = [
  "futures",
  "gib",
  "gib-archive",
+ "gib-blame",
  "gib-log",
  "gib-mailmap",
  "gib-patch",

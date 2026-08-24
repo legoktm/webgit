@@ -71,6 +71,11 @@ route_test!(log_expands_commit_messages, check_log_showmsg);
 route_test!(tree_renders_real_content, check_tree);
 route_test!(blob_renders_real_content, check_blob);
 route_test!(blob_line_anchors_select_lines, check_line_anchors);
+route_test!(blame_renders_real_content, check_blame);
+route_test!(
+    blame_is_linked_from_the_tree_and_the_blob,
+    check_blame_links
+);
 route_test!(commit_renders_real_content, check_commit);
 route_test!(root_commit_diffs_against_the_empty_tree, check_root_commit);
 route_test!(refs_render_real_content, check_refs);
@@ -360,6 +365,121 @@ async fn await_hash(h: &Harness, expected: &str) -> Result<()> {
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
+}
+
+/// Blame, which only a browser can show is real: the whole walk — xdiff
+/// compiled to wasm, a blob per revision fetched over dumb HTTP, the gutter
+/// filling in as runs settle — happens in the page, and none of it is
+/// observable from a server-rendered string.
+///
+/// `src/main.rs` is the fixture's two-commit file: the root commit wrote it,
+/// and "Add docs and a binary asset" inserted a line into the middle. So the
+/// finished blame has exactly three runs, and which lines fall in which is the
+/// attribution itself.
+async fn check_blame(h: &Harness, repo: &RepoFixture) -> Result<()> {
+    h.open(repo, "#!/blame/src/main.rs").await?;
+    h.wait_for(".blame-table").await?;
+    h.assert_no_error().await?;
+
+    // The file paints before the walk finishes, so the rows are there from the
+    // start; what arrives later is the gutter.
+    let code: Vec<String> = h
+        .texts_of(".blame-table td.code")
+        .await?
+        .iter()
+        .map(|l| l.trim().to_string())
+        .collect();
+    assert_eq!(
+        code,
+        vec![
+            "fn main() {",
+            "println!(\"hi\");",
+            "println!(\"bye\");",
+            "}",
+        ],
+        "[{}] blame did not render the file's real contents",
+        repo.name
+    );
+
+    await_blame_settled(h, repo).await?;
+    h.assert_no_error().await?;
+
+    let root = repo.commits.last().expect("fixture has no commits");
+    let edit = &repo.commits[1];
+    let hashes = h.texts_of(".blame-table td.hashes a.oid").await?;
+    assert_eq!(
+        hashes,
+        vec![root.short_sha(), edit.short_sha(), root.short_sha()],
+        "[{}] blame attributed the wrong commits, or grouped them wrongly",
+        repo.name
+    );
+
+    // The gutter's commit link reaches that commit's page.
+    let href = h
+        .wait_for(".blame-table td.hashes a.oid")
+        .await?
+        .attr("href")
+        .await?
+        .unwrap_or_default();
+    assert_eq!(href, format!("#!/commit/{}", root.sha));
+
+    // Two of the three runs are the root commit's, which has no previous
+    // revision to offer; only the run from the later edit carries a `^`, and it
+    // blames that commit's parent.
+    let prev = h
+        .client
+        .find_all(Locator::Css(".blame-table td.hashes a.blame-prev"))
+        .await?;
+    assert_eq!(
+        prev.len(),
+        1,
+        "[{}] the `^` links are wrong: only the non-root run should have one",
+        repo.name
+    );
+    let parent_of_edit = &repo.commits[2];
+    assert_eq!(
+        prev[0].attr("href").await?.unwrap_or_default(),
+        format!("#!/blame/src/main.rs?h={}", parent_of_edit.sha),
+        "[{}] `^` did not blame the previous revision",
+        repo.name
+    );
+    Ok(())
+}
+
+/// Wait for the walk to finish: the "blaming…" marker is removed when it does.
+async fn await_blame_settled(h: &Harness, repo: &RepoFixture) -> Result<()> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        if h.texts_of(".blame-pending").await?.is_empty() {
+            return Ok(());
+        }
+        if std::time::Instant::now() >= deadline {
+            anyhow::bail!("[{}] blame never finished", repo.name);
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// The blame view is reached from the file itself and from the tree listing,
+/// which is where a reader actually goes looking for it.
+async fn check_blame_links(h: &Harness, repo: &RepoFixture) -> Result<()> {
+    h.open(repo, "#!/tree/src").await?;
+    h.wait_for(".tree-table").await?;
+    let links = h.texts_of(".tree-table td.links a.blame-link").await?;
+    assert_eq!(
+        links.len(),
+        2,
+        "[{}] src/ has two files, so it should have two blame links",
+        repo.name
+    );
+
+    h.open(repo, "#!/tree/src/main.rs").await?;
+    h.wait_for(".blob-table").await?;
+    h.wait_for(".blob-info a.blame-link").await?.click().await?;
+    h.wait_for(".blame-table").await?;
+    h.assert_no_error().await?;
+    assert_eq!(h.hash().await?, "#!/blame/src/main.rs");
+    Ok(())
 }
 
 async fn check_commit(h: &Harness, repo: &RepoFixture) -> Result<()> {
