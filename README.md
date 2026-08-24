@@ -9,11 +9,19 @@ it for your own purposes, that would be sick, but it may not be super mature.
 For the most part webgit is aiming to imitate cgit (<https://git.zx2c4.com/cgit/about/>)
 as closely as possible because it's probably my favorite Git viewer.
 
+## Motivation
+
+gib is essentially scraper-proof, because it relies on "do-the-work" protection instead of solutions like Anubis, which are proof-of-work. Because everything runs client-side, gib can be deployed as static files, which take minimal server resources. If a user makes an expensive blame request, all the computation is done on their browser, not on your server.
+
+More details are in the [initial blog post](https://blog.legoktm.com/2026/06/14/do-the-work-instead-of-proof-of-work-for-git-hosting.html) announcing this project.
+
+## License 
+
 In as much as there is copyrightable code in this repository (most of it is vibecoded), it's available under the GPL v2
 as a derivative work of Git and/or cgit. It vendors git's [xdiff](https://github.com/libgit2/xdiff) code, which is LGPL v2.1 or later. Some of the git handling code originated from <https://github.com/cyberia-ng/git-async>,
 which is also available under the MIT or Apache 2.0 licenses.
 
-### Set up
+## Set up
 
 * Download the latest signed release from [GitHub](https://github.com/legoktm/webgit/releases).
 * Copy the `dist/` directory to your web server, e.g. `/var/www/webgit/`.
@@ -42,12 +50,12 @@ run `git update-server-info` in each.
 
 I rsync the repositories from Forgejo's storage to my webserver and it seems to work fine.
 
-#### Commit Graph
+### Commit Graph
 
 To optimize a number of git operations, you should generate a "commit-graph" file
 by running `git commit-graph write --reachable --changed-paths`.
 
-### Index listing
+## Index listing
 
 You'll need to create a `/listing.json` file that contains a JSON array of objects, each mapping a
 directory prefix to the repositories under it:
@@ -69,7 +77,7 @@ find /var/www/repos -type d -name '*.git' -prune -printf '%P\n' | sort |
     jq -R -s '[splits("\n")|select(. != "")]|map(split("/"))|group_by(.[:-1])|map({(.[0][:-1]|join("/")): map(.[-1])})' > /var/www/repos/listing.json
 ```
 
-### WEBCAT
+## WEBCAT
 
 [WEBCAT](https://webcat.tech/) allows users to verify the website in question is running a signed,
 non-tampered version of gib. WEBCAT is in alpha and support is still experimental.
