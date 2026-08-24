@@ -110,9 +110,35 @@ async fn check_summary(h: &Harness, repo: &RepoFixture) -> Result<()> {
     Ok(())
 }
 
+/// Block until the log table is the finished one rather than a snapshot of it
+/// being built.
+async fn wait_for_settled_log(h: &Harness, repo: &RepoFixture) -> Result<()> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        let rows = h.texts_of(".summary-table td.name").await?.len();
+        let decorated = !h
+            .texts_of(".summary-table td.msg .ref-label")
+            .await?
+            .is_empty();
+        if rows == repo.commits.len() && decorated {
+            return Ok(());
+        }
+        if std::time::Instant::now() >= deadline {
+            anyhow::bail!(
+                "[{}] the log never settled: {rows} of {} rows, decorations {}",
+                repo.name,
+                repo.commits.len(),
+                if decorated { "present" } else { "missing" },
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 async fn check_log(h: &Harness, repo: &RepoFixture) -> Result<()> {
     h.open(repo, "#!/log").await?;
     h.wait_for(".summary-table").await?;
+    wait_for_settled_log(h, repo).await?;
     h.assert_no_error().await?;
 
     // The log table renders abbreviated hashes in `td.name`; compare against
