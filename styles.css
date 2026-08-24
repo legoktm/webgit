@@ -434,6 +434,39 @@ a.ref-label:hover {
     user-select: all;
 }
 
+/* ── Expanded log (?showmsg=1) ───────────────────────────────── */
+/* Each commit owns two rows here, so the even/odd striping is replaced by
+   shading the subject row of every commit, cgit-style. */
+.summary-table.log-expanded tr:nth-child(even) td {
+    background: none;
+}
+
+.summary-table.log-expanded tr.logheader td {
+    background: var(--bg-alt);
+}
+
+.summary-table.log-expanded tr.logheader:not(:first-child) td {
+    border-top: 1px solid var(--border);
+}
+
+.summary-table td.logmsg {
+    font-family: var(--mono);
+    /* The body is pre-formatted text, but a long line should wrap rather than
+       widen the whole table. */
+    white-space: pre-wrap;
+    padding: 0.3rem 0.6rem 0.6rem;
+    color: var(--text-dim);
+}
+
+/* With the body visible, a subject cut off by an ellipsis is the odd one out,
+   so it line-wraps here instead — as cgit's own expanded log does. */
+.summary-table.log-expanded td.msg {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    max-width: none;
+}
+
 /* ── Log pagination ──────────────────────────────────────────── */
 .log-nav {
     display: flex;

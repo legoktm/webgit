@@ -580,8 +580,11 @@ fn nav_bar(props: &NavBarProps) -> Html {
         Route::Tree { head, path, .. } => (head.as_deref(), path.as_str()),
         _ => (None, ""),
     };
+    // The log tab keeps an expanded log expanded, the way it keeps the `?h=`
+    // and path it was opened with; from anywhere else it starts collapsed.
+    let showmsg = matches!(route, Route::Log { showmsg: true, .. });
     let active = active_tab(&route);
-    let log_href = log_url(nav_path, 0, head);
+    let log_href = log_url(nav_path, 0, head, showmsg);
     let tree_href = match head {
         Some(h) => format!("#!/tree?h={}", encode_component(h)),
         None => "#!/tree".to_string(),

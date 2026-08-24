@@ -208,8 +208,11 @@ fn write_history(repo: &TestRepo) -> Result<()> {
 
     write_file(repo, "src/lib.rs", b"pub fn answer() -> u32 {\n    42\n}\n")?;
     repo.run_git(["add", "--all"])?;
+    // The one commit with a message body, so the log's `?showmsg=1` has
+    // something to expand and the rows that stay collapsed have a counterpart
+    // that does not.
     repo.commit(
-        "Add a library module",
+        &format!("{LIBRARY_COMMIT_SUBJECT}\n\n{LIBRARY_COMMIT_BODY}"),
         AUTHOR.0,
         AUTHOR.1,
         "2000-01-02T00:00:00Z",
@@ -273,6 +276,14 @@ fn write_history(repo: &TestRepo) -> Result<()> {
 
     Ok(())
 }
+
+/// The subject of the one [`write_history`] commit whose message has a body.
+pub const LIBRARY_COMMIT_SUBJECT: &str = "Add a library module";
+
+/// That commit's body — two paragraphs, so the expanded log has to keep the
+/// blank line between them rather than reflowing the message into one run.
+pub const LIBRARY_COMMIT_BODY: &str =
+    "Adds answer(), which returns 42.\n\nThere are no callers yet.";
 
 /// The note [`write_history`] attaches to the tip of `main`. Quotes a hash, as
 /// notes tend to, so the commit page's linkification of them is exercised too.

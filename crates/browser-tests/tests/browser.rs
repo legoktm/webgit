@@ -67,6 +67,7 @@ macro_rules! route_test {
 
 route_test!(summary_renders_real_content, check_summary);
 route_test!(log_renders_real_content, check_log);
+route_test!(log_expands_commit_messages, check_log_showmsg);
 route_test!(tree_renders_real_content, check_tree);
 route_test!(blob_renders_real_content, check_blob);
 route_test!(blob_line_anchors_select_lines, check_line_anchors);
@@ -147,6 +148,82 @@ async fn check_log(h: &Harness, repo: &RepoFixture) -> Result<()> {
         "[{}] the HEAD row lost its ref decorations: {:?}",
         repo.name,
         subjects[0]
+    );
+    Ok(())
+}
+
+/// `?showmsg=1` — cgit's Expand: every commit's message body under its subject
+/// row, the header link flipped to Collapse, and a body-less commit left as the
+/// single row it already was.
+async fn check_log_showmsg(h: &Harness, repo: &RepoFixture) -> Result<()> {
+    h.open(repo, "#!/log?showmsg=1").await?;
+    h.wait_for(".summary-table.log-expanded").await?;
+    h.assert_no_error().await?;
+
+    // Every fixture's history is `write_history`'s, so exactly one commit has a
+    // body: an expanded log shows that one and no other second row.
+    let bodies = h.texts_of(".summary-table td.logmsg").await?;
+    assert_eq!(
+        bodies.len(),
+        1,
+        "[{}] expanded log rendered {} message bodies, expected the one commit that has one: {bodies:?}",
+        repo.name,
+        bodies.len()
+    );
+    for line in fixtures::LIBRARY_COMMIT_BODY
+        .lines()
+        .filter(|l| !l.is_empty())
+    {
+        assert!(
+            bodies[0].contains(line),
+            "[{}] expanded body {:?} is missing {line:?}",
+            repo.name,
+            bodies[0]
+        );
+    }
+
+    // The body belongs to its own commit, not to whichever row came first.
+    let subjects = h.texts_of(".summary-table td.msg").await?;
+    assert_eq!(
+        subjects.len(),
+        repo.commits.len(),
+        "[{}] expanding changed how many commits are listed",
+        repo.name
+    );
+    let logmsg_row = h
+        .client
+        .find(Locator::Css(".summary-table td.logmsg"))
+        .await?;
+    let preceding = logmsg_row
+        .find(Locator::XPath(
+            "../preceding-sibling::tr[1]/td[@class='msg']",
+        ))
+        .await?
+        .text()
+        .await?;
+    assert!(
+        preceding.starts_with(fixtures::LIBRARY_COMMIT_SUBJECT),
+        "[{}] the body row follows {preceding:?}, not the commit it belongs to",
+        repo.name
+    );
+
+    // The header toggle is the way back: it names this same log, collapsed.
+    h.client
+        .find(Locator::Css(".summary-table thead a"))
+        .await?
+        .click()
+        .await?;
+    h.wait_for(".summary-table").await?;
+    assert_eq!(
+        h.hash().await?,
+        "#!/log",
+        "[{}] Collapse did not return to the plain log",
+        repo.name
+    );
+    assert!(
+        h.texts_of(".summary-table td.logmsg").await?.is_empty(),
+        "[{}] message bodies survived Collapse",
+        repo.name
     );
     Ok(())
 }

@@ -1,13 +1,13 @@
 ---
 source: src/render/log.rs
-expression: "render(LogProps\n{\n    commits:\n    vec![fixtures::decorated_commit_row(\"0123abcd\", \"Fix non-annotated tags\",\n    \"Kunal Mehta\", fixtures::relative_age(3600), &[\"main\"], &[\"v1.0.0\"],),\n    fixtures::commit_row(\"89abcdef\", \"Add README\", \"Kunal Mehta\",\n    fixtures::relative_age(86400 * 3),),], prev_url:\n    Some(log_url(\"\", 0, Some(\"main\"))), next_url:\n    Some(log_url(\"\", 100, Some(\"main\"))),\n})"
+expression: "render(LogProps\n{\n    commits:\n    vec![fixtures::decorated_commit_row(\"0123abcd\", \"Fix non-annotated tags\",\n    \"Kunal Mehta\", fixtures::relative_age(3600), &[\"main\"], &[\"v1.0.0\"],),\n    fixtures::commit_row(\"89abcdef\", \"Add README\", \"Kunal Mehta\",\n    fixtures::relative_age(86400 * 3),),], prev_url:\n    Some(log_url(\"\", 0, Some(\"main\"), false)), next_url:\n    Some(log_url(\"\", 100, Some(\"main\"), false)), expand:\n    ExpandMsg::new(false, log_url(\"\", 50, Some(\"main\"), true)),\n})"
 ---
 <table class="summary-table">
 <thead>
 <tr>
 <th>Age</th>
 <th>Commit</th>
-<th>Message</th>
+<th>Message (<a href="#!/log?h=main&amp;offset=50&amp;showmsg=1">Expand</a>)</th>
 <th>Author</th>
 </tr>
 </thead>

@@ -1,6 +1,9 @@
 use crate::{
     cache::CachingRepo,
-    render::{CommitRow, apply_decorations, commits_table, decoration_map, walk_commits_streamed},
+    render::{
+        CommitRow, ExpandMsg, apply_decorations, commits_table, decoration_map,
+        walk_commits_streamed,
+    },
     route::log_url,
 };
 use gib::object::Commit;
@@ -11,6 +14,17 @@ use yew::prelude::*;
 
 const PAGE_SIZE: usize = 50;
 
+/// What a `#!/log` URL asked for: which history (the `?h=` revision, narrowed
+/// to `path`), which page of it, and whether commit message bodies are
+/// expanded. The revision itself is resolved by the caller — this is the query
+/// as written, which is also what the page's own links have to reproduce.
+pub(crate) struct LogQuery<'a> {
+    pub(crate) path: &'a str,
+    pub(crate) offset: usize,
+    pub(crate) head: Option<&'a str>,
+    pub(crate) showmsg: bool,
+}
+
 /// Build the log page, calling `on_partial` with progressively longer prefixes
 /// of the page as commits stream in. The returned value is the complete page;
 /// it's the only one carrying the pagination links (see below).
@@ -18,13 +32,21 @@ pub(crate) async fn build_log(
     head_commit: &Commit,
     repo: &CachingRepo,
     mailmap: &Mailmap,
-    path: &str,
-    offset: usize,
-    head: Option<&str>,
+    query: &LogQuery<'_>,
     on_partial: impl Fn(LogProps),
 ) -> LogProps {
+    let &LogQuery {
+        path,
+        offset,
+        head,
+        showmsg,
+    } = query;
     let path_filter = (!path.is_empty()).then_some(path);
-    let prev_url = (offset > 0).then(|| log_url(path, offset.saturating_sub(PAGE_SIZE), head));
+    let prev_url =
+        (offset > 0).then(|| log_url(path, offset.saturating_sub(PAGE_SIZE), head, showmsg));
+    // The toggle names this very page with `?showmsg=` flipped, so expanding
+    // holds the ref, the path and the offset the reader is already on.
+    let expand = ExpandMsg::new(showmsg, log_url(path, offset, head, !showmsg));
 
     // Walk and decoration scan run concurrently, as in `build_summary`: peeling
     // every tag is fetch-bound on a cold cache and awaiting it first would stall
@@ -54,6 +76,7 @@ pub(crate) async fn build_log(
                 commits,
                 prev_url: prev_url.clone(),
                 next_url: None,
+                expand: expand.clone(),
             });
         },
     );
@@ -66,7 +89,8 @@ pub(crate) async fn build_log(
         // Saturating for the same reason as `prev_url`'s subtraction above:
         // `offset` is whatever `?offset=` said, so the next page's offset must
         // not be allowed to wrap past the end of the number line.
-        next_url: has_next.then(|| log_url(path, offset.saturating_add(PAGE_SIZE), head)),
+        next_url: has_next.then(|| log_url(path, offset.saturating_add(PAGE_SIZE), head, showmsg)),
+        expand,
     }
 }
 
@@ -78,6 +102,7 @@ pub(crate) struct LogProps {
     commits: Vec<CommitRow>,
     prev_url: Option<String>,
     next_url: Option<String>,
+    expand: ExpandMsg,
 }
 
 /// The Yew component used to mount the log view into the DOM. The markup lives
@@ -93,11 +118,12 @@ pub(crate) fn log_view(props: &LogProps) -> Html {
         commits,
         prev_url,
         next_url,
+        expand,
     } = props;
 
     html! {
         <>
-            { commits_table(commits) }
+            { commits_table(commits, Some(expand)) }
             if prev_url.is_some() || next_url.is_some() {
                 <div class="log-nav">
                     if let Some(prev) = prev_url {
@@ -147,8 +173,9 @@ mod tests {
                     fixtures::relative_age(86400 * 3),
                 ),
             ],
-            prev_url: Some(log_url("", 0, Some("main"))),
-            next_url: Some(log_url("", 100, Some("main"))),
+            prev_url: Some(log_url("", 0, Some("main"), false)),
+            next_url: Some(log_url("", 100, Some("main"), false)),
+            expand: ExpandMsg::new(false, log_url("", 50, Some("main"), true)),
         }));
     }
 
@@ -163,6 +190,33 @@ mod tests {
             )],
             prev_url: None,
             next_url: None,
+            expand: ExpandMsg::new(false, log_url("", 0, None, true)),
+        }));
+    }
+
+    /// `?showmsg=1`: every commit's body under its subject, the toggle flipped
+    /// to "Collapse", and a body-less commit left as a single row.
+    #[test]
+    fn test_log_html_showmsg() {
+        insta::assert_snapshot!(render(LogProps {
+            commits: vec![
+                fixtures::commit_row_with_body(
+                    "0123abcd",
+                    "Fix non-annotated tags",
+                    "A tag object points at the commit; a plain ref names it\ndirectly. Peel only the former.",
+                    "Kunal Mehta",
+                    fixtures::relative_age(3600),
+                ),
+                fixtures::commit_row(
+                    "89abcdef",
+                    "Add README",
+                    "Kunal Mehta",
+                    fixtures::relative_age(86400 * 3),
+                ),
+            ],
+            prev_url: None,
+            next_url: Some(log_url("", 50, None, true)),
+            expand: ExpandMsg::new(true, log_url("", 0, None, false)),
         }));
     }
 }

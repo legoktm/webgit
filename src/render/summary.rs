@@ -178,7 +178,7 @@ pub(crate) fn summary_view(props: &SummaryProps) -> Html {
             { tags_section(tags, *more_tags, repo_name) }
             <h3 class="summary-heading">{ "Recent commits" }</h3>
             { match commits {
-                Some(c) => commits_table(c),
+                Some(c) => commits_table(c, None),
                 None => html! { <p class="msg">{ loading_dots() }</p> },
             } }
         </>

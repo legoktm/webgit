@@ -4,7 +4,7 @@ use crate::error::GitContext;
 use crate::render::about::{AboutProps, build_about};
 use crate::render::blob::{BlobProps, build_blob_props};
 use crate::render::commit::{CommitProps, build_commit, resolve_sha};
-use crate::render::log::{LogProps, build_log};
+use crate::render::log::{LogProps, LogQuery, build_log};
 use crate::render::readme::{ReadmeProps, build_readme};
 use crate::render::refs_all::{RefsAllProps, build_refs_all};
 use crate::render::refs_heads::{RefsHeadsProps, build_refs_heads};
@@ -76,6 +76,7 @@ pub(crate) enum Route {
         offset: usize,
         head: Option<String>,
         path: String,
+        showmsg: bool,
     },
     CommitHead,
     Commit(String),
@@ -334,7 +335,7 @@ pub(crate) fn parse_index_hash(hash: &str) -> IndexRoute {
 /// (empty) | #  | #!/readme         the README at HEAD
 /// #!/about                         the about page
 /// #!/summary                       the summary
-/// #!/log[/<path>][?…]              the log; query: h=<rev>, offset=<n>
+/// #!/log[/<path>][?…]              the log; query: h=<rev>, offset=<n>, showmsg=1
 /// #!/commit[/]                     HEAD's commit
 /// #!/commit/<sha>                  one commit
 /// #!/refs[/]                       all refs
@@ -378,8 +379,13 @@ pub(crate) fn parse_hash(hash: &str) -> Route {
             None => (rest, ""),
         };
         let path = decode_path(path_part.trim_start_matches('/'));
-        let (offset, head) = parse_log_query(query_string);
-        return Route::Log { offset, head, path };
+        let (offset, head, showmsg) = parse_log_query(query_string);
+        return Route::Log {
+            offset,
+            head,
+            path,
+            showmsg,
+        };
     }
 
     // No query on this route, so the whole remainder is the id; an empty one
@@ -445,9 +451,10 @@ fn parse_tree_rest(rest: &str) -> (String, Option<String>, bool) {
     (decode_path(path_part), head, render)
 }
 
-fn parse_log_query(query_string: &str) -> (usize, Option<String>) {
+fn parse_log_query(query_string: &str) -> (usize, Option<String>, bool) {
     let mut offset = 0usize;
     let mut head = None;
+    let mut showmsg = false;
     for part in query_string.split('&') {
         if let Some(v) = part.strip_prefix("offset=") {
             offset = v.parse().unwrap_or(0);
@@ -455,9 +462,11 @@ fn parse_log_query(query_string: &str) -> (usize, Option<String>) {
             && !v.is_empty()
         {
             head = Some(decode_component(v));
+        } else if part == "showmsg=1" {
+            showmsg = true;
         }
     }
-    (offset, head)
+    (offset, head, showmsg)
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -640,7 +649,12 @@ pub(crate) async fn build_route(
             })
             .await,
         )),
-        Route::Log { offset, head, path } => {
+        Route::Log {
+            offset,
+            head,
+            path,
+            showmsg,
+        } => {
             let resolved;
             let log_commit: &gib::object::Commit = match effective_head(repo, head.as_deref()).await
             {
@@ -650,16 +664,16 @@ pub(crate) async fn build_route(
                 }
                 None => head_commit,
             };
+            let query = LogQuery {
+                path: &path,
+                offset,
+                head: head.as_deref(),
+                showmsg,
+            };
             Ok(LoadedView::Log(
-                build_log(
-                    log_commit,
-                    repo,
-                    mailmap,
-                    &path,
-                    offset,
-                    head.as_deref(),
-                    |p| on_partial(LoadedView::Log(p)),
-                )
+                build_log(log_commit, repo, mailmap, &query, |p| {
+                    on_partial(LoadedView::Log(p))
+                })
                 .await,
             ))
         }
@@ -802,18 +816,26 @@ pub(crate) fn tree_url(path: &str, head: Option<&str>, render: bool) -> String {
 /// The URL for a log view. `path` and `head` are the decoded values (a real
 /// path, a real ref name); both are encoded here, so callers pass what they
 /// have rather than remembering to escape it.
-pub(crate) fn log_url(path: &str, offset: usize, head: Option<&str>) -> String {
+pub(crate) fn log_url(path: &str, offset: usize, head: Option<&str>, showmsg: bool) -> String {
     let base = if path.is_empty() {
         "#!/log".to_string()
     } else {
         format!("#!/log/{}", encode_path(path))
     };
-    let head = head.map(encode_component);
-    match (offset, head) {
-        (0, None) => base,
-        (n, None) => format!("{base}?offset={n}"),
-        (0, Some(head)) => format!("{base}?h={head}"),
-        (n, Some(head)) => format!("{base}?h={head}&offset={n}"),
+    let mut params: Vec<String> = Vec::new();
+    if let Some(head) = head {
+        params.push(format!("h={}", encode_component(head)));
+    }
+    if offset != 0 {
+        params.push(format!("offset={offset}"));
+    }
+    if showmsg {
+        params.push("showmsg=1".to_string());
+    }
+    if params.is_empty() {
+        base
+    } else {
+        format!("{base}?{}", params.join("&"))
     }
 }
 
@@ -999,6 +1021,7 @@ mod tests {
                 offset: 0,
                 head: None,
                 path,
+                showmsg: false,
             } if path.is_empty()
         ));
     }
@@ -1076,6 +1099,7 @@ mod tests {
                 offset: 0,
                 head: None,
                 path,
+                showmsg: false,
             } if path == "src/route.rs"
         ));
     }
@@ -1087,6 +1111,7 @@ mod tests {
             offset,
             head: Some(head),
             path,
+            ..
         } = route
         {
             assert_eq!(offset, 50);
@@ -1258,7 +1283,7 @@ mod tests {
             tree_url("src", Some(sha), false),
             format!("#!/tree/src?h={sha}")
         );
-        assert_eq!(log_url("", 0, Some(sha)), format!("#!/log?h={sha}"));
+        assert_eq!(log_url("", 0, Some(sha), false), format!("#!/log?h={sha}"));
         assert_eq!(snapshot_url(sha), format!("#!/snapshot?h={sha}"));
         match parse_hash(&tree_url("src", Some(sha), false)) {
             Route::Tree { path, head, .. } => {
@@ -1359,18 +1384,64 @@ mod tests {
 
     #[test]
     fn test_log_url() {
-        assert_eq!(log_url("", 0, None), "#!/log");
-        assert_eq!(log_url("", 50, None), "#!/log?offset=50");
-        assert_eq!(log_url("", 0, Some("main")), "#!/log?h=main");
+        assert_eq!(log_url("", 0, None, false), "#!/log");
+        assert_eq!(log_url("", 50, None, false), "#!/log?offset=50");
+        assert_eq!(log_url("", 0, Some("main"), false), "#!/log?h=main");
         assert_eq!(
-            log_url("", 100, Some("stable")),
+            log_url("", 100, Some("stable"), false),
             "#!/log?h=stable&offset=100"
         );
-        assert_eq!(log_url("src/route.rs", 0, None), "#!/log/src/route.rs");
         assert_eq!(
-            log_url("src", 50, Some("main")),
+            log_url("src/route.rs", 0, None, false),
+            "#!/log/src/route.rs"
+        );
+        assert_eq!(
+            log_url("src", 50, Some("main"), false),
             "#!/log/src?h=main&offset=50"
         );
+    }
+
+    #[test]
+    fn test_log_url_showmsg() {
+        assert_eq!(log_url("", 0, None, true), "#!/log?showmsg=1");
+        assert_eq!(log_url("", 50, None, true), "#!/log?offset=50&showmsg=1");
+        assert_eq!(
+            log_url("src", 50, Some("main"), true),
+            "#!/log/src?h=main&offset=50&showmsg=1"
+        );
+    }
+
+    #[test]
+    fn test_parse_hash_log_showmsg() {
+        // Only the spelling `log_url` writes turns the bodies on; anything else
+        // in that position leaves the log collapsed.
+        for (url, want) in [
+            ("#!/log?showmsg=1", true),
+            ("#!/log/src?h=main&offset=50&showmsg=1", true),
+            ("#!/log", false),
+            ("#!/log?showmsg=0", false),
+            ("#!/log?showmsg", false),
+            ("#!/log?showmsg=2", false),
+        ] {
+            match parse_hash(url) {
+                Route::Log { showmsg, .. } => assert_eq!(showmsg, want, "via {url}"),
+                _ => panic!("expected Log for {url}"),
+            }
+        }
+    }
+
+    /// A ref may contain `&`, so an expanded log's own parameters must survive
+    /// a branch name that spells one of them.
+    #[test]
+    fn test_showmsg_is_not_confused_by_an_encoded_ref() {
+        let url = log_url("", 0, Some("x&showmsg=1"), false);
+        match parse_hash(&url) {
+            Route::Log { showmsg, head, .. } => {
+                assert!(!showmsg);
+                assert_eq!(head.as_deref(), Some("x&showmsg=1"));
+            }
+            _ => panic!("expected Log"),
+        }
     }
 
     // --- Percent-encoding ---------------------------------------------------
@@ -1422,14 +1493,14 @@ mod tests {
         // The point of the exercise: a ref or path containing route syntax has
         // to come back out of `parse_hash` as the name it went in as.
         for name in ["feature/x", "foo?bar", "a&b", "100%", "release #2", "café"] {
-            let url = log_url("", 0, Some(name));
+            let url = log_url("", 0, Some(name), false);
             match parse_hash(&url) {
                 Route::Log { head: Some(h), .. } => assert_eq!(h, name, "via {url}"),
                 _ => panic!("expected a log route with a head from {url}"),
             }
         }
         for path in ["src/a?b.rs", "docs/50%off.md", "a&b/c#d"] {
-            let url = log_url(path, 0, None);
+            let url = log_url(path, 0, None, false);
             match parse_hash(&url) {
                 Route::Log { path: p, .. } => assert_eq!(p, path, "via {url}"),
                 _ => panic!("expected a log route from {url}"),
@@ -1455,7 +1526,7 @@ mod tests {
     fn test_offset_is_not_confused_by_an_encoded_ref() {
         // A ref named "x&offset=999" must not be able to inject a second
         // parameter: encoding hides the '&' from the query splitter.
-        let url = log_url("", 10, Some("x&offset=999"));
+        let url = log_url("", 10, Some("x&offset=999"), false);
         match parse_hash(&url) {
             Route::Log { offset, head, .. } => {
                 assert_eq!(offset, 10);

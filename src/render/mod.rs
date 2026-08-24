@@ -6,7 +6,7 @@ use gib_mailmap::Mailmap;
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::rc::Rc;
-use yew::{Html, html};
+use yew::{Html, classes, html};
 
 pub(crate) mod about;
 pub(crate) mod blob;
@@ -168,9 +168,28 @@ pub(crate) struct CommitRow {
     id: ObjectId,
     short_hash: String,
     message: String,
+    /// Everything after the subject line, shown under the row when the log is
+    /// expanded (`?showmsg=1`); empty for a single-line commit message.
+    body: String,
     author: String,
     age: Age,
     refs: Vec<RefLabel>,
+}
+
+/// The log's Expand/Collapse control, as rendered in the "Message" header
+#[derive(PartialEq, Clone)]
+pub(crate) struct ExpandMsg {
+    expanded: bool,
+    toggle_url: String,
+}
+
+impl ExpandMsg {
+    pub(crate) fn new(expanded: bool, toggle_url: String) -> Self {
+        ExpandMsg {
+            expanded,
+            toggle_url,
+        }
+    }
 }
 
 /// A branch or tag decoration shown next to a commit, cgit-style.
@@ -189,33 +208,56 @@ pub(crate) enum RefLabelKind {
 /// The commit list shared by the log and summary views (the old
 /// `commits.html`). Lives here, next to [`CommitRow`], so both callers can
 /// reuse it and reach the row's private fields.
-pub(crate) fn commits_table(commits: &[CommitRow]) -> Html {
+pub(crate) fn commits_table(commits: &[CommitRow], expand: Option<&ExpandMsg>) -> Html {
+    let expanded = expand.is_some_and(|e| e.expanded);
+    let class = if expanded {
+        classes!("summary-table", "log-expanded")
+    } else {
+        classes!("summary-table")
+    };
     html! {
-        <table class="summary-table">
+        <table {class}>
             <thead>
                 <tr>
                     <th>{ "Age" }</th>
                     <th>{ "Commit" }</th>
-                    <th>{ "Message" }</th>
+                    <th>{ "Message" }{ for expand.map(expand_toggle) }</th>
                     <th>{ "Author" }</th>
                 </tr>
             </thead>
             <tbody>
-                { for commits.iter().map(commit_table_row) }
+                { for commits.iter().map(|c| commit_table_row(c, expanded)) }
             </tbody>
         </table>
     }
 }
 
-fn commit_table_row(c: &CommitRow) -> Html {
+/// cgit's `(Expand)`/`(Collapse)` link, which just names the same log with
+/// `?showmsg=1` flipped.
+fn expand_toggle(e: &ExpandMsg) -> Html {
+    let label = if e.expanded { "Collapse" } else { "Expand" };
+    html! {
+        <>{ " (" }<a href={e.toggle_url.clone()}>{ label }</a>{ ")" }</>
+    }
+}
+
+fn commit_table_row(c: &CommitRow, expanded: bool) -> Html {
     let href = format!("#!/commit/{}", c.id);
     html! {
-        <tr key={c.id.to_string()}>
-            <td class="age">{ c.age.display() }</td>
-            <td class="name"><a href={href}>{ c.short_hash.clone() }</a></td>
-            <td class="msg">{ c.message.clone() }{ for c.refs.iter().map(ref_label) }</td>
-            <td class="author">{ c.author.clone() }</td>
-        </tr>
+        <>
+            <tr key={c.id.to_string()} class={classes!(expanded.then_some("logheader"))}>
+                <td class="age">{ c.age.display() }</td>
+                <td class="name"><a href={href}>{ c.short_hash.clone() }</a></td>
+                <td class="msg">{ c.message.clone() }{ for c.refs.iter().map(ref_label) }</td>
+                <td class="author">{ c.author.clone() }</td>
+            </tr>
+            if expanded && !c.body.is_empty() {
+                <tr key={format!("{}-body", c.id)}>
+                    <td/>
+                    <td class="logmsg" colspan="3">{ c.body.clone() }</td>
+                </tr>
+            }
+        </>
     }
 }
 
@@ -333,6 +375,15 @@ fn commit_first_line(message: &[u8]) -> String {
         .next()
         .unwrap_or("")
         .to_string()
+}
+
+/// Everything after a commit message's subject line
+fn commit_body(message: &[u8]) -> String {
+    String::from_utf8_lossy(message)
+        .split_once('\n')
+        .map_or(String::new(), |(_, body)| {
+            body.trim_start_matches('\n').trim_end().to_string()
+        })
 }
 
 pub(crate) async fn head_branch_name(repo: &CachingRepo) -> Option<String> {
@@ -509,6 +560,7 @@ fn commit_row(commit: &Commit, mailmap: &Mailmap) -> CommitRow {
         id: commit.id(),
         short_hash: short_hash(commit.id()),
         message: commit_first_line(commit.message()),
+        body: commit_body(commit.message()),
         author: mapped_author_name(commit, mailmap),
         age: Age::new(commit.author_date()),
         refs: Vec::new(),
@@ -766,10 +818,25 @@ pub(crate) mod fixtures {
             id: ObjectId::from_hex(hex.as_bytes()).expect("fixture id must be 40 hex characters"),
             short_hash: short_hash.to_string(),
             message: message.to_string(),
+            body: String::new(),
             author: author.to_string(),
             age,
             refs: Vec::new(),
         }
+    }
+
+    /// A row whose commit message has a body, which the expanded log
+    /// (`?showmsg=1`) renders under the subject.
+    pub(crate) fn commit_row_with_body(
+        short_hash: &str,
+        message: &str,
+        body: &str,
+        author: &str,
+        age: Age,
+    ) -> CommitRow {
+        let mut row = commit_row(short_hash, message, author, age);
+        row.body = body.to_string();
+        row
     }
 
     pub(crate) fn decorated_commit_row(
@@ -1026,5 +1093,25 @@ mod tests {
             commit_first_line(b"caf\xc3\xa9 \xff fix"),
             "caf\u{e9} \u{fffd} fix"
         );
+    }
+
+    #[test]
+    fn test_commit_body() {
+        assert_eq!(
+            commit_body(b"Fix bug\n\nLonger description\n"),
+            "Longer description"
+        );
+        // Paragraphs and trailers inside the body are kept as written; only the
+        // separator above and the whitespace below come off.
+        assert_eq!(
+            commit_body(b"Fix bug\n\nWhy\n\nSigned-off-by: A <a@example.org>\n\n"),
+            "Why\n\nSigned-off-by: A <a@example.org>"
+        );
+        // Indentation is part of the body, not leading whitespace to trim.
+        assert_eq!(commit_body(b"Fix bug\n\n    code\n"), "    code");
+        // Nothing after the subject is no body at all, not an empty row.
+        assert_eq!(commit_body(b"Single line"), "");
+        assert_eq!(commit_body(b"trailing newline\n"), "");
+        assert_eq!(commit_body(b""), "");
     }
 }
