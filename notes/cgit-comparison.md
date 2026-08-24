@@ -22,7 +22,6 @@ As things are implemented, remove them from this list.
 
 - **Search** — cgit's `?q=` + `?qt=grep|author|committer|range`. Nothing
   equivalent; there is no search anywhere in webgit.
-- **`?showmsg=1`** — expand full commit bodies inline in the log table.
 - **`?follow=1`** — follow renames when the log is path-scoped.
 - **Revision ranges** as a starting point.
 - **Files/Lines columns** (`enable-log-filecount` / `enable-log-linecount`) —
@@ -32,9 +31,8 @@ As things are implemented, remove them from this list.
 ## Tree (`#!/tree`)
 
 - **Size column** — cgit shows blob size; webgit shows only Mode and Name
-  (`src/render/tree.rs:171-175`).
-- **Per-file links** — cgit puts `log` / `plain` / `blame` links on every row;
-  webgit has the `blame` one.
+  (`src/render/tree.rs:170-177`).
+- **Per-file `plain` link**
 - **Submodule links** — no `repo.module-link` equivalent
 
 ## Blob
@@ -58,8 +56,6 @@ this one does not:
 
 ## Commit (`#!/commit`)
 
-- **Diff controls**: `?context=N`, `?ignorews=1`, `?dt=` (unified / stat-only),
-  and `ss=1` **side-by-side diff**.
 - **Rename/copy detection** in the diffstat (`git diff -M/-C`), which the
   downloaded patch lacks too — a rename is a delete plus an add.
 - **`?id2=`** — diff this commit against something other than its first parent;
@@ -91,7 +87,7 @@ Currently just section + name derived from the paths in `listing.json`
 ## Site-level config
 
 - **Multiple clone URLs** — webgit shows one, derived from the location
-  (`src/lib.rs:130`).
+  (`src/lib.rs:137`).
 - **Custom header/footer/logo/CSS**, `root-title`/`root-desc`.
 - **Filters generally** — `about-filter`, `email-filter` (gravatar),
   `commit-filter`, `auth-filter`. These are server-side pipes in cgit; any

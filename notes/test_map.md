@@ -112,8 +112,7 @@ Do not add new kinds of tests, just focus on snapshot + browser.
   - "Loading…" relabelled "Loaded" after 200ms with no new fetch
   - cache hits counted separately from network bytes
 - `#!/summary`
-  - reached by `#!/summary`, the empty hash, and `#`
-  - reached as the fallback from any unrecognised route
+  - reached by `#!/summary` and nothing else
   - the `git clone` line, showing the full repository URL
     - snapshot:
       - test_summary_html
@@ -156,7 +155,9 @@ Do not add new kinds of tests, just focus on snapshot + browser.
   - clicking "(clear)" empties the store and optimistically shows 0 / 0.00 MB
   - the build commit, from `git_version!()` at compile time
 - `#!/readme`
-  - exact match only — `#!/readme?h=…` is a different route and lands on summary
+  - reached by `#!/readme`, the empty hash, and `#` — the default view, as in cgit
+  - exact match only — `#!/readme?h=…` names no route, so it arrives here by the
+    fallback below rather than by carrying the ref
   - always HEAD's tree; there is no way to ask for another ref
   - the candidate names are tried in order — README.md, README, README.txt, README.rst
   - only `.md` is treated as markdown; `.rst` and `.txt` are shown verbatim
@@ -233,6 +234,16 @@ Do not add new kinds of tests, just focus on snapshot + browser.
   - `/<path>` — only commits touching that path
   - path-scoped log accelerated by commit-graph changed-path filters
   - path-scoped log with no commit-graph, walking commit objects directly
+  - `?showmsg=1` — each commit's message body under its subject row, and the
+    header link flipped from "Expand" to "Collapse"
+    - snapshot:
+      - test_log_html_showmsg
+    - browser:
+      - log_expands_commit_messages
+  - a commit whose message is only a subject — no body row under it
+    - browser:
+      - log_expands_commit_messages
+  - the toggle keeps the rest of the query, so `?h=`/`?offset=` survive it
   - ref decorations beside each subject
     - browser:
       - log_renders_real_content
@@ -260,7 +271,13 @@ Do not add new kinds of tests, just focus on snapshot + browser.
   - only the first parent row is labelled; the rest have a blank label cell
     - snapshot:
       - test_commit_html_merge_with_diff
-  - root commit — no parent row, and no diff at all
+  - root commit — no parent row, and diffed against the empty tree, so it has a
+    diffstat and a diff like any other commit
+    - snapshot:
+      - test_commit_html_root_commit_with_diff
+    - browser:
+      - root_commit_diffs_against_the_empty_tree
+  - root commit whose files have not arrived yet — no diffstat section
     - snapshot:
       - test_commit_html_root_commit
   - merge commit — several parents, diffed against the first
@@ -289,6 +306,32 @@ Do not add new kinds of tests, just focus on snapshot + browser.
   - hex-shaped runs of 7-40 characters in the message become commit links
   - all-digit runs are linkified too, since abbreviations may contain no letters
   - a hex run inside a longer word is not linkified
+  - `?context=<n>` — hunk context width, git's 3 when unset and absent from the
+    URL at that width; the control steps through cgit's widths, and a URL may
+    name any width up to 40
+    - snapshot:
+      - test_commit_html_wide_context_and_ignored_whitespace
+    - browser:
+      - diff_controls_change_the_diff
+  - `?ignorews=1` — whitespace-only changes are not changes (git's `-w`)
+    - snapshot:
+      - test_commit_html_wide_context_and_ignored_whitespace
+    - browser:
+      - diff_controls_change_the_diff
+  - `?dt=` — the diff under the diffstat, or `dt=2` for the diffstat alone
+    - snapshot:
+      - test_commit_html_stat_only
+    - browser:
+      - diff_controls_change_the_diff
+  - `?ss=1` — the diff laid out in two columns
+    - snapshot:
+      - test_commit_html_side_by_side
+    - browser:
+      - diff_controls_change_the_diff
+  - `?ss=1` under `dt=2`, which shows no diff to lay out — meaningless, so it is
+    dropped from the URL
+  - cgit spells side-by-side as `dt=1`, so a link from a cgit instance lands on
+    the same view
   - diffstat bars scale to the widest file, 0-40 columns
   - bars re-normalise as larger files arrive mid-stream
   - bar widths use `bar-w-N` classes, since the CSP forbids inline styles
@@ -299,7 +342,10 @@ Do not add new kinds of tests, just focus on snapshot + browser.
   - a binary file — "Binary files … differ" and zero counts
   - output matches what a unified diff would have printed
   - a file with no trailing newline — the "\ No newline" marker
-  - CRLF line endings — the `\r` stripped so each row is one line
+  - CRLF line endings — the `\r` is part of the line's content and is kept,
+    as git keeps it
+  - hunk headers carry git's enclosing-function suffix, written by xdiff's own
+    `XDL_EMIT_FUNCNAMES` emitter
   - the `---`/`+++` headers are emitted but excluded from the counts
   - a null object id on one side — treated as an empty file
   - the `diff --git` header block — mode lines for a creation, a deletion or a
@@ -378,8 +424,15 @@ Do not add new kinds of tests, just focus on snapshot + browser.
     - directories and files are linked with different classes
       - snapshot:
         - test_tree_html
-    - a "blame" link on every row with lines to attribute — files and symlinks,
-      not directories or submodules — carrying `?h=` forward
+    - a "log" link on every row, whatever the entry is — cgit offers one on
+      directories and submodules too — carrying `?h=` forward
+      - snapshot:
+        - test_tree_html
+        - test_tree_html_with_head
+        - test_tree_html_submodule_and_symlinks
+        - test_tree_html_submodule_and_symlinks_with_head
+    - a "blame" link after it on every row with lines to attribute — files and
+      symlinks, not directories or submodules — carrying `?h=` forward
       - snapshot:
         - test_tree_html
         - test_tree_html_with_head
@@ -574,7 +627,7 @@ Do not add new kinds of tests, just focus on snapshot + browser.
   - a commit dated before the epoch — the tar mtime is clamped rather than wrapped
   - navigating away mid-build cancels it
 - unrecognised routes
-  - `#!/logout`, `#!/treex`, `#!/commits`, `#!/nonsense` fall back to the summary
+  - `#!/logout`, `#!/treex`, `#!/commits`, `#!/nonsense` fall back to the readme
   - a route name matches only at `/`, `?`, or the end of the hash
   - percent-escapes decode, including multi-byte UTF-8 split across escapes
   - a stray `%` that begins no valid escape is passed through as itself
