@@ -168,4 +168,4 @@ jobs:
           gh release create "${{ github.ref_name }}" \
             "webgit-${VERSION}.tar.gz" \
             --title "webgit ${{ github.ref_name }}" \
-            --notes "Built site with WEBCAT metadata. Unpack at the web root and serve as-is: the signed manifest commits to these exact bytes."
+            --notes "See CHANGELOG.md."
