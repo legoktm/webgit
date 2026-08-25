@@ -9,6 +9,10 @@ links = "gib_xdiff"
 
 [dependencies]
 
+# Only the wasm build compiles the `memchr` shim in `src/shim.rs`
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+memchr.workspace = true
+
 [build-dependencies]
 cc.workspace = true
 

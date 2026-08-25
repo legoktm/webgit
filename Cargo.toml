@@ -64,6 +64,7 @@ hex-literal = "1.1.0"
 insta = "1"
 jiff = { version = "0.2.35", default-features = false, features = ["alloc"] }
 js-sys = "0.3"
+memchr = "2"
 miniz_oxide = "0.9.1"
 nom = { version = "8.0.0", default-features = false, features = ["alloc"] }
 rand_core = "0.10.0"

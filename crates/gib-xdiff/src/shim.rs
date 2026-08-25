@@ -132,7 +132,7 @@ pub unsafe extern "C" fn gib_xdiff_bug(_msg: *const u8) -> ! {
 pub unsafe extern "C" fn memchr(s: *const c_void, c: c_int, n: usize) -> *mut c_void {
     // SAFETY: the caller guarantees `n` readable bytes at `s`.
     let haystack = unsafe { std::slice::from_raw_parts(s.cast::<u8>(), n) };
-    match haystack.iter().position(|&b| b == c as u8) {
+    match ::memchr::memchr(c as u8, haystack) {
         // SAFETY: `i` is an index within `haystack`.
         Some(i) => unsafe { s.cast::<u8>().add(i).cast_mut().cast() },
         None => std::ptr::null_mut(),

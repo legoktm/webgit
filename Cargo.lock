@@ -725,6 +725,7 @@ name = "gib-xdiff"
 version = "0.0.0"
 dependencies = [
  "cc",
+ "memchr",
  "tempfile",
 ]
 
