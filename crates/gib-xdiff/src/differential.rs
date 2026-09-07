@@ -126,8 +126,17 @@ fn git_diff(
         "--no-indent-heuristic",
         &format!("-U{context}"),
     ]);
-    if whitespace == Whitespace::Ignore {
-        cmd.arg("-w");
+    match whitespace {
+        Whitespace::Significant => {}
+        Whitespace::IgnoreEol => {
+            cmd.arg("--ignore-space-at-eol");
+        }
+        Whitespace::IgnoreChange => {
+            cmd.arg("-b");
+        }
+        Whitespace::Ignore => {
+            cmd.arg("-w");
+        }
     }
     let out = cmd
         .arg("--")
@@ -301,29 +310,37 @@ fn respace(rng: &mut Rng, lines: &[String]) -> Vec<String> {
         .collect()
 }
 
+/// Every ignoring mode against the real `git diff` flag it names. The three
+/// modes discount different amounts of whitespace, so each has to be checked
+/// against its own flag rather than assumed to follow from `-w`.
 #[test]
 fn unified_output_matches_git_when_ignoring_whitespace() {
     let dir = TempDir::new().unwrap();
-    let mut rng = Rng::new(0xD1FF_5AAC);
-    for i in 0..300 {
-        let before = source_file(&mut rng, 40);
-        // Real edits *and* whitespace noise, so the diff has to tell the two
-        // apart rather than come back empty.
-        let edited = edit(&mut rng, &before);
-        let after = respace(&mut rng, &edited);
-        let (before, after) = (render(&before), render(&after));
-        if before == after {
-            continue;
+    for mode in [
+        Whitespace::IgnoreEol,
+        Whitespace::IgnoreChange,
+        Whitespace::Ignore,
+    ] {
+        let mut rng = Rng::new(0xD1FF_5AAC);
+        for i in 0..300 {
+            let before = source_file(&mut rng, 40);
+            // Real edits *and* whitespace noise, so the diff has to tell the
+            // two apart rather than come back empty.
+            let edited = edit(&mut rng, &before);
+            let after = respace(&mut rng, &edited);
+            let (before, after) = (render(&before), render(&after));
+            if before == after {
+                continue;
+            }
+            let expected = diff_body(&git_diff(&dir, &before, &after, 3, mode));
+            let got = String::from_utf8(unified(&before, &after, 3, mode).unwrap()).unwrap();
+            assert_eq!(
+                got,
+                expected,
+                "{mode:?} diff disagrees with git for case {i}\nbefore:\n{}\nafter:\n{}",
+                String::from_utf8_lossy(&before),
+                String::from_utf8_lossy(&after)
+            );
         }
-        let expected = diff_body(&git_diff(&dir, &before, &after, 3, Whitespace::Ignore));
-        let got =
-            String::from_utf8(unified(&before, &after, 3, Whitespace::Ignore).unwrap()).unwrap();
-        assert_eq!(
-            got,
-            expected,
-            "ignore-whitespace diff disagrees with git for case {i}\nbefore:\n{}\nafter:\n{}",
-            String::from_utf8_lossy(&before),
-            String::from_utf8_lossy(&after)
-        );
     }
 }

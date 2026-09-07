@@ -12,7 +12,7 @@ mod encode;
 mod load;
 
 pub(crate) use anchor::{LineRange, split_line_anchor};
-pub(crate) use diff_view::{CONTEXT_CHOICES, DiffMode, DiffView};
+pub(crate) use diff_view::{CONTEXT_CHOICES, DiffMode, DiffView, Whitespace};
 pub(crate) use encode::{encode_component, encode_path};
 pub(crate) use load::{LoadedView, RefKind, build_route, resolve_display_head};
 

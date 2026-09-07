@@ -195,7 +195,7 @@ fn test_parse_hash_commit_query_is_not_part_of_the_id() {
         Route::Commit(sha, view) => {
             assert_eq!(sha, "abc123");
             assert_eq!(view.context, Some(8));
-            assert!(view.ignore_whitespace);
+            assert_eq!(view.whitespace, Whitespace::Ignore);
             assert!(view.side_by_side);
             assert_eq!(view.mode, DiffMode::Unified);
         }
@@ -262,7 +262,7 @@ fn test_commit_url() {
             "abc",
             DiffView {
                 context: Some(10),
-                ignore_whitespace: true,
+                whitespace: Whitespace::Ignore,
                 mode: DiffMode::Unified,
                 side_by_side: true,
             }
@@ -292,7 +292,7 @@ fn test_commit_url_drops_side_by_side_when_the_diff_is_hidden() {
 fn test_commit_url_round_trips_through_the_router() {
     let view = DiffView {
         context: Some(15),
-        ignore_whitespace: true,
+        whitespace: Whitespace::Ignore,
         mode: DiffMode::StatOnly,
         side_by_side: false,
     };

@@ -94,6 +94,15 @@ const XDL_EMIT_FUNCNAMES: c_ulong = 1 << 0;
 /// differ only in indentation never enter the edit script at all.
 const XDF_IGNORE_WHITESPACE: c_ulong = 1 << 1;
 
+/// `xdiff.h`'s `XDF_IGNORE_WHITESPACE_CHANGE`, git's `-b`: runs of whitespace
+/// compare equal to one another, but a line that gains or loses whitespace
+/// entirely still differs.
+const XDF_IGNORE_WHITESPACE_CHANGE: c_ulong = 1 << 2;
+
+/// `xdiff.h`'s `XDF_IGNORE_WHITESPACE_AT_EOL`, git's `--ignore-space-at-eol`:
+/// only trailing whitespace is discounted.
+const XDF_IGNORE_WHITESPACE_AT_EOL: c_ulong = 1 << 3;
+
 unsafe extern "C" {
     fn xdl_diff(
         mf1: *mut MmFile,
@@ -108,7 +117,10 @@ unsafe extern "C" {
 // Public API
 // ---------------------------------------------------------------------------
 
-/// Whether whitespace counts as content.
+/// Whether whitespace counts as content, and how much of it doesn't.
+///
+/// The three ignoring modes are git's three, which are the three bits xdiff
+/// takes; they are ordered here from strictest to loosest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Whitespace {
     /// A line that differs only in whitespace is a change. git's default, and
@@ -116,7 +128,12 @@ pub enum Whitespace {
     /// bytes it is given.
     #[default]
     Significant,
-    /// Whitespace differences are not changes (git's `-w`).
+    /// Trailing whitespace is not a change (git's `--ignore-space-at-eol`).
+    IgnoreEol,
+    /// A run of whitespace compares equal to any other run, but adding or
+    /// removing whitespace outright still counts (git's `-b`).
+    IgnoreChange,
+    /// Whitespace differences are not changes at all (git's `-w`).
     Ignore,
 }
 
@@ -125,6 +142,8 @@ impl Whitespace {
     fn flags(self) -> c_ulong {
         match self {
             Self::Significant => 0,
+            Self::IgnoreEol => XDF_IGNORE_WHITESPACE_AT_EOL,
+            Self::IgnoreChange => XDF_IGNORE_WHITESPACE_CHANGE,
             Self::Ignore => XDF_IGNORE_WHITESPACE,
         }
     }
@@ -283,7 +302,7 @@ fn emit_conf(ctxlen: c_long) -> XdEmitConf {
 ///
 /// `xpp_flags` is the `xpparam_t` flag word. Zero selects Myers with no
 /// whitespace handling and no indent heuristic, which is what git's blame
-/// passes; the only bit any caller here sets is [`XDF_IGNORE_WHITESPACE`].
+/// passes; the only bits any caller here sets are [`Whitespace`]'s.
 /// The algorithm bits are deliberately not exposed: which lines a diff reports
 /// is what blame attributes, and that has to stay git's default choice.
 fn run(

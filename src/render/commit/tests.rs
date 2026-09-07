@@ -362,7 +362,7 @@ fn test_commit_html_wide_context_and_ignored_whitespace() {
     let mut props = uneven_fixture();
     props.view = DiffView {
         context: Some(40),
-        ignore_whitespace: true,
+        whitespace: gib_patch::Whitespace::Ignore,
         ..DiffView::default()
     };
     insta::assert_snapshot!(render(props));

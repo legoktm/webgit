@@ -318,6 +318,21 @@ Do not add new kinds of tests, just focus on snapshot + browser.
       - test_commit_html_wide_context_and_ignored_whitespace
     - browser:
       - diff_controls_change_the_diff
+  - `?ignorews=all` — Forgejo's spelling of the same `-w`
+  - `?ignorews=change` — a run of whitespace compares equal to any other run,
+    but whitespace appearing or vanishing outright is still a change (git's `-b`)
+    - browser:
+      - diff_controls_change_the_diff
+  - `?ignorews=eol` — only trailing whitespace is discounted (git's
+    `--ignore-space-at-eol`)
+    - browser:
+      - diff_controls_change_the_diff
+  - `?ignorews=` holding anything else — whitespace stays significant
+  - the space control keeps cgit's two settings, each lit only by the mode it
+    names; in a narrower mode neither is lit, which leaves both live, so either
+    is a way out of a mode the panel cannot express
+    - browser:
+      - diff_controls_change_the_diff
   - `?dt=` — the diff under the diffstat, or `dt=2` for the diffstat alone
     - snapshot:
       - test_commit_html_stat_only

@@ -194,3 +194,54 @@ fn ignoring_whitespace_keeps_a_real_change_and_its_own_bytes() {
         "got:\n{out}"
     );
 }
+
+/// The three ignoring modes discount different amounts of whitespace, so the
+/// same pair of files has to give three different answers.
+///
+/// The reindent is leading whitespace, the `a( )` change is an interior run,
+/// and the `b();` change is trailing — one line for each thing a mode either
+/// discounts or doesn't.
+#[test]
+fn the_whitespace_modes_discount_different_amounts() {
+    let before = text(&["fn f() {", "    a( x );", "    b();", "}"]);
+    let after = text(&["fn f() {", "        a(  x  );", "    b();   ", "}"]);
+
+    let body = |ws| String::from_utf8(unified(&before, &after, 3, ws).unwrap()).unwrap();
+
+    // Every line that moved is a change.
+    let strict = body(Whitespace::Significant);
+    assert!(strict.contains("-    a( x );"), "got:\n{strict}");
+    assert!(strict.contains("-    b();"), "got:\n{strict}");
+
+    // Only the trailing change on `b();` is discounted.
+    let eol = body(Whitespace::IgnoreEol);
+    assert!(eol.contains("-    a( x );"), "got:\n{eol}");
+    assert!(!eol.contains("-    b();"), "got:\n{eol}");
+
+    // Runs of whitespace compare equal, so both lines match.
+    assert!(
+        body(Whitespace::IgnoreChange).is_empty(),
+        "got:\n{}",
+        body(Whitespace::IgnoreChange)
+    );
+    assert!(
+        body(Whitespace::Ignore).is_empty(),
+        "got:\n{}",
+        body(Whitespace::Ignore)
+    );
+}
+
+/// What `-b` keeps that `-w` drops: whitespace appearing where there was none
+/// is a change to the first and not to the second.
+#[test]
+fn ignoring_whitespace_change_still_sees_whitespace_appear() {
+    let before = text(&["let x=1;"]);
+    let after = text(&["let x = 1;"]);
+
+    let change =
+        String::from_utf8(unified(&before, &after, 3, Whitespace::IgnoreChange).unwrap()).unwrap();
+    assert!(change.contains("-let x=1;"), "got:\n{change}");
+
+    let all = unified(&before, &after, 3, Whitespace::Ignore).unwrap();
+    assert!(all.is_empty(), "got:\n{}", String::from_utf8_lossy(&all));
+}

@@ -4,6 +4,8 @@
 //! Parsing and serialising are exercised through the router, in
 //! [`super`]'s tests: the query string is only ever read as part of a URL.
 
+pub(crate) use gib_patch::Whitespace;
+
 /// How much of a commit's diff to show.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub(crate) enum DiffMode {
@@ -27,8 +29,10 @@ pub(crate) struct DiffView {
     /// Lines of context around each hunk. `None` is git's default of three,
     /// held apart from an explicit `context=3` only so the URL can stay clean.
     pub(crate) context: Option<usize>,
-    /// Ignore whitespace-only changes (`ignorews=1`, git's `-w`).
-    pub(crate) ignore_whitespace: bool,
+    /// How much whitespace difference to discount (`ignorews=`). cgit and this
+    /// app spell git's `-w` as `ignorews=1`; the three named modes are
+    /// Forgejo's spelling of the same three git flags.
+    pub(crate) whitespace: Whitespace,
     /// Which parts of the diff to render (`dt=`).
     pub(crate) mode: DiffMode,
     /// Lay the diff out in two columns (`ss=1`). Meaningless — and dropped from
@@ -58,11 +62,7 @@ impl DiffView {
     pub(crate) fn diff_options(self) -> gib_patch::DiffOptions {
         gib_patch::DiffOptions {
             context: self.context_lines(),
-            whitespace: if self.ignore_whitespace {
-                gib_patch::Whitespace::Ignore
-            } else {
-                gib_patch::Whitespace::Significant
-            },
+            whitespace: self.whitespace,
         }
     }
 
@@ -86,8 +86,11 @@ impl DiffView {
         if let Some(n) = self.context.filter(|&n| n != CONTEXT_DEFAULT) {
             parts.push(format!("context={n}"));
         }
-        if self.ignore_whitespace {
-            parts.push("ignorews=1".to_string());
+        match self.whitespace {
+            Whitespace::Significant => {}
+            Whitespace::Ignore => parts.push("ignorews=1".to_string()),
+            Whitespace::IgnoreChange => parts.push("ignorews=change".to_string()),
+            Whitespace::IgnoreEol => parts.push("ignorews=eol".to_string()),
         }
         // A hidden diff has no layout, so the flag would only be a setting the
         // reader cannot see the effect of.
@@ -110,7 +113,12 @@ impl DiffView {
                 // rather than to an error page: a diff is still a diff.
                 view.context = v.parse().ok().filter(|&n| (1..=CONTEXT_MAX).contains(&n));
             } else if let Some(v) = part.strip_prefix("ignorews=") {
-                view.ignore_whitespace = v == "1";
+                view.whitespace = match v {
+                    "1" | "all" => Whitespace::Ignore,
+                    "change" => Whitespace::IgnoreChange,
+                    "eol" => Whitespace::IgnoreEol,
+                    _ => Whitespace::Significant,
+                };
             } else if let Some(v) = part.strip_prefix("ss=") {
                 view.side_by_side = v == "1";
             } else if let Some(v) = part.strip_prefix("dt=") {

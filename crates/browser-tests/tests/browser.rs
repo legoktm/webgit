@@ -659,7 +659,36 @@ async fn check_diff_controls(h: &Harness, repo: &RepoFixture) -> Result<()> {
         repo.name
     );
 
-    // "reset to defaults" goes back to the plain commit URL.
+    // git's narrower ignoring modes arrive only on a URL carried over from a
+    // forge that has them, and are neither of the two settings the panel can
+    // express. So neither side claims to be selected, and — a lit segment
+    // being an inert span — leaving both unlit is also what keeps both of them
+    // live, so either is a way out of a mode the panel cannot show.
+    for (mode, pick, lands_on) in [
+        ("change", "ignore", format!("{commit}?ignorews=1")),
+        ("eol", "include", commit.clone()),
+    ] {
+        h.open(repo, &format!("{commit}?ignorews={mode}")).await?;
+        h.wait_for(".diff-pre").await?;
+        h.assert_no_error().await?;
+        let on = h.texts_of(".seg-btn.on").await?;
+        assert!(
+            !on.contains(&"include".to_string()) && !on.contains(&"ignore".to_string()),
+            "[{}] ignorews={mode} lit a space setting it is not: {on:?}",
+            repo.name
+        );
+        // Both are anchors, so `click_seg` finding one proves it is live.
+        click_seg(h, pick).await?;
+        await_hash(h, &lands_on).await?;
+        h.wait_for(".diff-pre").await?;
+        h.assert_no_error().await?;
+    }
+
+    // "reset to defaults" goes back to the plain commit URL. Reached from a
+    // non-default view, so the link is live rather than the inert span it
+    // becomes once every setting is already at its default.
+    h.open(repo, &format!("{commit}?ignorews=eol")).await?;
+    h.wait_for(".diff-pre").await?;
     h.wait_for(".diff-opts-reset a").await?.click().await?;
     await_hash(h, &commit).await?;
     h.wait_for(".diff-pre").await?;

@@ -6,7 +6,7 @@
 //! state is addressable, the back button walks the settings, and a reader can
 //! copy the link to the view they are looking at.
 
-use crate::route::{CONTEXT_CHOICES, DiffMode, DiffView, commit_url};
+use crate::route::{CONTEXT_CHOICES, DiffMode, DiffView, Whitespace, commit_url};
 use yew::prelude::*;
 
 /// cgit's "diff options" panel, as links rather than a form.
@@ -47,8 +47,8 @@ pub(super) fn diff_controls(url_sha: &str, view: DiffView) -> Html {
             <div class="diff-opts-row">
                 <span class="diff-opts-label">{ "space" }</span>
                 <span class="seg">
-                    { seg("include", !view.ignore_whitespace, Some(url(DiffView { ignore_whitespace: false, ..view }))) }
-                    { seg("ignore", view.ignore_whitespace, Some(url(DiffView { ignore_whitespace: true, ..view }))) }
+                    { seg("include", view.whitespace == Whitespace::Significant, Some(url(DiffView { whitespace: Whitespace::Significant, ..view }))) }
+                    { seg("ignore", view.whitespace == Whitespace::Ignore, Some(url(DiffView { whitespace: Whitespace::Ignore, ..view }))) }
                 </span>
             </div>
 
