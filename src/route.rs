@@ -136,7 +136,8 @@ pub(crate) fn parse_index_hash(hash: &str) -> IndexRoute {
 /// #!/refs/heads[/]                 the branch list
 /// #!/refs/tags[/]                  the tag list
 /// #!/refs/tags/<tag>               one tag
-/// #!/tree[/<path>][?…]             the tree, or a blob; query: h=<rev>, render=1
+/// #!/tree[/<path>][?…]             the tree, or a blob; query: h=<rev>,
+///                                  render=1, display=source|rendered
 /// #!/blame/<path>[?h=<rev>]        per-line blame for one file
 /// #!/snapshot[/…][?h=<ref>]        a .tar.gz of a revision's tree (path ignored)
 /// ```
@@ -252,9 +253,27 @@ fn parse_tree_rest(rest: &str) -> (String, Option<String>, bool) {
             .filter(|v| !v.is_empty())
             .map(decode_component)
     });
-    // A flag, so only the spelling [`tree_url`] writes counts as asking for it.
-    let render = query_string.is_some_and(|qs| qs.split('&').any(|part| part == "render=1"));
-    (decode_path(path_part), head, render)
+    (
+        decode_path(path_part),
+        head,
+        query_string.is_some_and(parse_render),
+    )
+}
+
+/// Whether a tree URL asks for a blob's rendered form.
+///
+/// Prefer render=1, then display=rendered
+fn parse_render(query_string: &str) -> bool {
+    let mut display = false;
+    for part in query_string.split('&') {
+        if let Some(v) = part.strip_prefix("render=") {
+            return v == "1";
+        }
+        if let Some(v) = part.strip_prefix("display=") {
+            display = v == "rendered";
+        }
+    }
+    display
 }
 
 fn parse_log_query(query_string: &str) -> (usize, Option<String>, bool) {

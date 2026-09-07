@@ -420,7 +420,7 @@ Do not add new kinds of tests, just focus on snapshot + browser.
   - an annotated tag missing its date or tagger — reported rather than rendered
   - a tag ref pointing at no commit — reported
   - the tag page links to the tree, the log and the snapshot for that ref
-- `#!/tree[/<path>][?h=<rev>][&render=1]`
+- `#!/tree[/<path>][?h=<rev>][&render=1][&display=source|rendered]`
   - the path resolves to a directory, to a blob, or to neither
   - a path or ref containing route syntax survives the round trip
   - directory listing
@@ -555,6 +555,16 @@ Do not add new kinds of tests, just focus on snapshot + browser.
       - snapshot:
         - test_blob_html_markdown_rendered
     - only the exact `render=1` spelling asks for it
+    - `?display=rendered` — Forgejo's spelling of `render=1`
+      - browser:
+        - blob_renders_real_content
+    - `?display=source` — Forgejo's spelling of the default
+      - browser:
+        - blob_renders_real_content
+    - `?display=` holding anything else — not a vote either way
+    - `?render=` and `?display=` together — `render=` wins, in either order
+      - browser:
+        - blob_renders_real_content
     - `?render=1` on a file that is not markdown — classified as it would have been
     - `?render=1` on an over-cap markdown file — refused like any over-cap file
     - the source view of a markdown file offers a "rendered" link
