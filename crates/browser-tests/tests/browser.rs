@@ -68,6 +68,7 @@ macro_rules! route_test {
 route_test!(summary_renders_real_content, check_summary);
 route_test!(log_renders_real_content, check_log);
 route_test!(log_expands_commit_messages, check_log_showmsg);
+route_test!(log_takes_a_page_number, check_log_page);
 route_test!(tree_renders_real_content, check_tree);
 route_test!(blob_renders_real_content, check_blob);
 route_test!(blob_line_anchors_select_lines, check_line_anchors);
@@ -187,6 +188,37 @@ async fn check_log(h: &Harness, repo: &RepoFixture) -> Result<()> {
 /// `?showmsg=1` — cgit's Expand: every commit's message body under its subject
 /// row, the header link flipped to Collapse, and a body-less commit left as the
 /// single row it already was.
+/// Forgejo counts the log in 1-based pages where this counts in commits, so a
+/// migrated `?page=1` has to land on the top of the log rather than nowhere.
+async fn check_log_page(h: &Harness, repo: &RepoFixture) -> Result<()> {
+    h.open(repo, "#!/log").await?;
+    wait_for_settled_log(h, repo).await?;
+    let bare = h.texts_of(".log-table td.msg").await?;
+
+    h.open(repo, "#!/log?page=1").await?;
+    wait_for_settled_log(h, repo).await?;
+    h.assert_no_error().await?;
+    assert_eq!(
+        h.texts_of(".log-table td.msg").await?,
+        bare,
+        "[{}] ?page=1 is not the first page of the log",
+        repo.name
+    );
+
+    // `offset=` is the spelling the pager writes, so it wins over a `page=`
+    // that arrived beside it.
+    h.open(repo, "#!/log?offset=0&page=9").await?;
+    wait_for_settled_log(h, repo).await?;
+    h.assert_no_error().await?;
+    assert_eq!(
+        h.texts_of(".log-table td.msg").await?,
+        bare,
+        "[{}] page= overrode offset=",
+        repo.name
+    );
+    Ok(())
+}
+
 async fn check_log_showmsg(h: &Harness, repo: &RepoFixture) -> Result<()> {
     h.open(repo, "#!/log?showmsg=1").await?;
     h.wait_for(".summary-table.log-expanded").await?;
@@ -307,6 +339,29 @@ async fn check_blob(h: &Harness, repo: &RepoFixture) -> Result<()> {
         "[{}] blob did not render the file's real contents",
         repo.name
     );
+
+    // Forgejo's spelling of the rendered/source choice, which its links carry.
+    // The rendered form is the sandboxed frame; the source form is the table.
+    h.open(repo, "#!/tree/docs/guide.md?display=rendered")
+        .await?;
+    h.wait_for("iframe.markdown-frame").await?;
+    h.assert_no_error().await?;
+
+    h.open(repo, "#!/tree/docs/guide.md?display=source").await?;
+    h.wait_for(".blob-table").await?;
+    h.assert_no_error().await?;
+    assert!(
+        h.texts_of("iframe.markdown-frame").await?.is_empty(),
+        "[{}] display=source still rendered the markdown",
+        repo.name
+    );
+
+    // `render=` is what the app itself writes, so it wins over a stale
+    // `display=` carried along beside it.
+    h.open(repo, "#!/tree/docs/guide.md?render=1&display=source")
+        .await?;
+    h.wait_for("iframe.markdown-frame").await?;
+    h.assert_no_error().await?;
     Ok(())
 }
 

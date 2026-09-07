@@ -701,3 +701,147 @@ fn test_offset_is_not_confused_by_an_encoded_ref() {
         _ => panic!("expected a log route"),
     }
 }
+
+/// Forgejo counts the log in 1-based pages where this counts in commits, and a
+/// rewrite rule cannot do the multiplication itself — so the router does it.
+#[test]
+fn test_parse_hash_log_page() {
+    for (hash, want) in [
+        ("#!/log?page=1", 0),
+        ("#!/log?page=2", PAGE_SIZE),
+        ("#!/log?page=3", 2 * PAGE_SIZE),
+    ] {
+        assert!(
+            matches!(parse_hash(hash), Route::Log { offset, .. } if offset == want),
+            "for {hash}"
+        );
+    }
+    match parse_hash("#!/log/src?h=main&page=2") {
+        Route::Log {
+            offset, head, path, ..
+        } => {
+            assert_eq!(offset, PAGE_SIZE);
+            assert_eq!(head.as_deref(), Some("main"));
+            assert_eq!(path, "src");
+        }
+        _ => panic!("expected Log with path, head and page"),
+    }
+}
+
+/// `offset=` is the spelling this app writes, so it wins wherever it appears.
+#[test]
+fn test_parse_hash_log_offset_beats_page() {
+    for hash in ["#!/log?offset=10&page=5", "#!/log?page=5&offset=10"] {
+        assert!(
+            matches!(parse_hash(hash), Route::Log { offset: 10, .. }),
+            "for {hash}"
+        );
+    }
+}
+
+/// There is no page zero, and a page that isn't a number names nothing — both
+/// leave the reader at the top of the log rather than on an error.
+#[test]
+fn test_parse_hash_log_malformed_page_is_the_first_page() {
+    for hash in [
+        "#!/log?page=0",
+        "#!/log?page=",
+        "#!/log?page=x",
+        "#!/log?page=-1",
+    ] {
+        assert!(
+            matches!(parse_hash(hash), Route::Log { offset: 0, .. }),
+            "for {hash}"
+        );
+    }
+}
+
+/// Forgejo's spelling of the same choice. Its default is the rendered form and
+/// this one's is the source, so only the two explicit values count.
+#[test]
+fn test_parse_hash_tree_display() {
+    assert!(matches!(
+        parse_hash("#!/tree/a.md?display=rendered"),
+        Route::Tree { render: true, .. }
+    ));
+    for hash in [
+        "#!/tree/a.md?display=source",
+        "#!/tree/a.md?display=",
+        "#!/tree/a.md?display=other",
+    ] {
+        assert!(
+            matches!(parse_hash(hash), Route::Tree { render: false, .. }),
+            "for {hash}"
+        );
+    }
+}
+
+/// A link from within the app carries `render=`, and lands on the view it names
+/// even when a stale `display=` is carried along beside it.
+#[test]
+fn test_parse_hash_tree_render_beats_display() {
+    for hash in [
+        "#!/tree/a.md?render=1&display=source",
+        "#!/tree/a.md?display=source&render=1",
+    ] {
+        assert!(
+            matches!(parse_hash(hash), Route::Tree { render: true, .. }),
+            "for {hash}"
+        );
+    }
+    for hash in [
+        "#!/tree/a.md?render=0&display=rendered",
+        "#!/tree/a.md?display=rendered&render=0",
+    ] {
+        assert!(
+            matches!(parse_hash(hash), Route::Tree { render: false, .. }),
+            "for {hash}"
+        );
+    }
+}
+
+/// git's three ignoring modes, under cgit's parameter name. `1` is cgit's
+/// spelling of `-w` and `all` is Forgejo's, so both reach the same view.
+#[test]
+fn test_parse_hash_commit_whitespace_modes() {
+    for (q, want) in [
+        ("ignorews=1", Whitespace::Ignore),
+        ("ignorews=all", Whitespace::Ignore),
+        ("ignorews=change", Whitespace::IgnoreChange),
+        ("ignorews=eol", Whitespace::IgnoreEol),
+        ("ignorews=0", Whitespace::Significant),
+        ("ignorews=", Whitespace::Significant),
+        ("ignorews=yes", Whitespace::Significant),
+    ] {
+        match parse_hash(&format!("#!/commit/abc123?{q}")) {
+            Route::Commit(_, view) => assert_eq!(view.whitespace, want, "for {q}"),
+            _ => panic!("expected Commit for {q}"),
+        }
+    }
+}
+
+/// Each mode has a URL, and it is the URL that parses back to it. `-w` keeps
+/// cgit's `ignorews=1` so an existing cgit link still lands on it.
+#[test]
+fn test_commit_url_round_trips_every_whitespace_mode() {
+    for (mode, want) in [
+        (Whitespace::Significant, "#!/commit/abc"),
+        (Whitespace::Ignore, "#!/commit/abc?ignorews=1"),
+        (Whitespace::IgnoreChange, "#!/commit/abc?ignorews=change"),
+        (Whitespace::IgnoreEol, "#!/commit/abc?ignorews=eol"),
+    ] {
+        let view = DiffView {
+            whitespace: mode,
+            ..DiffView::default()
+        };
+        let url = commit_url("abc", view);
+        assert_eq!(url, want, "for {mode:?}");
+        match parse_hash(&url) {
+            Route::Commit(sha, got) => {
+                assert_eq!(sha, "abc");
+                assert_eq!(got, view, "for {mode:?}");
+            }
+            _ => panic!("expected Commit for {mode:?}"),
+        }
+    }
+}
