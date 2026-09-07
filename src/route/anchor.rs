@@ -44,7 +44,8 @@ impl LineRange {
 }
 
 /// Split a trailing `#n<A>[-n<B>]` line anchor off `hash`, returning the route
-/// part and the range it named.
+/// part and the range it named. Forgejo's `#L<A>[-L<B>]` spelling of the same
+/// thing is read too; see [`parse_line_anchor`].
 pub(crate) fn split_line_anchor(hash: &str) -> (&str, Option<LineRange>) {
     // Skip the fragment's own leading '#' so it is never taken as the separator.
     let Some(i) = hash
@@ -60,11 +61,15 @@ pub(crate) fn split_line_anchor(hash: &str) -> (&str, Option<LineRange>) {
     }
 }
 
-/// Parse `#n<A>` or `#n<A>-n<B>` into the range it names, or `None` if `s` is
-/// not one of those.
+/// Parse `#n<A>`, `#n<A>-n<B>`, or either spelled with `L`, into the range it
+/// names, or `None` if `s` is not one of those.
 fn parse_line_anchor(s: &str) -> Option<LineRange> {
-    let body = s.strip_prefix("#n")?;
-    match body.split_once("-n") {
+    let body = s.strip_prefix('#')?;
+    let (body, sep) = match body.strip_prefix('n') {
+        Some(rest) => (rest, "-n"),
+        None => (body.strip_prefix('L')?, "-L"),
+    };
+    match body.split_once(sep) {
         None => Some(LineRange::single(parse_line_number(body)?)),
         Some((a, b)) => Some(LineRange::spanning(
             parse_line_number(a)?,
@@ -135,6 +140,32 @@ mod tests {
         assert_eq!(split_line_anchor("#"), ("#", None));
     }
 
+    /// Forgejo and GitHub spell the same selection `#L5` / `#L5-L10`, and a
+    /// link migrated from one of those has to land on the lines it named.
+    #[test]
+    fn test_split_line_anchor_accepts_forgejos_l_spelling() {
+        assert_eq!(
+            split_line_anchor("#!/tree/src/lib.rs#L5"),
+            ("#!/tree/src/lib.rs", Some(LineRange::single(5)))
+        );
+        assert_eq!(
+            split_line_anchor("#!/tree/src/lib.rs#L5-L10"),
+            ("#!/tree/src/lib.rs", Some(LineRange { start: 5, end: 10 }))
+        );
+        assert_eq!(
+            split_line_anchor("#!/tree/src/lib.rs?h=v1.0#L15-L20"),
+            (
+                "#!/tree/src/lib.rs?h=v1.0",
+                Some(LineRange { start: 15, end: 20 })
+            )
+        );
+        // Reversed ends are ordered here too.
+        assert_eq!(
+            split_line_anchor("#!/tree/f#L10-L5").1,
+            Some(LineRange { start: 5, end: 10 })
+        );
+    }
+
     /// A suffix that isn't a well-formed anchor stays part of the route string,
     /// rather than being silently discarded as if it had been one.
     #[test]
@@ -150,6 +181,14 @@ mod tests {
             "#!/tree/f#n 5",
             "#!/tree/f#n+5",
             "#!/tree/f#5",
+            "#!/tree/f#L",
+            "#!/tree/f#L0",
+            "#!/tree/f#Lines",
+            "#!/tree/f#L5-",
+            "#!/tree/f#L5-10",
+            // A range spells its marker the same way at both ends.
+            "#!/tree/f#n5-L10",
+            "#!/tree/f#L5-n10",
         ] {
             assert_eq!(split_line_anchor(hash), (hash, None), "for {hash}");
         }

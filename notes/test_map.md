@@ -485,6 +485,24 @@ Do not add new kinds of tests, just focus on snapshot + browser.
         - test_blob_html
       - browser:
         - blob_renders_real_content
+    - line selection — a `#n<A>[-n<B>]` suffix on the route, taken off before
+      the route is read so it names the same view with or without one
+      - a single line
+        - browser:
+          - blob_line_anchors_select_lines
+      - a range, whose ends may arrive in either order
+        - browser:
+          - blob_line_anchors_select_lines
+      - `#L<A>[-L<B>]`, Forgejo's and GitHub's spelling of the same selection
+        - browser:
+          - blob_line_anchors_select_lines
+      - the two markers are not mixed — `#n5-L10` is not a range
+      - a malformed suffix stays part of the route rather than being discarded
+        as if it had been an anchor
+      - clicking a line number selects it; shift-clicking another extends the
+        selection into a range
+        - browser:
+          - blob_line_anchors_select_lines
     - contents containing markup, escaped
       - snapshot:
         - test_blob_html_escapes_markup

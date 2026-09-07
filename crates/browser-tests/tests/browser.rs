@@ -343,6 +343,30 @@ async fn check_line_anchors(h: &Harness, repo: &RepoFixture) -> Result<()> {
         repo.name
     );
 
+    // Forgejo and GitHub spell the same selection `#L2` / `#L1-L3`, and a link
+    // migrated from one of them has to select the lines it named rather than
+    // drop the reader on the top of the file.
+    h.open(repo, &format!("{blob}#L2")).await?;
+    h.wait_for(".blob-table tr.hl").await?;
+    h.assert_no_error().await?;
+    let selected = h.texts_of(".blob-table tr.hl td.code").await?;
+    assert_eq!(
+        selected.len(),
+        1,
+        "[{}] #L2 selected {selected:?}, not one line",
+        repo.name
+    );
+
+    h.open(repo, &format!("{blob}#L1-L3")).await?;
+    h.wait_for(".blob-table tr.hl").await?;
+    let selected = h.texts_of(".blob-table tr.hl td.code").await?;
+    assert_eq!(
+        selected.len(),
+        3,
+        "[{}] #L1-L3 selected {selected:?}, not three lines",
+        repo.name
+    );
+
     // Clicking a line number selects it, without leaving the blob.
     h.open(repo, blob).await?;
     h.wait_for(".blob-table").await?;
