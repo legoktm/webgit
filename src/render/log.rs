@@ -12,7 +12,7 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use yew::prelude::*;
 
-const PAGE_SIZE: usize = 50;
+pub(crate) const PAGE_SIZE: usize = 50;
 
 /// What a `#!/log` URL asked for: which history (the `?h=` revision, narrowed
 /// to `path`), which page of it, and whether commit message bodies are

@@ -16,6 +16,7 @@ pub(crate) use diff_view::{CONTEXT_CHOICES, DiffMode, DiffView, Whitespace};
 pub(crate) use encode::{encode_component, encode_path};
 pub(crate) use load::{LoadedView, RefKind, build_route, resolve_display_head};
 
+use crate::render::log::PAGE_SIZE;
 use encode::{decode_component, decode_path};
 
 pub(crate) enum RefsRoute {
@@ -125,7 +126,8 @@ pub(crate) fn parse_index_hash(hash: &str) -> IndexRoute {
 /// (empty) | #  | #!/readme         the README at HEAD
 /// #!/about                         the about page
 /// #!/summary                       the summary
-/// #!/log[/<path>][?…]              the log; query: h=<rev>, offset=<n>, showmsg=1
+/// #!/log[/<path>][?…]              the log; query: h=<rev>, offset=<n>,
+///                                  page=<n>, showmsg=1
 /// #!/commit[/][?…]                 HEAD's commit
 /// #!/commit/<sha>[?…]              one commit
 ///                                  query: dt=<0|1|2>, context=<n>,
@@ -256,12 +258,15 @@ fn parse_tree_rest(rest: &str) -> (String, Option<String>, bool) {
 }
 
 fn parse_log_query(query_string: &str) -> (usize, Option<String>, bool) {
-    let mut offset = 0usize;
+    let mut offset = None;
+    let mut page = None;
     let mut head = None;
     let mut showmsg = false;
     for part in query_string.split('&') {
         if let Some(v) = part.strip_prefix("offset=") {
-            offset = v.parse().unwrap_or(0);
+            offset = Some(v.parse().unwrap_or(0));
+        } else if let Some(v) = part.strip_prefix("page=") {
+            page = v.parse::<usize>().ok().filter(|&n| n > 0);
         } else if let Some(v) = part.strip_prefix("h=")
             && !v.is_empty()
         {
@@ -270,6 +275,9 @@ fn parse_log_query(query_string: &str) -> (usize, Option<String>, bool) {
             showmsg = true;
         }
     }
+    let offset = offset
+        .or_else(|| page.map(|n| (n - 1).saturating_mul(PAGE_SIZE)))
+        .unwrap_or(0);
     (offset, head, showmsg)
 }
 

@@ -201,7 +201,7 @@ Do not add new kinds of tests, just focus on snapshot + browser.
   - autolinking skips code spans and existing links
   - a rewritten link's segments are encoded, so `?` or `#` in a filename survives
   - the ref being viewed is deliberately not carried into rewritten links
-- `#!/log[/<path>][?h=<rev>][&offset=<n>]`
+- `#!/log[/<path>][?h=<rev>][&offset=<n>][&page=<n>]`
   - bare log on HEAD's branch
     - browser:
       - log_renders_real_content
@@ -216,6 +216,14 @@ Do not add new kinds of tests, just focus on snapshot + browser.
   - partial renders suppress "older", which is unknown until the walk finishes
   - an `?offset=` past the end of history — arithmetic saturates rather than wrapping
   - `?offset=` that is not a number — treated as zero
+  - `?page=<n>` — Forgejo's 1-based pages, converted to an offset; page 1 is the
+    top of the log
+    - browser:
+      - log_takes_a_page_number
+  - `?page=` that is zero, empty or not a number — treated as the first page
+  - `?offset=` and `?page=` together — `offset=` wins, in either order
+    - browser:
+      - log_takes_a_page_number
   - `?h=<branch>`
   - `?h=<tag>` — resolved through the tag object
     - snapshot:
