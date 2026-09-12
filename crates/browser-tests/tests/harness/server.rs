@@ -108,7 +108,7 @@ DirectoryIndex index.html
 
 # The README's rule, with the fixtures' prefix in place of public/mirrors.
 RewriteEngine On
-RewriteCond %{{REQUEST_URI}} ^/repos/[^/]+\.git/((commits?|log)(/.*)?)?$
+RewriteCond %{{REQUEST_URI}} ^/repos/[^/]+\.git/((commits?|log|src|tree)(/.*)?)?$
 RewriteRule ^ "{webroot}/index.html" [L]
 "#
     )

@@ -37,9 +37,25 @@ Do not add new kinds of tests, just focus on snapshot + browser.
       - browser:
         - cgit_and_forgejo_log_urls_render_the_log
     - `<repo>.git/commits/<branch|tag|commit>/<ref>[/<path>]` — Forgejo's log,
-      paged by `page=`; a slashed ref is read as its first segment only
+      paged by `page=`
       - browser:
         - cgit_and_forgejo_log_urls_render_the_log
+    - a Forgejo ref that needs its ref list to read — `branch/` or `tag/` with
+      more than one segment after it, or its deprecated untyped form: refused
+      - browser:
+        - unsupported_path_urls_are_not_found
+    - `<repo>.git/tree/<path>` — cgit's tree, a directory or a file, with the
+      same `h=`/`id=` as its log; a file is shown as source, as cgit shows it
+      - browser:
+        - cgit_and_forgejo_tree_urls_render_the_tree
+    - `<repo>.git/src/<branch|tag|commit>/<ref>[/<path>]` — Forgejo's tree, the
+      same URL for a directory and a file
+      - browser:
+        - cgit_and_forgejo_tree_urls_render_the_tree
+    - a file Forgejo would render — markdown, SVG — arrives rendered, and
+      `?display=source` asks for the source instead
+      - browser:
+        - cgit_and_forgejo_tree_urls_render_the_tree
     - `<repo>.git/log/?qt=<type>&q=<pattern>`, `?follow=1` with a path,
       `commits/…/search`, `commits/…?limit=<n>` other than fifty, and Forgejo's
       deprecated untyped `commits/<ref>` — views this app doesn't have: refused

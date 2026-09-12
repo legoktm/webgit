@@ -3,7 +3,9 @@
 
 use super::{
     DiffView, PAGE_SIZE, commit_url, decode_component, decode_path, log_url, strip_route_prefix,
+    tree_url,
 };
+use crate::render::blob::has_rendered_form;
 
 pub(crate) fn split_repo_url(bare: &str) -> Option<(&str, &str)> {
     match bare.find(".git/") {
@@ -44,6 +46,8 @@ fn path_route_hash(rest: &str) -> Option<String> {
         ("commit", commit_route as fn(&str, &str) -> Option<String>),
         ("commits", commits_route),
         ("log", log_route),
+        ("src", src_route),
+        ("tree", tree_route),
     ] {
         if let Some(rest) = strip_route_prefix(path, name, &['/']) {
             return route(rest.trim_start_matches('/'), query);
@@ -109,24 +113,7 @@ fn log_route(path: &str, query: &str) -> Option<String> {
 /// Forgejo's log: `commits/<branch|tag|commit>/<rev>[/<path>]`, paged by
 /// `?page=`. Only the forms whose ref reads without its ref list are taken.
 fn commits_route(rest: &str, query: &str) -> Option<String> {
-    let (kind, rest) = rest.split_once('/')?;
-    let (rev, path) = match kind {
-        // Forgejo takes the first segment as the object id and whatever follows
-        // as the path, so there is nothing here to be unsure about.
-        "commit" => {
-            let (rev, path) = rest.split_once('/').unwrap_or((rest, ""));
-            // The lengths an id may have, as Forgejo bounds them: four to a
-            // full sha256. Whether it names an object is resolved later.
-            if !(4..=64).contains(&rev.len()) {
-                return None;
-            }
-            (rev, path)
-        }
-        // A name may contain '/', so past one segment the name and the path
-        // cannot be told apart without the ref list. One segment is the name.
-        "branch" | "tag" if !rest.is_empty() && !rest.contains('/') => (rest, ""),
-        _ => return None,
-    };
+    let (rev, path) = forgejo_ref(rest)?;
     // Forgejo reads this one path as commit search rather than a file, and
     // there is no such view here.
     if path == "search" {
@@ -150,6 +137,56 @@ fn commits_route(rest: &str, query: &str) -> Option<String> {
         Some(&decode_component(rev)),
         false,
     ))
+}
+
+/// The revision and the path in Forgejo's `<branch|tag|commit>/<rev>[/<path>]`,
+/// or `None` where telling the two apart would need its own ref list.
+fn forgejo_ref(rest: &str) -> Option<(&str, &str)> {
+    let (kind, rest) = rest.split_once('/')?;
+    match kind {
+        // Forgejo takes the first segment as the object id and whatever follows
+        // as the path, so there is nothing here to be unsure about.
+        "commit" => {
+            let (rev, path) = rest.split_once('/').unwrap_or((rest, ""));
+            // The lengths an id may have, as Forgejo bounds them: four to a
+            // full sha256. Whether it names an object is resolved later.
+            (4..=64).contains(&rev.len()).then_some((rev, path))
+        }
+        // A name may contain '/', so past one segment the name and the path
+        // cannot be told apart without the ref list. One segment is the name.
+        "branch" | "tag" if !rest.is_empty() && !rest.contains('/') => Some((rest, "")),
+        _ => None,
+    }
+}
+
+/// cgit's tree: `tree/<path>`, with `h=` the ref the page is on and `id=` the
+/// revision to read it at, which wins as it does in the log.
+fn tree_route(path: &str, query: &str) -> Option<String> {
+    let (mut head, mut id) = (None, None);
+    for part in query.split('&') {
+        if let Some(v) = part.strip_prefix("h=")
+            && !v.is_empty()
+        {
+            head = Some(v);
+        } else if let Some(v) = part.strip_prefix("id=")
+            && !v.is_empty()
+        {
+            id = Some(v);
+        }
+    }
+    let head = id.or(head).map(decode_component);
+    // cgit shows a file as its source, which is this app's own default.
+    Some(tree_url(&decode_path(path), head.as_deref(), false))
+}
+
+/// Forgejo's tree: `src/<branch|tag|commit>/<rev>[/<path>]`. A file it has a
+/// rendered form of is shown rendered unless `?display=source` asks otherwise.
+fn src_route(rest: &str, query: &str) -> Option<String> {
+    let (rev, path) = forgejo_ref(rest)?;
+    let path = decode_path(path);
+    let source = query.split('&').any(|part| part == "display=source");
+    let render = !source && has_rendered_form(&path);
+    Some(tree_url(&path, Some(&decode_component(rev)), render))
 }
 
 #[cfg(test)]
@@ -198,10 +235,10 @@ mod tests {
         // One it doesn't: reported at the address that was asked for, query
         // included, rather than resolved to some other page.
         assert_eq!(
-            path_route("/repos/basic.git/tree/src/main.rs", ""),
+            path_route("/repos/basic.git/plain/src/main.rs", ""),
             Some(PathRoute::Unknown {
                 repo: repo.clone(),
-                path: "tree/src/main.rs".to_string(),
+                path: "plain/src/main.rs".to_string(),
             })
         );
         assert_eq!(
@@ -404,6 +441,76 @@ mod tests {
         assert_eq!(path_route_hash("commits/branch/main?limit=10"), None);
     }
 
+    /// cgit's tree: the path in the path, the revision in the query.
+    #[test]
+    fn test_path_route_hash_tree() {
+        assert_eq!(path_route_hash("tree").as_deref(), Some("#!/tree"));
+        assert_eq!(path_route_hash("tree/").as_deref(), Some("#!/tree"));
+        assert_eq!(
+            path_route_hash("tree/src/render").as_deref(),
+            Some("#!/tree/src/render")
+        );
+        assert_eq!(
+            path_route_hash("tree/src?h=next").as_deref(),
+            Some("#!/tree/src?h=next")
+        );
+        // `id=` is the revision the tree is read at, and beats `h=`.
+        assert_eq!(
+            path_route_hash("tree/?h=next&id=abc123").as_deref(),
+            Some("#!/tree?h=abc123")
+        );
+        // cgit shows a file as source, which is this app's default: no flag.
+        assert_eq!(
+            path_route_hash("tree/README.md?h=next").as_deref(),
+            Some("#!/tree/README.md?h=next")
+        );
+    }
+
+    /// Forgejo's tree, which is its file view too: the same URL either way, and
+    /// a file it can render is rendered unless the URL says source.
+    #[test]
+    fn test_path_route_hash_src() {
+        assert_eq!(
+            path_route_hash("src/branch/main").as_deref(),
+            Some("#!/tree?h=main")
+        );
+        assert_eq!(
+            path_route_hash("src/tag/v1.0").as_deref(),
+            Some("#!/tree?h=v1.0")
+        );
+        assert_eq!(
+            path_route_hash("src/commit/abc123/src/render").as_deref(),
+            Some("#!/tree/src/render?h=abc123")
+        );
+        // Forgejo renders markdown and SVG by default, where this app asks.
+        assert_eq!(
+            path_route_hash("src/commit/abc123/README.md").as_deref(),
+            Some("#!/tree/README.md?h=abc123&render=1")
+        );
+        assert_eq!(
+            path_route_hash("src/commit/abc123/logo.svg").as_deref(),
+            Some("#!/tree/logo.svg?h=abc123&render=1")
+        );
+        assert_eq!(
+            path_route_hash("src/commit/abc123/README.md?display=source").as_deref(),
+            Some("#!/tree/README.md?h=abc123")
+        );
+        // A file with no rendered form is the same page either way.
+        assert_eq!(
+            path_route_hash("src/commit/abc123/src/main.rs").as_deref(),
+            Some("#!/tree/src/main.rs?h=abc123")
+        );
+    }
+
+    /// The tree's share of the refs that cannot be read without Forgejo's list.
+    #[test]
+    fn test_path_route_hash_refuses_an_ambiguous_src_ref() {
+        assert_eq!(path_route_hash("src/branch/main/src/lib.rs"), None);
+        assert_eq!(path_route_hash("src/tag/v1.0/docs"), None);
+        assert_eq!(path_route_hash("src/main/README.md"), None);
+        assert_eq!(path_route_hash("src/commit/ab/README.md"), None);
+    }
+
     /// Anything else is left to be read as the repository root.
     #[test]
     fn test_path_route_hash_ignores_everything_else() {
@@ -411,8 +518,9 @@ mod tests {
         assert_eq!(path_route_hash("/"), None);
         // The route name has to end where a route name may end.
         assert_eq!(path_route_hash("commitment/abc"), None);
-        // Routes that only exist in the fragment grammar are not path routes.
-        assert_eq!(path_route_hash("tree/src/lib.rs"), None);
+        // cgit pages this app has no view for, and a name that merely starts
+        // with one of the routes it does have.
+        assert_eq!(path_route_hash("plain/src/lib.rs"), None);
         assert_eq!(path_route_hash("about"), None);
         assert_eq!(path_route_hash("logout"), None);
     }

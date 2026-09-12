@@ -137,6 +137,10 @@ fn is_svg(filename: &str) -> bool {
         .is_some_and(|(_, ext)| ext.eq_ignore_ascii_case("svg"))
 }
 
+pub(crate) fn has_rendered_form(filename: &str) -> bool {
+    is_svg(filename) || is_markdown(filename)
+}
+
 /// Whether a file name is one this view will render as markdown.
 fn is_markdown(filename: &str) -> bool {
     let Some((_, ext)) = filename.rsplit_once('.') else {

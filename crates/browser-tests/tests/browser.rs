@@ -85,6 +85,10 @@ route_test!(
     check_log_path_urls
 );
 route_test!(
+    cgit_and_forgejo_tree_urls_render_the_tree,
+    check_tree_path_urls
+);
+route_test!(
     unsupported_path_urls_are_not_found,
     check_unsupported_path_urls
 );
@@ -705,6 +709,63 @@ async fn check_log_path_urls(h: &Harness, repo: &RepoFixture) -> Result<()> {
     Ok(())
 }
 
+/// cgit's tree and Forgejo's `src` both serve a directory and a file at the
+/// same URL, so both land on this app's tree route and the path decides.
+async fn check_tree_path_urls(h: &Harness, repo: &RepoFixture) -> Result<()> {
+    let path = repo.url_path();
+    let sha = &repo.head().sha;
+
+    // A directory listing, cgit's spelling and Forgejo's.
+    for (address, settled) in [
+        (format!("{path}tree/src"), "#!/tree/src".to_string()),
+        (
+            format!("{path}src/commit/{sha}/src"),
+            format!("#!/tree/src?h={sha}"),
+        ),
+    ] {
+        h.open_address(&address, &path, &settled).await?;
+        h.wait_for(".tree-table").await?;
+        h.assert_no_error().await?;
+
+        let names = h.texts_of(".tree-table td.name").await?;
+        assert!(
+            names.iter().any(|n| n == "main.rs"),
+            "[{}] {address} did not list src/: {names:?}",
+            repo.name
+        );
+    }
+
+    // A file: Forgejo shows markdown rendered and cgit shows it as source,
+    // which is what each of these URLs has to keep doing here.
+    h.open_address(
+        &format!("{path}src/commit/{sha}/docs/guide.md"),
+        &path,
+        &format!("#!/tree/docs/guide.md?h={sha}&render=1"),
+    )
+    .await?;
+    h.wait_for("iframe.markdown-frame").await?;
+    h.assert_no_error().await?;
+
+    h.open_address(
+        &format!("{path}src/commit/{sha}/docs/guide.md?display=source"),
+        &path,
+        &format!("#!/tree/docs/guide.md?h={sha}"),
+    )
+    .await?;
+    h.wait_for(".blob-table").await?;
+    h.assert_no_error().await?;
+
+    h.open_address(
+        &format!("{path}tree/docs/guide.md"),
+        &path,
+        "#!/tree/docs/guide.md",
+    )
+    .await?;
+    h.wait_for(".blob-table").await?;
+    h.assert_no_error().await?;
+    Ok(())
+}
+
 /// URLs in those families naming a view this app doesn't have — a commit scoped
 /// to one file, a log search — get the not-found page at the address asked for.
 async fn check_unsupported_path_urls(h: &Harness, repo: &RepoFixture) -> Result<()> {
@@ -719,9 +780,10 @@ async fn check_unsupported_path_urls(h: &Harness, repo: &RepoFixture) -> Result<
             format!("{path}commits/commit/{}/search", repo.head().sha),
             "?q=fix".to_string(),
         ),
-        // A ref that cannot be told from a ref plus a path without the ref list
-        // Forgejo resolves it against.
+        // Refs that cannot be told from a ref plus a path without the ref list
+        // Forgejo resolves them against.
         (format!("{path}commits/branch/feature/x"), String::new()),
+        (format!("{path}src/branch/main/src/main.rs"), String::new()),
     ] {
         h.open_address(&format!("{address}{query}"), &address, "")
             .await?;

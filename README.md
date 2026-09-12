@@ -37,7 +37,7 @@ Alias /assets     /var/www/webgit/dist/assets
 Header always set Content-Security-Policy "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src blob:; connect-src 'self'; base-uri 'none'; form-action 'none'"
 
 # Rewrite repositories to the webgit index
-RewriteCond %{REQUEST_URI} ^/(public|mirrors)/[^/]+\.git/((commits?|log)(/.*)?)?$
+RewriteCond %{REQUEST_URI} ^/(public|mirrors)/[^/]+\.git/((commits?|log|src|tree)(/.*)?)?$
 RewriteRule ^ /var/www/webgit/dist/index.html [L]
 ```
 
