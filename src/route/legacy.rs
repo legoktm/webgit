@@ -2,8 +2,8 @@
 //! fragment. They are translated into a hash before the router reads them.
 
 use super::{
-    DiffView, PAGE_SIZE, commit_url, decode_component, decode_path, log_url, strip_route_prefix,
-    tree_url,
+    DiffView, PAGE_SIZE, blame_url, commit_url, decode_component, decode_path, log_url,
+    snapshot_url, strip_route_prefix, tree_url,
 };
 use crate::render::blob::has_rendered_form;
 
@@ -43,10 +43,15 @@ fn path_route_hash(rest: &str) -> Option<String> {
     };
     let path = path.trim_matches('/');
     for (name, route) in [
-        ("commit", commit_route as fn(&str, &str) -> Option<String>),
+        ("archive", archive_route as fn(&str, &str) -> Option<String>),
+        ("blame", blame_route),
+        ("branches", branches_route),
+        ("commit", commit_route),
         ("commits", commits_route),
         ("log", log_route),
         ("src", src_route),
+        ("summary", summary_route),
+        ("tags", tags_route),
         ("tree", tree_route),
     ] {
         if let Some(rest) = strip_route_prefix(path, name, &['/']) {
@@ -71,12 +76,10 @@ fn commit_route(rest: &str, query: &str) -> Option<String> {
     Some(commit_url(&decode_component(rev), DiffView::parse(query)))
 }
 
-/// cgit's log: `log/<path>`, with the rest in the query — `h=` the ref the page
-/// is on, `id=` where the walk starts, `ofs=` the offset, `showmsg=1`.
-fn log_route(path: &str, query: &str) -> Option<String> {
+/// The revision cgit's query names: `h=` is the ref the page is on and `id=`
+/// the revision to read it at, which is the one that wins where both are there.
+fn cgit_rev(query: &str) -> Option<String> {
     let (mut head, mut id) = (None, None);
-    let mut offset: usize = 0;
-    let mut showmsg = false;
     for part in query.split('&') {
         if let Some(v) = part.strip_prefix("h=")
             && !v.is_empty()
@@ -86,7 +89,18 @@ fn log_route(path: &str, query: &str) -> Option<String> {
             && !v.is_empty()
         {
             id = Some(v);
-        } else if let Some(v) = part.strip_prefix("ofs=") {
+        }
+    }
+    id.or(head).map(decode_component)
+}
+
+/// cgit's log: `log/<path>`, with the revision in the query beside `ofs=` the
+/// offset and `showmsg=1`.
+fn log_route(path: &str, query: &str) -> Option<String> {
+    let mut offset: usize = 0;
+    let mut showmsg = false;
+    for part in query.split('&') {
+        if let Some(v) = part.strip_prefix("ofs=") {
             offset = v.parse().unwrap_or(0);
         } else if part == "showmsg=1" {
             showmsg = true;
@@ -100,8 +114,7 @@ fn log_route(path: &str, query: &str) -> Option<String> {
             return None;
         }
     }
-    // `id=` is where cgit starts the walk, and overrides the ref the page is on.
-    let head = id.or(head).map(decode_component);
+    let head = cgit_rev(query);
     Some(log_url(
         &decode_path(path),
         offset,
@@ -162,19 +175,7 @@ fn forgejo_ref(rest: &str) -> Option<(&str, &str)> {
 /// cgit's tree: `tree/<path>`, with `h=` the ref the page is on and `id=` the
 /// revision to read it at, which wins as it does in the log.
 fn tree_route(path: &str, query: &str) -> Option<String> {
-    let (mut head, mut id) = (None, None);
-    for part in query.split('&') {
-        if let Some(v) = part.strip_prefix("h=")
-            && !v.is_empty()
-        {
-            head = Some(v);
-        } else if let Some(v) = part.strip_prefix("id=")
-            && !v.is_empty()
-        {
-            id = Some(v);
-        }
-    }
-    let head = id.or(head).map(decode_component);
+    let head = cgit_rev(query);
     // cgit shows a file as its source, which is this app's own default.
     Some(tree_url(&decode_path(path), head.as_deref(), false))
 }
@@ -187,6 +188,43 @@ fn src_route(rest: &str, query: &str) -> Option<String> {
     let source = query.split('&').any(|part| part == "display=source");
     let render = !source && has_rendered_form(&path);
     Some(tree_url(&path, Some(&decode_component(rev)), render))
+}
+
+/// Blame, which both spell `blame/`: Forgejo names the ref first, under the
+/// segment naming its kind, where cgit starts with the path.
+fn blame_route(rest: &str, query: &str) -> Option<String> {
+    let kind = rest.split('/').next().unwrap_or_default();
+    let (path, head) = if matches!(kind, "branch" | "tag" | "commit") {
+        let (rev, path) = forgejo_ref(rest)?;
+        (decode_path(path), Some(decode_component(rev)))
+    } else {
+        (decode_path(rest), cgit_rev(query))
+    };
+    // Blame is of one file: there is no blame of a directory to show.
+    (!path.is_empty()).then(|| blame_url(&path, head.as_deref()))
+}
+
+/// Forgejo's snapshot: `archive/<ref>.tar.gz`, the ref being the whole name
+/// under it. Its `.zip` and `.bundle` are archives this app cannot build.
+fn archive_route(rest: &str, _query: &str) -> Option<String> {
+    let rev = rest.strip_suffix(".tar.gz")?;
+    (!rev.is_empty()).then(|| snapshot_url(&decode_component(rev)))
+}
+
+/// Forgejo's tag list. `tags/list` and the feeds beside it are other things.
+fn tags_route(rest: &str, _query: &str) -> Option<String> {
+    rest.is_empty().then(|| "#!/refs/tags".to_string())
+}
+
+/// Forgejo's branch list, the same way.
+fn branches_route(rest: &str, _query: &str) -> Option<String> {
+    rest.is_empty().then(|| "#!/refs/heads".to_string())
+}
+
+/// cgit's summary. Its `?h=` scopes the page to a ref, which this app's summary
+/// cannot do, so that form is refused rather than answered with HEAD's.
+fn summary_route(rest: &str, query: &str) -> Option<String> {
+    (rest.is_empty() && cgit_rev(query).is_none()).then(|| "#!/summary".to_string())
 }
 
 #[cfg(test)]
@@ -509,6 +547,64 @@ mod tests {
         assert_eq!(path_route_hash("src/tag/v1.0/docs"), None);
         assert_eq!(path_route_hash("src/main/README.md"), None);
         assert_eq!(path_route_hash("src/commit/ab/README.md"), None);
+    }
+
+    /// Blame, in both spellings: cgit's path-first, Forgejo's ref-first.
+    #[test]
+    fn test_path_route_hash_blame() {
+        assert_eq!(
+            path_route_hash("blame/src/main.rs").as_deref(),
+            Some("#!/blame/src/main.rs")
+        );
+        assert_eq!(
+            path_route_hash("blame/src/main.rs?h=next").as_deref(),
+            Some("#!/blame/src/main.rs?h=next")
+        );
+        assert_eq!(
+            path_route_hash("blame/branch/main").as_deref(),
+            None,
+            "a ref with no file to blame"
+        );
+        assert_eq!(
+            path_route_hash("blame/commit/abc123/src/main.rs").as_deref(),
+            Some("#!/blame/src/main.rs?h=abc123")
+        );
+        // There is nothing to blame at a directory, or at no path at all.
+        assert_eq!(path_route_hash("blame"), None);
+        assert_eq!(path_route_hash("blame/"), None);
+    }
+
+    /// Forgejo's archive, and the two formats this app cannot build.
+    #[test]
+    fn test_path_route_hash_archive() {
+        assert_eq!(
+            path_route_hash("archive/main.tar.gz").as_deref(),
+            Some("#!/snapshot?h=main")
+        );
+        // The ref is the whole name under `archive/`, slashes and all.
+        assert_eq!(
+            path_route_hash("archive/feature/x.tar.gz").as_deref(),
+            Some("#!/snapshot?h=feature%2Fx")
+        );
+        assert_eq!(path_route_hash("archive/main.zip"), None);
+        assert_eq!(path_route_hash("archive/main.bundle"), None);
+        assert_eq!(path_route_hash("archive/.tar.gz"), None);
+    }
+
+    /// The listings, and cgit's summary.
+    #[test]
+    fn test_path_route_hash_listings() {
+        assert_eq!(path_route_hash("tags").as_deref(), Some("#!/refs/tags"));
+        assert_eq!(
+            path_route_hash("branches").as_deref(),
+            Some("#!/refs/heads")
+        );
+        assert_eq!(path_route_hash("summary").as_deref(), Some("#!/summary"));
+        // Forgejo's JSON lists and feeds are not these pages.
+        assert_eq!(path_route_hash("tags/list"), None);
+        assert_eq!(path_route_hash("branches/list"), None);
+        // cgit's summary on a ref, which this app's summary cannot show.
+        assert_eq!(path_route_hash("summary?h=next"), None);
     }
 
     /// Anything else is left to be read as the repository root.

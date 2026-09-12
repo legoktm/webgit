@@ -89,6 +89,10 @@ route_test!(
     check_tree_path_urls
 );
 route_test!(
+    cgit_and_forgejo_side_urls_render_their_views,
+    check_side_path_urls
+);
+route_test!(
     unsupported_path_urls_are_not_found,
     check_unsupported_path_urls
 );
@@ -766,6 +770,51 @@ async fn check_tree_path_urls(h: &Harness, repo: &RepoFixture) -> Result<()> {
     Ok(())
 }
 
+/// The rest of the path URLs that land on a view this app already has: blame
+/// in both spellings, Forgejo's archive and listings, cgit's summary.
+async fn check_side_path_urls(h: &Harness, repo: &RepoFixture) -> Result<()> {
+    let path = repo.url_path();
+    let sha = &repo.head().sha;
+
+    for (address, settled) in [
+        // Blame: cgit puts the path first, Forgejo the ref.
+        (
+            format!("{path}blame/src/main.rs"),
+            "#!/blame/src/main.rs".to_string(),
+        ),
+        (
+            format!("{path}blame/commit/{sha}/src/main.rs"),
+            format!("#!/blame/src/main.rs?h={sha}"),
+        ),
+    ] {
+        h.open_address(&address, &path, &settled).await?;
+        h.wait_for(".blame-table").await?;
+        h.assert_no_error().await?;
+    }
+
+    // Forgejo's archive of a ref, which is this app's snapshot of it.
+    h.open_address(
+        &format!("{path}archive/v1.0.0.tar.gz"),
+        &path,
+        "#!/snapshot?h=v1.0.0",
+    )
+    .await?;
+    h.wait_for(".snapshot-download").await?;
+    h.assert_no_error().await?;
+
+    // Forgejo's two listings, and cgit's summary.
+    for (address, settled) in [
+        (format!("{path}tags"), "#!/refs/tags"),
+        (format!("{path}branches"), "#!/refs/heads"),
+        (format!("{path}summary"), "#!/summary"),
+    ] {
+        h.open_address(&address, &path, settled).await?;
+        h.wait_for(".summary-table").await?;
+        h.assert_no_error().await?;
+    }
+    Ok(())
+}
+
 /// URLs in those families naming a view this app doesn't have — a commit scoped
 /// to one file, a log search — get the not-found page at the address asked for.
 async fn check_unsupported_path_urls(h: &Harness, repo: &RepoFixture) -> Result<()> {
@@ -784,6 +833,10 @@ async fn check_unsupported_path_urls(h: &Harness, repo: &RepoFixture) -> Result<
         // Forgejo resolves them against.
         (format!("{path}commits/branch/feature/x"), String::new()),
         (format!("{path}src/branch/main/src/main.rs"), String::new()),
+        // Archives this app cannot build, and a ref-scoped summary it has no
+        // way to show.
+        (format!("{path}archive/v1.0.0.zip"), String::new()),
+        (format!("{path}summary"), "?h=v1.0.0".to_string()),
     ] {
         h.open_address(&format!("{address}{query}"), &address, "")
             .await?;

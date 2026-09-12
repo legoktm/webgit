@@ -56,6 +56,22 @@ Do not add new kinds of tests, just focus on snapshot + browser.
       `?display=source` asks for the source instead
       - browser:
         - cgit_and_forgejo_tree_urls_render_the_tree
+    - `<repo>.git/blame/<path>` and `<repo>.git/blame/<kind>/<ref>/<path>` —
+      blame, cgit's spelling and Forgejo's; a blame with no file is refused
+      - browser:
+        - cgit_and_forgejo_side_urls_render_their_views
+    - `<repo>.git/archive/<ref>.tar.gz` — Forgejo's archive, this app's
+      snapshot; its `.zip` and `.bundle` are refused
+      - browser:
+        - cgit_and_forgejo_side_urls_render_their_views
+    - `<repo>.git/tags`, `<repo>.git/branches` — Forgejo's listings; `tags/list`
+      and the feeds beside them are refused
+      - browser:
+        - cgit_and_forgejo_side_urls_render_their_views
+    - `<repo>.git/summary` — cgit's summary; its `?h=` scopes the page to a ref,
+      which this app's summary cannot do, so that form is refused
+      - browser:
+        - cgit_and_forgejo_side_urls_render_their_views
     - `<repo>.git/log/?qt=<type>&q=<pattern>`, `?follow=1` with a path,
       `commits/…/search`, `commits/…?limit=<n>` other than fifty, and Forgejo's
       deprecated untyped `commits/<ref>` — views this app doesn't have: refused
