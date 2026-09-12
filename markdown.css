@@ -8,8 +8,8 @@
  * It deliberately does not load `styles.css`: the page's `html, body` rules
  * (a 100vh min-height, the page background) would fight the frame's
  * content-height sizing. That means this file stands alone, so the handful of
- * palette variables it needs are repeated here — keep them in step with the
- * `:root` block in styles.css.
+ * variables it needs are repeated here — keep them in step with the `:root`
+ * block in styles.css.
  */
 
 :root {
@@ -19,6 +19,7 @@
     --text-dim: #4a5a7a;
     --link: #1a56c4;
     --mono: "SFMono-Regular", "Consolas", "Liberation Mono", monospace;
+    --prose-width: 45rem;
 }
 
 *,
@@ -31,6 +32,7 @@
    min-height or a background of its own. */
 .markdown-body {
     margin: 0;
+    max-width: var(--prose-width);
     /* A little bottom padding so the measured height isn't flush to the text. */
     padding: 0 0 0.5rem;
     background: transparent;

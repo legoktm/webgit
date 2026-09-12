@@ -2,6 +2,7 @@
 source: src/render/about.rs
 expression: render(fixture(true))
 ---
+<div class="about">
 <h3 class="summary-heading">repository</h3>
 <table class="tag-table">
 <tbody>
@@ -39,3 +40,4 @@ expression: render(fixture(true))
 <p>
 <input type="file" accept=".bundle,application/x-git-bundle" class="import-input">
 </p>
+</div>

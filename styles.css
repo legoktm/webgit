@@ -34,6 +34,7 @@
     --accent-fg: #ffffff;
     --tab-border: #1a56c4;
     --mono: "SFMono-Regular", "Consolas", "Liberation Mono", monospace;
+    --prose-width: 45rem;
 }
 
 html,
@@ -814,6 +815,11 @@ a.ref-label:hover {
     min-width: 2.2em;
     text-align: center;
     font-variant-numeric: tabular-nums;
+}
+
+/* ── About page ──────────────────────────────────────────────── */
+.about {
+    max-width: var(--prose-width);
 }
 
 /* ── Inline action button (looks like a link) ────────────────── */

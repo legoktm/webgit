@@ -120,7 +120,7 @@ pub(crate) fn about_view(props: &AboutProps) -> Html {
     };
 
     html! {
-        <>
+        <div class="about">
             if let Some(repo) = repo {
                 <h3 class="summary-heading">{ "repository" }</h3>
                 <table class="tag-table">
@@ -201,7 +201,7 @@ pub(crate) fn about_view(props: &AboutProps) -> Html {
                 </p>
                 { import_status(&import) }
             }
-        </>
+        </div>
     }
 }
 

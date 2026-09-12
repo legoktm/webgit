@@ -2,6 +2,7 @@
 source: src/render/about.rs
 expression: render(fixture(false))
 ---
+<div class="about">
 <h3 class="summary-heading">repository</h3>
 <table class="tag-table">
 <tbody>
@@ -33,3 +34,4 @@ expression: render(fixture(false))
 </tr>
 </tbody>
 </table>
+</div>
