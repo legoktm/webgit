@@ -1,4 +1,4 @@
-//! Test harness: fixtures on disk, miniserve in front of them, and a headless
+//! Test harness: fixtures on disk, httpd in front of them, and a headless
 //! Firefox driving the real `dist/` build.
 
 pub mod browser;
@@ -71,6 +71,13 @@ impl Harness {
         let url = self.server.url(&format!("{path}{route}"));
         self.client.goto(&url).await?;
         self.await_url(&path, route).await
+    }
+
+    /// Navigate to an address that names its route in the path rather than the
+    /// fragment, and wait for the location the app settles at.
+    pub async fn open_address(&self, address: &str, path: &str, hash: &str) -> Result<()> {
+        self.client.goto(&self.server.url(address)).await?;
+        self.await_url(path, hash).await
     }
 
     /// Navigate to the repository index — the URL that names no repository.

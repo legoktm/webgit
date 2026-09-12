@@ -44,8 +44,8 @@ pub struct RepoFixture {
 
 impl RepoFixture {
     /// Path component this repo is served under. The trailing slash matters:
-    /// `resolve_repo_url` keys off a URL ending in `.git` or `.git/`, and
-    /// miniserve's `--index` only serves the app shell for the directory URL.
+    /// `resolve_repo_url` keys off the `.git` in it, and `DirectoryIndex` only
+    /// serves the app shell for the directory URL.
     pub fn url_path(&self) -> String {
         format!("/repos/{}/", self.name)
     }
@@ -171,7 +171,7 @@ fn install(
     let dest = repos_dir.join(name);
     copy_dir(&repo.location.path().join(".git"), &dest)?;
     // Placing the app shell *inside* the repo directory is what makes
-    // `miniserve --index index.html` serve webgit at `/repos/<name>.git/` while
+    // `DirectoryIndex index.html` serve webgit at `/repos/<name>.git/` while
     // everything below it stays a real git file. The app never requests
     // `index.html` from a repo, and git does not care that it is there.
     copy_file(index_html, &dest.join("index.html"))?;
@@ -391,7 +391,7 @@ fn copy_file(from: &Path, to: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Copy rather than symlink: miniserve has a `--no-symlinks` mode, and the
+/// Copy rather than symlink: a server may refuse to follow symlinks, and the
 /// fixtures are small enough that copying removes the question entirely.
 fn copy_dir(from: &Path, to: &Path) -> Result<()> {
     fs::create_dir_all(to)?;

@@ -12,9 +12,33 @@ Do not add new kinds of tests, just focus on snapshot + browser.
   - `browser:` — headless Firefox tests in `crates/browser-tests/tests/browser.rs`
   - a variation with neither key is not covered by either suite
 - page modes
-  - repository mode — URL path ends `.git` or `.git/`, trailing slash trimmed
+  - repository mode — URL path has a `.git` component; the repository is
+    everything up to it, trailing slash trimmed
     - browser:
       - summary_renders_real_content
+  - cgit-style address — the route in the path rather than the fragment,
+    rewritten into the fragment form on arrival
+    - `<repo>.git/commit/<rev>` — the revision in the path, Forgejo's spelling
+      - browser:
+        - cgit_commit_url_renders_the_commit
+    - `<repo>.git/commit/?id=<rev>` — cgit's spelling, the revision in the query
+      - browser:
+        - cgit_commit_url_renders_the_commit
+    - `<repo>.git/commit/<file>?id=<rev>` — cgit's file-scoped diff, a view this
+      viewer doesn't have: refused, not widened to the whole commit
+      - browser:
+        - cgit_file_scoped_commit_url_is_not_found
+    - `<repo>.git/commit` and `<repo>.git/commit/` — HEAD's commit
+    - the diff options ride along, cgit's `dt=1` included
+      - browser:
+        - cgit_commit_url_renders_the_commit
+    - a trailer that names no route — the not-found page, at the address that
+      was asked for, linking back to the repository; nothing is fetched
+      - browser:
+        - cgit_file_scoped_commit_url_is_not_found
+    - the app shell's own `index.html` — the repository, not a missing route
+    - an address carrying a fragment — the fragment names the route, whatever
+      is in the path
   - `?url=` override — any repository URL, for local development
     - honoured on `127.0.0.1` and `localhost`
     - ignored on every other host

@@ -4,16 +4,19 @@
 //! The pieces a route is made of live alongside: [`encode`] for the
 //! percent-encoding every interpolated value goes through, [`anchor`] for the
 //! `#n5` line selection, [`diff_view`] for the commit view's query parameters,
-//! and [`load`] for turning a parsed route into rendered props.
+//! [`legacy`] for cgit's and Forgejo's path URLs, and [`load`] for turning a
+//! parsed route into rendered props.
 
 mod anchor;
 mod diff_view;
 mod encode;
+mod legacy;
 mod load;
 
 pub(crate) use anchor::{LineRange, split_line_anchor};
 pub(crate) use diff_view::{CONTEXT_CHOICES, DiffMode, DiffView, Whitespace};
 pub(crate) use encode::{encode_component, encode_path};
+pub(crate) use legacy::{PathRoute, path_route, split_repo_url};
 pub(crate) use load::{LoadedView, RefKind, build_route, resolve_display_head};
 
 use crate::render::log::PAGE_SIZE;

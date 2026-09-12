@@ -1,7 +1,7 @@
 //! End-to-end tests: headless Firefox against the real `trunk build` output.
 //!
 //! Run them with scripts/browser-tests.sh, which builds `dist/` and supplies
-//! Firefox, geckodriver and miniserve inside a container. Directly:
+//! Firefox, geckodriver and httpd inside a container. Directly:
 //!
 //! ```sh
 //! cargo test -p browser-tests --features browser -- --test-threads=1
@@ -79,6 +79,11 @@ route_test!(
 );
 route_test!(commit_renders_real_content, check_commit);
 route_test!(root_commit_diffs_against_the_empty_tree, check_root_commit);
+route_test!(cgit_commit_url_renders_the_commit, check_cgit_commit_url);
+route_test!(
+    cgit_file_scoped_commit_url_is_not_found,
+    check_cgit_file_scoped_commit
+);
 route_test!(diff_controls_change_the_diff, check_diff_controls);
 route_test!(refs_render_real_content, check_refs);
 route_test!(about_renders_real_content, check_about);
@@ -620,6 +625,67 @@ async fn check_commit(h: &Harness, repo: &RepoFixture) -> Result<()> {
     assert!(
         text.contains(fixtures::HEAD_NOTE),
         "[{}] commit page did not show the commit's note",
+        repo.name
+    );
+    Ok(())
+}
+
+/// cgit and Forgejo put a commit in the path, not the fragment. Both spellings
+/// render the commit, at the fragment URL they are rewritten to.
+async fn check_cgit_commit_url(h: &Harness, repo: &RepoFixture) -> Result<()> {
+    let head = repo.head();
+    let path = repo.url_path();
+
+    for (address, settled) in [
+        // Forgejo's: the revision in the path.
+        (
+            format!("{path}commit/{}", head.sha),
+            format!("#!/commit/{}", head.sha),
+        ),
+        // cgit's: the revision in `?id=`, with a diff option that rides along.
+        (
+            format!("{path}commit/?id={}&dt=2", head.sha),
+            format!("#!/commit/{}?dt=2", head.sha),
+        ),
+    ] {
+        h.open_address(&address, &path, &settled).await?;
+        h.wait_for(".tag-table").await?;
+        h.assert_no_error().await?;
+
+        let text = h.content_text().await?;
+        assert!(
+            text.contains(&head.subject),
+            "[{}] {address} did not render the commit",
+            repo.name
+        );
+    }
+    Ok(())
+}
+
+/// cgit can scope a commit's diff to one file. There is no such view here, so
+/// that URL gets the not-found page — at the address asked for, not the commit.
+async fn check_cgit_file_scoped_commit(h: &Harness, repo: &RepoFixture) -> Result<()> {
+    let path = repo.url_path();
+    let scoped = format!("{path}commit/src/main.rs");
+    h.open_address(&format!("{scoped}?id={}", repo.head().sha), &scoped, "")
+        .await?;
+
+    let text = h.text_of("#content .msg.error").await?;
+    assert!(
+        text.contains(&scoped),
+        "[{}] the not-found page did not name the address: {text}",
+        repo.name
+    );
+
+    let href = h
+        .wait_for("#content .msg.error a")
+        .await?
+        .attr("href")
+        .await?
+        .unwrap_or_default();
+    assert_eq!(
+        href, path,
+        "[{}] the not-found page did not link back to the repository",
         repo.name
     );
     Ok(())

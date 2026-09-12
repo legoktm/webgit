@@ -31,8 +31,9 @@ use render::summary::SummaryView;
 use render::tag::TagView;
 use render::tree::TreeView;
 use route::{
-    IndexRoute, LineRange, LoadedView, RefKind, Route, active_tab, build_route, encode_component,
-    index_url, log_url, parse_hash, parse_index_hash, resolve_display_head,
+    IndexRoute, LineRange, LoadedView, PathRoute, RefKind, Route, active_tab, build_route,
+    encode_component, index_url, log_url, parse_hash, parse_index_hash, path_route,
+    resolve_display_head, split_repo_url,
 };
 use stats::format_stats;
 use std::cell::{Cell, RefCell};
@@ -90,6 +91,7 @@ enum Content {
     Repo(RepoBundle),
     Index(ListingProps),
     Error(String),
+    NotFound { repo: String, path: String },
 }
 
 /// Open the repository and assemble a [`RepoBundle`]. Touches no DOM and renders
@@ -176,9 +178,17 @@ fn app() -> Html {
     // What the content area shows: loading, a loaded repo (→ `RouteView`), the
     // repository index, or a load error.
     let content = use_state(|| Content::Loading);
+    // Legacy path-based route
+    let path_route = web_sys::window().and_then(|w| resolve_path_route(&w));
     // Current location hash; updated by the hashchange listener below. This is
     // the "router": the route effect re-parses it via `route::parse_hash`.
-    let hash = use_state(current_hash);
+    let hash = {
+        let translated = match &path_route {
+            Some(PathRoute::Known { hash, .. }) => Some(hash.clone()),
+            _ => None,
+        };
+        use_state(move || translated.unwrap_or_else(current_hash))
+    };
     // Repo mode vs the repository index (no repo in the URL). Gates the
     // repo-scoped chrome (nav tabs, fetch stats).
     let is_repo = resolve_repo_url(&web_sys::window().expect("no window")).is_some();
@@ -193,25 +203,37 @@ fn app() -> Html {
         use_effect_with((), move |_| {
             let window = web_sys::window().expect("no window");
 
+            // Canonicalise a legacy address into the hash it was read as.
+            if let Some(PathRoute::Known { repo, hash }) = &path_route
+                && let Ok(history) = window.history()
+            {
+                let url = format!("{repo}{hash}");
+                let _ = history.replace_state_with_url(&JsValue::NULL, "", Some(&url));
+            }
+
             let hash_setter = hash.clone();
             let on_hash = Closure::<dyn Fn()>::new(move || hash_setter.set(current_hash()));
             window
                 .add_event_listener_with_callback("hashchange", on_hash.as_ref().unchecked_ref())
                 .expect("failed to add hashchange listener");
 
-            wasm_bindgen_futures::spawn_local(async move {
-                let window = web_sys::window().expect("no window");
-                content.set(match resolve_repo_url(&window) {
-                    Some(url) => match load_repo_bundle(url).await {
-                        Ok(b) => Content::Repo(b),
-                        Err(e) => Content::Error(format!("{e:#}")),
-                    },
-                    None => match load_listing().await {
-                        Ok(props) => Content::Index(props),
-                        Err(e) => Content::Error(format!("{e:#}")),
-                    },
+            if let Some(PathRoute::Unknown { repo, path }) = path_route {
+                content.set(Content::NotFound { repo, path });
+            } else {
+                wasm_bindgen_futures::spawn_local(async move {
+                    let window = web_sys::window().expect("no window");
+                    content.set(match resolve_repo_url(&window) {
+                        Some(url) => match load_repo_bundle(url).await {
+                            Ok(b) => Content::Repo(b),
+                            Err(e) => Content::Error(format!("{e:#}")),
+                        },
+                        None => match load_listing().await {
+                            Ok(props) => Content::Index(props),
+                            Err(e) => Content::Error(format!("{e:#}")),
+                        },
+                    });
                 });
-            });
+            }
 
             move || drop(on_hash)
         });
@@ -251,6 +273,7 @@ fn app() -> Html {
     let doc_name: Option<String> = match &*content {
         Content::Repo(b) => Some(repo_path(&b.clone_url)),
         Content::Index(_) => Some("repositories".to_string()),
+        Content::NotFound { repo, .. } => Some(repo_path(repo)),
         Content::Loading | Content::Error(_) => None,
     };
     // `#!/index/<section>` names a section heading of the listing, which only
@@ -339,6 +362,15 @@ fn app() -> Html {
                             <IndexView listing={props.clone()} hash={(*hash).clone()} />
                         },
                         Content::Error(e) => html! { <p class="msg error">{ e.clone() }</p> },
+                        Content::NotFound { repo, path } => html! {
+                            <p class="msg error">
+                                { "No page at " }
+                                <code>{ format!("{repo}{path}") }</code>
+                                { " \u{2014} this viewer has no such URL. " }
+                                <a href={repo.clone()}>{ "Go to the repository" }</a>
+                                { "." }
+                            </p>
+                        },
                     }
                 }
             </div>
@@ -782,13 +814,22 @@ fn repo_path(url: &str) -> String {
     path.trim_matches('/').to_string()
 }
 
+fn resolve_path_route(window: &web_sys::Window) -> Option<PathRoute> {
+    let location = window.location();
+    if !location.hash().ok()?.is_empty() {
+        return None;
+    }
+    let path = location.pathname().ok()?;
+    path_route(&path, &location.search().unwrap_or_default())
+}
+
 fn resolve_repo_url(window: &web_sys::Window) -> Option<String> {
     let location = window.location();
 
     if let Ok(href) = location.href() {
         let bare = href.split(['?', '#']).next().unwrap_or(&href);
-        if bare.ends_with(".git") || bare.ends_with(".git/") {
-            return Some(bare.trim_end_matches('/').to_string());
+        if let Some((repo, _)) = split_repo_url(bare) {
+            return Some(repo.to_string());
         }
     }
 

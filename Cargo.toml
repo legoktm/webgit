@@ -80,6 +80,7 @@ wasm-bindgen-futures = "0.4"
 web-sys = { version = "0.3", features = [
     "Window",
     "Location",
+    "History",
     "Document",
     "Element",
     "Blob",

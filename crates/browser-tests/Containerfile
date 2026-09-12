@@ -1,11 +1,10 @@
 # Image for the browser test suite: a real Firefox, geckodriver to drive it,
-# miniserve to serve the build, and the Rust toolchain to produce that build.
+# httpd to serve the build, and the Rust toolchain to produce that build.
 #
 # Built and run by scripts/browser-tests.sh.
 FROM registry.fedoraproject.org/fedora:44
 
 ARG GECKODRIVER_VERSION=0.37.1
-ARG MINISERVE_VERSION=0.35.0
 ARG TRUNK_VERSION=0.21.14
 
 # Published sha256 for the geckodriver tarball. The other two are checked the
@@ -15,6 +14,7 @@ ARG GECKODRIVER_SHA256=e815130ea95983e162ae91843b48d3a3ce991735635fce83a647afde2
 # clang          — cc-rs builds gib-xdiff's vendored C for wasm32 with it
 # firefox        — the browser under test
 # git            — gib-testkit builds every fixture by shelling out to it
+# httpd          — the server under the suite, configured as the README says
 # python3        — scripts/postbuild.py, the trunk post-build hook
 # gcc/openssl    — native-tls links the system OpenSSL (see the fantoccini
 #                  comment in the root Cargo.toml)
@@ -29,6 +29,7 @@ RUN dnf install -y --setopt=install_weak_deps=False \
         gcc \
         git \
         gzip \
+        httpd \
         openssl-devel \
         pkgconf-pkg-config \
         python3 \
@@ -45,11 +46,6 @@ RUN curl -fsSL -o /tmp/geckodriver.tar.gz \
     && tar -xzf /tmp/geckodriver.tar.gz -C /usr/local/bin geckodriver \
     && chmod +x /usr/local/bin/geckodriver \
     && rm /tmp/geckodriver.tar.gz
-
-# miniserve: a bare binary, not a tarball.
-RUN curl -fsSL -o /usr/local/bin/miniserve \
-        "https://github.com/svenstaro/miniserve/releases/download/v${MINISERVE_VERSION}/miniserve-${MINISERVE_VERSION}-x86_64-unknown-linux-musl" \
-    && chmod +x /usr/local/bin/miniserve
 
 # trunk ships a .sha256 next to each artifact, so verify against that rather
 # than pinning a second copy of the digest here.
@@ -88,9 +84,9 @@ WORKDIR /src
 ENV CARGO_TARGET_DIR=/cache/target \
     WEBGIT_DIST=/cache/dist
 
-# geckodriver and miniserve are found on PATH; the harness honours these if a
+# geckodriver and httpd are found on PATH; the harness honours these if a
 # caller wants to point at something else.
 ENV GECKODRIVER=/usr/local/bin/geckodriver \
-    MINISERVE=/usr/local/bin/miniserve
+    HTTPD=/usr/sbin/httpd
 
 CMD ["/src/scripts/browser-tests-entrypoint.sh"]
