@@ -27,15 +27,28 @@ Do not add new kinds of tests, just focus on snapshot + browser.
     - `<repo>.git/commit/<file>?id=<rev>` — cgit's file-scoped diff, a view this
       viewer doesn't have: refused, not widened to the whole commit
       - browser:
-        - cgit_file_scoped_commit_url_is_not_found
+        - unsupported_path_urls_are_not_found
     - `<repo>.git/commit` and `<repo>.git/commit/` — HEAD's commit
     - the diff options ride along, cgit's `dt=1` included
       - browser:
         - cgit_commit_url_renders_the_commit
+    - `<repo>.git/log/<path>` — cgit's log: `h=` the ref, `id=` where the walk
+      starts and the winner of the two, `ofs=` the offset, `showmsg=1`
+      - browser:
+        - cgit_and_forgejo_log_urls_render_the_log
+    - `<repo>.git/commits/<branch|tag|commit>/<ref>[/<path>]` — Forgejo's log,
+      paged by `page=`; a slashed ref is read as its first segment only
+      - browser:
+        - cgit_and_forgejo_log_urls_render_the_log
+    - `<repo>.git/log/?qt=<type>&q=<pattern>`, `?follow=1` with a path,
+      `commits/…/search`, `commits/…?limit=<n>` other than fifty, and Forgejo's
+      deprecated untyped `commits/<ref>` — views this app doesn't have: refused
+      - browser:
+        - unsupported_path_urls_are_not_found
     - a trailer that names no route — the not-found page, at the address that
       was asked for, linking back to the repository; nothing is fetched
       - browser:
-        - cgit_file_scoped_commit_url_is_not_found
+        - unsupported_path_urls_are_not_found
     - the app shell's own `index.html` — the repository, not a missing route
     - an address carrying a fragment — the fragment names the route, whatever
       is in the path

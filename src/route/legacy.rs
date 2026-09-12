@@ -1,7 +1,9 @@
 //! cgit's and Forgejo's URLs, which name the route in the path rather than the
 //! fragment. They are translated into a hash before the router reads them.
 
-use super::{DiffView, commit_url, decode_component, strip_route_prefix};
+use super::{
+    DiffView, PAGE_SIZE, commit_url, decode_component, decode_path, log_url, strip_route_prefix,
+};
 
 pub(crate) fn split_repo_url(bare: &str) -> Option<(&str, &str)> {
     match bare.find(".git/") {
@@ -37,8 +39,20 @@ fn path_route_hash(rest: &str) -> Option<String> {
         Some(i) => (&rest[..i], &rest[i + 1..]),
         None => (rest, ""),
     };
-    let rest = strip_route_prefix(path.trim_matches('/'), "commit", &['/'])?;
-    let rest = rest.trim_start_matches('/');
+    let path = path.trim_matches('/');
+    for (name, route) in [
+        ("commit", commit_route as fn(&str, &str) -> Option<String>),
+        ("commits", commits_route),
+        ("log", log_route),
+    ] {
+        if let Some(rest) = strip_route_prefix(path, name, &['/']) {
+            return route(rest.trim_start_matches('/'), query);
+        }
+    }
+    None
+}
+
+fn commit_route(rest: &str, query: &str) -> Option<String> {
     let id = query
         .split('&')
         .find_map(|part| part.strip_prefix("id="))
@@ -51,6 +65,91 @@ fn path_route_hash(rest: &str) -> Option<String> {
         None => rest,
     };
     Some(commit_url(&decode_component(rev), DiffView::parse(query)))
+}
+
+/// cgit's log: `log/<path>`, with the rest in the query — `h=` the ref the page
+/// is on, `id=` where the walk starts, `ofs=` the offset, `showmsg=1`.
+fn log_route(path: &str, query: &str) -> Option<String> {
+    let (mut head, mut id) = (None, None);
+    let mut offset: usize = 0;
+    let mut showmsg = false;
+    for part in query.split('&') {
+        if let Some(v) = part.strip_prefix("h=")
+            && !v.is_empty()
+        {
+            head = Some(v);
+        } else if let Some(v) = part.strip_prefix("id=")
+            && !v.is_empty()
+        {
+            id = Some(v);
+        } else if let Some(v) = part.strip_prefix("ofs=") {
+            offset = v.parse().unwrap_or(0);
+        } else if part == "showmsg=1" {
+            showmsg = true;
+        } else if let Some(v) = part.strip_prefix("q=")
+            && !v.is_empty()
+        {
+            // cgit's log search (`qt=` picks grep, author, committer or range),
+            // a view this app doesn't have.
+            return None;
+        } else if part == "follow=1" && !path.is_empty() {
+            return None;
+        }
+    }
+    // `id=` is where cgit starts the walk, and overrides the ref the page is on.
+    let head = id.or(head).map(decode_component);
+    Some(log_url(
+        &decode_path(path),
+        offset,
+        head.as_deref(),
+        showmsg,
+    ))
+}
+
+/// Forgejo's log: `commits/<branch|tag|commit>/<rev>[/<path>]`, paged by
+/// `?page=`. Only the forms whose ref reads without its ref list are taken.
+fn commits_route(rest: &str, query: &str) -> Option<String> {
+    let (kind, rest) = rest.split_once('/')?;
+    let (rev, path) = match kind {
+        // Forgejo takes the first segment as the object id and whatever follows
+        // as the path, so there is nothing here to be unsure about.
+        "commit" => {
+            let (rev, path) = rest.split_once('/').unwrap_or((rest, ""));
+            // The lengths an id may have, as Forgejo bounds them: four to a
+            // full sha256. Whether it names an object is resolved later.
+            if !(4..=64).contains(&rev.len()) {
+                return None;
+            }
+            (rev, path)
+        }
+        // A name may contain '/', so past one segment the name and the path
+        // cannot be told apart without the ref list. One segment is the name.
+        "branch" | "tag" if !rest.is_empty() && !rest.contains('/') => (rest, ""),
+        _ => return None,
+    };
+    // Forgejo reads this one path as commit search rather than a file, and
+    // there is no such view here.
+    if path == "search" {
+        return None;
+    }
+    let mut page: usize = 1;
+    for part in query.split('&') {
+        if let Some(v) = part.strip_prefix("page=") {
+            page = v.parse().unwrap_or(1).max(1);
+        } else if let Some(v) = part.strip_prefix("limit=")
+            && matches!(v.parse::<usize>(), Ok(n) if n > 0 && n != PAGE_SIZE)
+        {
+            // A page size this app has no way to render: its log pages by fifty.
+            return None;
+        }
+    }
+    let offset = (page - 1).saturating_mul(PAGE_SIZE);
+    Some(log_url(
+        &decode_path(path),
+        offset,
+        Some(&decode_component(rev)),
+        false,
+    ))
 }
 
 #[cfg(test)]
@@ -106,10 +205,10 @@ mod tests {
             })
         );
         assert_eq!(
-            path_route("/repos/basic.git/log/", "?h=main"),
+            path_route("/repos/basic.git/log/", "?qt=grep&q=fix"),
             Some(PathRoute::Unknown {
                 repo,
-                path: "log/?h=main".to_string(),
+                path: "log/?qt=grep&q=fix".to_string(),
             })
         );
         // The repository itself, and the app shell's own URL under it.
@@ -196,6 +295,115 @@ mod tests {
         assert!(path_route_hash("commit/src/lib.rs?id=").is_some());
     }
 
+    /// cgit's log: the path in the path, the ref and the paging in the query.
+    #[test]
+    fn test_path_route_hash_log() {
+        assert_eq!(path_route_hash("log").as_deref(), Some("#!/log"));
+        assert_eq!(path_route_hash("log/").as_deref(), Some("#!/log"));
+        assert_eq!(
+            path_route_hash("log/src/lib.rs").as_deref(),
+            Some("#!/log/src/lib.rs")
+        );
+        // `h=` is the ref the page is on; cgit leaves it out on the default
+        // branch, exactly as this app does.
+        assert_eq!(
+            path_route_hash("log/?h=next").as_deref(),
+            Some("#!/log?h=next")
+        );
+        // `ofs=` is an offset in commits, which is what this app pages by too.
+        assert_eq!(
+            path_route_hash("log/src?h=next&ofs=50&showmsg=1").as_deref(),
+            Some("#!/log/src?h=next&offset=50&showmsg=1")
+        );
+        // `id=` is where the walk starts, and beats the ref the page is on.
+        assert_eq!(
+            path_route_hash("log/?h=next&id=abc123").as_deref(),
+            Some("#!/log?h=abc123")
+        );
+        // An offset that is not a number is no offset, not an error page.
+        assert_eq!(path_route_hash("log/?ofs=x").as_deref(), Some("#!/log"));
+    }
+
+    /// cgit's log searches, and `--follow`: views this app doesn't have.
+    #[test]
+    fn test_path_route_hash_refuses_a_log_search() {
+        assert_eq!(path_route_hash("log/?qt=grep&q=fix"), None);
+        assert_eq!(path_route_hash("log/?qt=range&q=v1.0..v2.0"), None);
+        assert_eq!(path_route_hash("log/src/lib.rs?follow=1"), None);
+        // cgit ignores `follow=1` without a path, so it asks for nothing extra.
+        assert_eq!(path_route_hash("log/?follow=1").as_deref(), Some("#!/log"));
+        // An empty pattern is no search, which is cgit's reading of it too.
+        assert_eq!(
+            path_route_hash("log/?qt=grep&q=").as_deref(),
+            Some("#!/log")
+        );
+    }
+
+    /// Forgejo's log: the ref in the path, under the segment naming its kind.
+    #[test]
+    fn test_path_route_hash_commits() {
+        assert_eq!(
+            path_route_hash("commits/branch/main").as_deref(),
+            Some("#!/log?h=main")
+        );
+        assert_eq!(
+            path_route_hash("commits/tag/v1.0").as_deref(),
+            Some("#!/log?h=v1.0")
+        );
+        assert_eq!(
+            path_route_hash("commits/commit/abc123").as_deref(),
+            Some("#!/log?h=abc123")
+        );
+        // Under `commit/`, whatever trails the id is the file whose history is
+        // shown: an id is one segment, so the two cannot be confused.
+        assert_eq!(
+            path_route_hash("commits/commit/abc123/src/lib.rs").as_deref(),
+            Some("#!/log/src/lib.rs?h=abc123")
+        );
+        // `page=` is 1-based, and a page is fifty commits in both.
+        assert_eq!(
+            path_route_hash("commits/branch/main?page=3").as_deref(),
+            Some("#!/log?h=main&offset=100")
+        );
+        // Forgejo reads a page below one, or no number at all, as the first.
+        assert_eq!(
+            path_route_hash("commits/branch/main?page=0").as_deref(),
+            Some("#!/log?h=main")
+        );
+        // A page size it would render the same way is no obstacle.
+        assert_eq!(
+            path_route_hash("commits/branch/main?limit=50").as_deref(),
+            Some("#!/log?h=main")
+        );
+    }
+
+    /// A ref this app cannot read the way Forgejo does. Guessing would render
+    /// the wrong revision's log, or the right one scoped to the wrong file.
+    #[test]
+    fn test_path_route_hash_refuses_an_ambiguous_ref() {
+        // `feature/x` is either a branch of that name or branch `feature` with
+        // a file called `x`, and only the ref list says which.
+        assert_eq!(path_route_hash("commits/branch/feature/x"), None);
+        assert_eq!(path_route_hash("commits/tag/v1.0/src/lib.rs"), None);
+        // The deprecated untyped form, which needs that list to read at all.
+        assert_eq!(path_route_hash("commits/main"), None);
+        assert_eq!(path_route_hash("commits"), None);
+        assert_eq!(path_route_hash("commits/branch/"), None);
+        assert_eq!(path_route_hash("commits/branch"), None);
+        // An id outside the lengths Forgejo reads as one.
+        assert_eq!(path_route_hash("commits/commit/ab"), None);
+        assert_eq!(path_route_hash("commits/commit/"), None);
+    }
+
+    /// The parts of Forgejo's log grammar that name something else entirely.
+    #[test]
+    fn test_path_route_hash_refuses_other_commits_urls() {
+        // Commit search, which this app has no equivalent of.
+        assert_eq!(path_route_hash("commits/commit/abc123/search?q=fix"), None);
+        // A page size its log cannot render.
+        assert_eq!(path_route_hash("commits/branch/main?limit=10"), None);
+    }
+
     /// Anything else is left to be read as the repository root.
     #[test]
     fn test_path_route_hash_ignores_everything_else() {
@@ -204,9 +412,9 @@ mod tests {
         // The route name has to end where a route name may end.
         assert_eq!(path_route_hash("commitment/abc"), None);
         // Routes that only exist in the fragment grammar are not path routes.
-        assert_eq!(path_route_hash("log"), None);
         assert_eq!(path_route_hash("tree/src/lib.rs"), None);
         assert_eq!(path_route_hash("about"), None);
+        assert_eq!(path_route_hash("logout"), None);
     }
 
     /// Whatever a path URL becomes has to parse back out as the commit it

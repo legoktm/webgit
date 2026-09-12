@@ -81,8 +81,12 @@ route_test!(commit_renders_real_content, check_commit);
 route_test!(root_commit_diffs_against_the_empty_tree, check_root_commit);
 route_test!(cgit_commit_url_renders_the_commit, check_cgit_commit_url);
 route_test!(
-    cgit_file_scoped_commit_url_is_not_found,
-    check_cgit_file_scoped_commit
+    cgit_and_forgejo_log_urls_render_the_log,
+    check_log_path_urls
+);
+route_test!(
+    unsupported_path_urls_are_not_found,
+    check_unsupported_path_urls
 );
 route_test!(diff_controls_change_the_diff, check_diff_controls);
 route_test!(refs_render_real_content, check_refs);
@@ -662,32 +666,85 @@ async fn check_cgit_commit_url(h: &Harness, repo: &RepoFixture) -> Result<()> {
     Ok(())
 }
 
-/// cgit can scope a commit's diff to one file. There is no such view here, so
-/// that URL gets the not-found page — at the address asked for, not the commit.
-async fn check_cgit_file_scoped_commit(h: &Harness, repo: &RepoFixture) -> Result<()> {
+/// cgit puts the log's path in the path and everything else in the query;
+/// Forgejo puts the ref in the path. Both render the log they name.
+async fn check_log_path_urls(h: &Harness, repo: &RepoFixture) -> Result<()> {
     let path = repo.url_path();
-    let scoped = format!("{path}commit/src/main.rs");
-    h.open_address(&format!("{scoped}?id={}", repo.head().sha), &scoped, "")
-        .await?;
+    for (address, settled) in [
+        // cgit's, with its message toggle.
+        (
+            format!("{path}log/?showmsg=1"),
+            "#!/log?showmsg=1".to_string(),
+        ),
+        // Forgejo's, with the branch under the segment naming its kind.
+        (
+            format!("{path}commits/branch/main"),
+            "#!/log?h=main".to_string(),
+        ),
+        // Forgejo's id form, the only one that may carry a path — here without
+        // one, so it names the same whole log as the other two.
+        (
+            format!("{path}commits/commit/{}", repo.head().sha),
+            format!("#!/log?h={}", repo.head().sha),
+        ),
+    ] {
+        h.open_address(&address, &path, &settled).await?;
+        h.wait_for(".summary-table").await?;
+        wait_for_settled_log(h, repo).await?;
+        h.assert_no_error().await?;
 
-    let text = h.text_of("#content .msg.error").await?;
-    assert!(
-        text.contains(&scoped),
-        "[{}] the not-found page did not name the address: {text}",
-        repo.name
-    );
+        let shown = h.texts_of(".summary-table td.name").await?;
+        let expected: Vec<&str> = repo.commits.iter().map(|c| c.short_sha()).collect();
+        assert_eq!(
+            shown.iter().map(String::as_str).collect::<Vec<_>>(),
+            expected,
+            "[{}] {address} did not render the log",
+            repo.name
+        );
+    }
+    Ok(())
+}
 
-    let href = h
-        .wait_for("#content .msg.error a")
-        .await?
-        .attr("href")
-        .await?
-        .unwrap_or_default();
-    assert_eq!(
-        href, path,
-        "[{}] the not-found page did not link back to the repository",
-        repo.name
-    );
+/// URLs in those families naming a view this app doesn't have — a commit scoped
+/// to one file, a log search — get the not-found page at the address asked for.
+async fn check_unsupported_path_urls(h: &Harness, repo: &RepoFixture) -> Result<()> {
+    let path = repo.url_path();
+    for (address, query) in [
+        (
+            format!("{path}commit/src/main.rs"),
+            format!("?id={}", repo.head().sha),
+        ),
+        (format!("{path}log/"), "?qt=grep&q=fix".to_string()),
+        (
+            format!("{path}commits/commit/{}/search", repo.head().sha),
+            "?q=fix".to_string(),
+        ),
+        // A ref that cannot be told from a ref plus a path without the ref list
+        // Forgejo resolves it against.
+        (format!("{path}commits/branch/feature/x"), String::new()),
+    ] {
+        h.open_address(&format!("{address}{query}"), &address, "")
+            .await?;
+
+        let text = h.text_of("#content .msg.error").await?;
+        assert!(
+            text.contains(&address),
+            "[{}] the not-found page did not name the address: {text}",
+            repo.name
+        );
+
+        let href = h
+            .wait_for("#content .msg.error a")
+            .await?
+            .attr("href")
+            .await?
+            .unwrap_or_default();
+        assert_eq!(
+            href, path,
+            "[{}] the not-found page did not link back to the repository",
+            repo.name
+        );
+    }
     Ok(())
 }
 
