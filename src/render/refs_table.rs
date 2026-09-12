@@ -139,7 +139,13 @@ fn refs_table_row(href: String, r: &RefRow, extra: Option<Html>) -> Html {
 fn snapshot_cell(repo_name: &str, tag: &str) -> Html {
     html! {
         <a class="snapshot-link" href={crate::route::snapshot_url(tag)}>
-            { crate::render::snapshot::snapshot_file_name(repo_name, tag) }
+            {
+                crate::render::snapshot::snapshot_file_name(
+                    repo_name,
+                    tag,
+                    crate::route::SnapshotFormat::TarGz,
+                )
+            }
         </a>
     }
 }

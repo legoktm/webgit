@@ -2,6 +2,7 @@
 
 mod archive;
 mod assets;
+mod bundle;
 mod cache;
 mod error;
 mod fetch;

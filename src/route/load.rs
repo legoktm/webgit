@@ -1,7 +1,7 @@
 //! Turning a parsed [`Route`] into the props for the view it names: the
 //! async half of routing, and the only part that touches the repository.
 
-use super::{RefsRoute, Route, parse_hash};
+use super::{RefsRoute, Route, SnapshotFormat, parse_hash};
 use crate::RepoBundle;
 use crate::cache::CachingRepo;
 use crate::error::GitContext;
@@ -14,13 +14,14 @@ use crate::render::readme::{ReadmeProps, build_readme};
 use crate::render::refs_all::{RefsAllProps, build_refs_all};
 use crate::render::refs_heads::{RefsHeadsProps, build_refs_heads};
 use crate::render::refs_tags::{RefsTagsProps, build_refs_tags};
-use crate::render::snapshot::{SnapshotProps, build_snapshot};
+use crate::render::snapshot::{SnapshotProps, build_bundle, build_snapshot};
 use crate::render::summary::{SummaryProps, build_summary};
 use crate::render::tag::{TagProps, build_tag};
 use crate::render::tree::{TreeProps, build_tree_props};
 use crate::render::{commit_for_entry, head_branch_name};
 use gib::object::{ObjectId, ObjectIdPrefix, Tree, TreeEntryType};
 use gib::reference::RefName;
+use gib_bundle::BundleRef;
 use gib_mailmap::Mailmap;
 
 // ---------------------------------------------------------------------------
@@ -354,11 +355,9 @@ pub(crate) async fn build_route(
             .map_err(|e| anyhow::anyhow!("blame {path}: {e}"))?;
             Ok(LoadedView::Blame(Box::new(props)))
         }
-        Route::Snapshot { head } => {
+        Route::Snapshot { head, format } => {
             let head = effective_head(repo, head.as_deref()).await;
 
-            // Both the commit and its tree, where the tree route needs only the
-            // tree: the commit's id and date go into the archive itself.
             let resolved_commit;
             let mut resolved_kind = None;
             let commit: &gib::object::Commit = match head {
@@ -370,21 +369,8 @@ pub(crate) async fn build_route(
                 }
                 None => head_commit,
             };
-            let resolved_tree;
-            let tree: &Tree = if head.is_some() {
-                resolved_tree = repo
-                    .lookup_object(commit.tree())
-                    .await
-                    .context("lookup tree to archive")?
-                    .tree()
-                    .map_err(gib::error::Error::from)
-                    .context("expected a tree to archive")?;
-                &resolved_tree
-            } else {
-                root_tree
-            };
 
-            // What the archive is named after: the ref asked for, the branch
+            // What the download is named after: the ref asked for, the branch
             // HEAD is on, or — for a `?h=` that named a commit outright, and for
             // a detached HEAD — the commit itself, abbreviated. All 40 digits in
             // a filename tell the reader nothing the first eight don't.
@@ -396,14 +382,75 @@ pub(crate) async fn build_route(
                     None => short_hash(&format!("{}", commit.id())),
                 },
             };
-            Ok(LoadedView::Snapshot(
-                build_snapshot(repo, tree, commit, &ref_label, repo_name, &|p| {
-                    on_partial(LoadedView::Snapshot(p))
-                })
-                .await?,
-            ))
+
+            let props = match format {
+                SnapshotFormat::TarGz => {
+                    let resolved_tree;
+                    let tree: &Tree = if head.is_some() {
+                        resolved_tree = repo
+                            .lookup_object(commit.tree())
+                            .await
+                            .context("lookup tree to archive")?
+                            .tree()
+                            .map_err(gib::error::Error::from)
+                            .context("expected a tree to archive")?;
+                        &resolved_tree
+                    } else {
+                        root_tree
+                    };
+                    build_snapshot(repo, tree, commit, &ref_label, repo_name, &|p| {
+                        on_partial(LoadedView::Snapshot(p))
+                    })
+                    .await?
+                }
+                // A bundle needs no tree of its own: it carries the whole
+                // history, and the walk starts from the refs its header names.
+                SnapshotFormat::Bundle => {
+                    let refs = bundle_refs(repo, head, resolved_kind, commit).await;
+                    build_bundle(repo, refs, &ref_label, repo_name, &|p| {
+                        on_partial(LoadedView::Snapshot(p))
+                    })
+                    .await?
+                }
+            };
+            Ok(LoadedView::Snapshot(props))
         }
     }
+}
+
+/// The refs a bundle of `commit` should carry, and so the tips its walk starts
+/// from.
+async fn bundle_refs(
+    repo: &CachingRepo,
+    head: Option<&str>,
+    kind: Option<RefKind>,
+    commit: &gib::object::Commit,
+) -> Vec<BundleRef> {
+    let mut refs = Vec::new();
+    match (head, kind) {
+        (Some(name), Some(RefKind::Tag)) => {
+            let target = tag_target(repo, name).await.unwrap_or_else(|| commit.id());
+            refs.push(BundleRef::new(format!("refs/tags/{name}"), target));
+        }
+        (Some(name), Some(RefKind::Branch)) => {
+            refs.push(BundleRef::new(format!("refs/heads/{name}"), commit.id()));
+        }
+        (Some(_), _) => {}
+        (None, _) => {
+            if let Some(branch) = head_branch_name(repo).await {
+                refs.push(BundleRef::new(format!("refs/heads/{branch}"), commit.id()));
+            }
+        }
+    }
+    refs.push(BundleRef::new("HEAD", commit.id()));
+    refs
+}
+
+/// What `refs/tags/<name>` points at, tag object and all.
+async fn tag_target(repo: &CachingRepo, name: &str) -> Option<ObjectId> {
+    let refs = repo.all_refs().await.ok()?;
+    let entry = refs.get(&RefName::Ref(format!("tags/{name}").into_bytes()))?;
+    Some(entry.target())
 }
 
 #[cfg(test)]

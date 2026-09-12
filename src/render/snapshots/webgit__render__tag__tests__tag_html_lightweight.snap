@@ -1,6 +1,6 @@
 ---
 source: src/render/tag.rs
-expression: "render(TagProps\n{\n    name: \"v0.9.0\".to_string(), snapshot_name:\n    \"webgit-v0.9.0.tar.gz\".to_string(), date:\n    \"2025-11-02 08:00:00 +00:00\".to_string(), tagger_name: None, commit:\n    \"89abcdef89abcdef89abcdef89abcdef89abcdef\".to_string(), contents: None,\n})"
+expression: "render(TagProps\n{\n    name: \"v0.9.0\".to_string(), snapshot_name:\n    \"webgit-v0.9.0.tar.gz\".to_string(), bundle_name:\n    \"webgit-v0.9.0.bundle\".to_string(), date:\n    \"2025-11-02 08:00:00 +00:00\".to_string(), tagger_name: None, commit:\n    \"89abcdef89abcdef89abcdef89abcdef89abcdef\".to_string(), contents: None,\n})"
 ---
 <table class="tag-table">
 <tbody>
@@ -27,7 +27,7 @@ expression: "render(TagProps\n{\n    name: \"v0.9.0\".to_string(), snapshot_name
 <tr>
 <td class="label">download</td>
 <td>
-<a href="#!/snapshot?h=v0.9.0" class="snapshot-link">webgit-v0.9.0.tar.gz</a>
+<a href="#!/snapshot?h=v0.9.0" class="snapshot-link">webgit-v0.9.0.tar.gz</a> | <a href="#!/snapshot?h=v0.9.0&amp;format=bundle" class="snapshot-link">webgit-v0.9.0.bundle</a>
 </td>
 </tr>
 </tbody>

@@ -399,7 +399,7 @@ fn test_blame_lives_under_the_tree_tab() {
 fn test_parse_hash_snapshot_ignores_render() {
     assert!(matches!(
         parse_hash("#!/snapshot?h=v1&render=1"),
-        Route::Snapshot { head: Some(head) } if head == "v1"
+        Route::Snapshot { head: Some(head), format: SnapshotFormat::TarGz } if head == "v1"
     ));
 }
 
@@ -440,16 +440,72 @@ fn test_tree_url_round_trips_through_the_router() {
 fn test_parse_hash_snapshot() {
     assert!(matches!(
         parse_hash("#!/snapshot"),
-        Route::Snapshot { head: None }
+        Route::Snapshot {
+            head: None,
+            format: SnapshotFormat::TarGz
+        }
     ));
     assert!(matches!(
         parse_hash("#!/snapshot?h=v1.0.0"),
-        Route::Snapshot { head: Some(head) } if head == "v1.0.0"
+        Route::Snapshot { head: Some(head), format: SnapshotFormat::TarGz } if head == "v1.0.0"
     ));
     // A ref with a '/' in it survives the round trip through the link.
     assert!(matches!(
         parse_hash(&snapshot_url("release/2.0")),
-        Route::Snapshot { head: Some(head) } if head == "release/2.0"
+        Route::Snapshot { head: Some(head), format: SnapshotFormat::TarGz } if head == "release/2.0"
+    ));
+}
+
+/// `format=bundle` is the only value that changes what is built; the ref is
+/// read the same way either way.
+#[test]
+fn test_parse_hash_snapshot_format() {
+    assert!(matches!(
+        parse_hash("#!/snapshot?h=v1.0.0&format=bundle"),
+        Route::Snapshot { head: Some(head), format: SnapshotFormat::Bundle } if head == "v1.0.0"
+    ));
+    // Order within the query doesn't matter, and neither does a `?h=` at all.
+    assert!(matches!(
+        parse_hash("#!/snapshot?format=bundle"),
+        Route::Snapshot {
+            head: None,
+            format: SnapshotFormat::Bundle
+        }
+    ));
+    // Anything else — a format nobody serves, or an empty one — downloads the
+    // usual archive rather than nothing.
+    for hash in [
+        "#!/snapshot?h=v1&format=zip",
+        "#!/snapshot?h=v1&format=",
+        "#!/snapshot?h=v1",
+    ] {
+        assert!(
+            matches!(
+                parse_hash(hash),
+                Route::Snapshot {
+                    format: SnapshotFormat::TarGz,
+                    ..
+                }
+            ),
+            "{hash}"
+        );
+    }
+}
+
+/// The bundle link, and the round trip back through the router.
+#[test]
+fn test_bundle_url() {
+    assert_eq!(bundle_url("v1.0.0"), "#!/snapshot?h=v1.0.0&format=bundle");
+    assert_eq!(
+        bundle_url("release/2.0"),
+        "#!/snapshot?h=release%2F2.0&format=bundle"
+    );
+    // A ref name carrying the query syntax itself is encoded, so it comes back
+    // as the ref rather than as another parameter.
+    let url = bundle_url("x&format=zip");
+    assert!(matches!(
+        parse_hash(&url),
+        Route::Snapshot { head: Some(head), format: SnapshotFormat::Bundle } if head == "x&format=zip"
     ));
 }
 
@@ -586,7 +642,7 @@ fn test_parse_hash_prefix_matches_at_a_separator() {
     assert!(matches!(parse_hash("#!/tree?h=main"), Route::Tree { .. }));
     assert!(matches!(
         parse_hash("#!/snapshot?h=v1"),
-        Route::Snapshot { head: Some(_) }
+        Route::Snapshot { head: Some(_), .. }
     ));
     assert!(matches!(parse_hash("#!/commit/abc"), Route::Commit(..)));
     assert!(matches!(parse_hash("#!/refs/tags"), Route::Refs(_)));

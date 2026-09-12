@@ -1,0 +1,8 @@
+---
+source: src/render/snapshot.rs
+expression: "render_state(\"webgit-v1.0.0.bundle\", SnapshotFormat::Bundle, ||\nSnapshotState::Building { fetched: 37, total: 120, })"
+---
+<div class="snapshot">
+<p class="snapshot-info">webgit-v1.0.0.bundle — enumerating objects… 37/120</p>
+<progress max="120" value="37" class="snapshot-progress">37/120</progress>
+</div>

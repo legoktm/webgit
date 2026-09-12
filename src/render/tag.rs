@@ -1,6 +1,8 @@
 use crate::cache::CachingRepo;
 use crate::error::GitContext;
+use crate::render::snapshot::snapshot_file_name;
 use crate::render::{format_datetime, mapped_ident};
+use crate::route::SnapshotFormat;
 use gib::reference::RefName;
 use gib_mailmap::Mailmap;
 use yew::prelude::*;
@@ -31,7 +33,8 @@ pub(crate) async fn build_tag(
     // have no metadata of their own, so fall back to the commit's details.
     match object.tag() {
         Ok(tag_obj) => Ok(TagProps {
-            snapshot_name: crate::render::snapshot::snapshot_file_name(repo_name, &tag),
+            snapshot_name: snapshot_file_name(repo_name, &tag, SnapshotFormat::TarGz),
+            bundle_name: snapshot_file_name(repo_name, &tag, SnapshotFormat::Bundle),
             name: tag.clone(),
             date: format_datetime(
                 tag_obj
@@ -52,7 +55,8 @@ pub(crate) async fn build_tag(
             contents: Some(String::from_utf8_lossy(tag_obj.message()).into_owned()),
         }),
         Err(_) => Ok(TagProps {
-            snapshot_name: crate::render::snapshot::snapshot_file_name(repo_name, &tag),
+            snapshot_name: snapshot_file_name(repo_name, &tag, SnapshotFormat::TarGz),
+            bundle_name: snapshot_file_name(repo_name, &tag, SnapshotFormat::Bundle),
             name: tag,
             date: format_datetime(commit.author_date()),
             tagger_name: None,
@@ -68,8 +72,10 @@ pub(crate) async fn build_tag(
 #[derive(Properties, PartialEq, Clone)]
 pub(crate) struct TagProps {
     pub name: String,
-    /// What the download link says, and what the browser will save.
+    /// What the archive link says, and what the browser will save.
     pub snapshot_name: String,
+    /// The same for the bundle link next to it.
+    pub bundle_name: String,
     pub date: String,
     pub tagger_name: Option<String>,
     pub commit: String,
@@ -88,6 +94,7 @@ pub(crate) fn tag_view(props: &TagProps) -> Html {
     let TagProps {
         name,
         snapshot_name,
+        bundle_name,
         date,
         tagger_name,
         commit,
@@ -99,6 +106,7 @@ pub(crate) fn tag_view(props: &TagProps) -> Html {
     let tree_href = format!("#!/tree?h={encoded}");
     let log_href = format!("#!/log?h={encoded}");
     let snapshot_href = crate::route::snapshot_url(name);
+    let bundle_href = crate::route::bundle_url(name);
 
     html! {
         <>
@@ -135,6 +143,10 @@ pub(crate) fn tag_view(props: &TagProps) -> Html {
                         <td>
                             <a class="snapshot-link" href={snapshot_href}>
                                 { snapshot_name.clone() }
+                            </a>
+                            { " | " }
+                            <a class="snapshot-link" href={bundle_href}>
+                                { bundle_name.clone() }
                             </a>
                         </td>
                     </tr>
@@ -176,6 +188,7 @@ mod tests {
         insta::assert_snapshot!(render(TagProps {
             name: "v1.0.0".to_string(),
             snapshot_name: "webgit-v1.0.0.tar.gz".to_string(),
+            bundle_name: "webgit-v1.0.0.bundle".to_string(),
             date: "2026-01-15 12:34:56 +00:00".to_string(),
             tagger_name: Some("Kunal Mehta".to_string()),
             commit: "0123abcd0123abcd0123abcd0123abcd0123abcd".to_string(),
@@ -189,6 +202,7 @@ mod tests {
         insta::assert_snapshot!(render(TagProps {
             name: "v0.9.0".to_string(),
             snapshot_name: "webgit-v0.9.0.tar.gz".to_string(),
+            bundle_name: "webgit-v0.9.0.bundle".to_string(),
             date: "2025-11-02 08:00:00 +00:00".to_string(),
             tagger_name: None,
             commit: "89abcdef89abcdef89abcdef89abcdef89abcdef".to_string(),

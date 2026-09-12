@@ -18,7 +18,7 @@ More details are in the [initial blog post](https://blog.legoktm.com/2026/06/14/
 ## License 
 
 In as much as there is copyrightable code in this repository (most of it is vibecoded), it's available under the GPL v2
-as a derivative work of Git and/or cgit. It vendors git's [xdiff](https://github.com/libgit2/xdiff) code, which is LGPL v2.1 or later. Some of the git handling code originated from <https://github.com/cyberia-ng/git-async>,
+as a derivative work of Git and/or cgit. It vendors git's [xdiff](https://github.com/libgit2/xdiff) code, which is LGPL v2.1 or later, as well as other individual files from Git. Some of the git handling code originated from <https://github.com/cyberia-ng/git-async>,
 which is also available under the MIT or Apache 2.0 licenses.
 
 ## Set up

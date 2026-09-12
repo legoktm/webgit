@@ -56,14 +56,44 @@ pub(crate) enum Route {
         path: String,
         head: Option<String>,
     },
-    /// A `.tar.gz` of a ref's tree (HEAD's, when there is no `?h=`), built on
-    /// arrival. A route rather than a button because building one is exactly
-    /// what every other route does — an async walk over the repo that resolves
-    /// into props — and this way it gets the loading, error and cancel-on-
-    /// navigate handling already wired up around [`build_route`].
+    /// A download of a ref (HEAD's, when there is no `?h=`), built on arrival:
+    /// a `.tar.gz` of its tree, or a `.bundle` of its history. A route rather
+    /// than a button because building one is exactly what every other route
+    /// does — an async walk over the repo that resolves into props — and this
+    /// way it gets the loading, error and cancel-on-navigate handling already
+    /// wired up around [`build_route`].
     Snapshot {
         head: Option<String>,
+        format: SnapshotFormat,
     },
+}
+
+/// Which file a snapshot route builds.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum SnapshotFormat {
+    TarGz,
+    Bundle,
+}
+
+impl SnapshotFormat {
+    fn parse(query_string: &str) -> Self {
+        for part in query_string.split('&') {
+            if let Some(value) = part.strip_prefix("format=") {
+                return match value {
+                    "bundle" => Self::Bundle,
+                    _ => Self::TarGz,
+                };
+            }
+        }
+        Self::TarGz
+    }
+
+    pub(crate) fn extension(self) -> &'static str {
+        match self {
+            Self::TarGz => "tar.gz",
+            Self::Bundle => "bundle",
+        }
+    }
 }
 
 /// Strip `prefix` off `hash`, but only when the prefix ends where a route name
@@ -142,7 +172,8 @@ pub(crate) fn parse_index_hash(hash: &str) -> IndexRoute {
 /// #!/tree[/<path>][?…]             the tree, or a blob; query: h=<rev>,
 ///                                  render=1, display=source|rendered
 /// #!/blame/<path>[?h=<rev>]        per-line blame for one file
-/// #!/snapshot[/…][?h=<ref>]        a .tar.gz of a revision's tree (path ignored)
+/// #!/snapshot[/…][?…]             a download of a revision (path ignored);
+///                                  query: h=<ref>, format=bundle
 /// ```
 ///
 /// Any of these may carry a trailing `#n<A>[-n<B>]` line anchor, which
@@ -215,11 +246,16 @@ pub(crate) fn parse_hash(hash: &str) -> Route {
     }
 
     if let Some(rest) = strip_route_prefix(hash, "#!/snapshot", &['/', '?']) {
-        // Only the ref matters here: a snapshot is always of a whole tree, so
-        // anything in the path position is ignored rather than 404'd, and so is
-        // a `render=1` that came along with it.
+        // Only the ref and the format matter here: a snapshot is always of a
+        // whole revision, so anything in the path position is ignored rather
+        // than 404'd, and so is a `render=1` that came along with it.
         let (_, head, _) = parse_tree_rest(rest);
-        return Route::Snapshot { head };
+        let format = rest
+            .split_once('?')
+            .map_or(SnapshotFormat::TarGz, |(_, query)| {
+                SnapshotFormat::parse(query)
+            });
+        return Route::Snapshot { head, format };
     }
 
     if let Some(rest) = strip_route_prefix(hash, "#!/refs", &['/']) {
@@ -323,6 +359,11 @@ pub(crate) fn active_tab(route: &Route) -> &'static str {
 /// encoding happens here.
 pub(crate) fn snapshot_url(head: &str) -> String {
     format!("#!/snapshot?h={}", encode_component(head))
+}
+
+/// The URL of a ref's `.bundle`: the same route, asked for the other format.
+pub(crate) fn bundle_url(head: &str) -> String {
+    format!("#!/snapshot?h={}&format=bundle", encode_component(head))
 }
 
 /// The URL for a tree view — a directory listing, or a blob. `path` and `head`

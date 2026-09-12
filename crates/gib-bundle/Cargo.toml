@@ -1,0 +1,21 @@
+[package]
+name = "gib-bundle"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+license.workspace = true
+[dependencies]
+anyhow.workspace = true
+futures = { workspace = true, features = ["alloc", "async-await"] }
+gib-diff-delta.workspace = true
+gib-object.workspace = true
+miniz_oxide.workspace = true
+sha1.workspace = true
+
+[dev-dependencies]
+futures = { workspace = true, features = ["async-await", "executor"] }
+gib-fs.workspace = true
+gib-odb.workspace = true
+gib-testkit.workspace = true
+tempfile.workspace = true

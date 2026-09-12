@@ -1355,6 +1355,87 @@ async fn snapshot_route_downloads_a_tarball() -> Result<()> {
     h.finish().await
 }
 
+#[tokio::test]
+async fn snapshot_route_downloads_a_git_bundle() -> Result<()> {
+    let h = Harness::start().await?;
+    let repo = &h.fixtures.basic;
+
+    h.open(repo, "#!/snapshot?h=v1.0.0&format=bundle").await?;
+
+    // As with the tarball: the link only exists in the finished state, so wait
+    // for it rather than racing the progress text.
+    h.wait_for(".snapshot-download").await?;
+    h.assert_no_error().await?;
+
+    let info = h.text_of(".snapshot-info").await?;
+    assert!(
+        info.contains("v1.0.0.bundle") && info.contains("objects"),
+        "the bundle page did not report what it built: {info}"
+    );
+
+    let file = wait_for_download(&h.downloads, Duration::from_secs(60))
+        .unwrap_or_else(|| panic!("no bundle landed in {}", h.downloads.display()));
+    let name = file.file_name().unwrap_or_default().to_string_lossy();
+    assert!(
+        name.ends_with(".bundle"),
+        "downloaded file was not a bundle: {name}"
+    );
+
+    let clone = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("bundle-clone");
+    if clone.exists() {
+        std::fs::remove_dir_all(&clone)?;
+    }
+    let cloned = std::process::Command::new("git")
+        .args(["clone", "-q"])
+        .arg(&file)
+        .arg(&clone)
+        .output()?;
+    assert!(
+        cloned.status.success(),
+        "git would not clone the bundle: {}",
+        String::from_utf8_lossy(&cloned.stderr)
+    );
+
+    // The tag the bundle was asked for, and every object under it: `git clone`
+    // has just re-hashed all of them, so this is the fixture's own history
+    // arriving intact by way of the browser.
+    let served = h.fixtures.webroot.join("repos").join(repo.name);
+    assert_eq!(
+        git_in(&clone, &["rev-parse", "v1.0.0^{commit}"])?,
+        git_in(&served, &["rev-parse", "v1.0.0^{commit}"])?,
+    );
+    // Sorted, because the two are asked from different starting refs and only
+    // the set of objects is the claim.
+    let sorted = |out: String| {
+        let mut lines: Vec<String> = out.lines().map(str::to_string).collect();
+        lines.sort();
+        lines
+    };
+    assert_eq!(
+        sorted(git_in(&clone, &["rev-list", "--objects", "--all"])?),
+        sorted(git_in(&served, &["rev-list", "--objects", "v1.0.0"])?),
+        "the clone holds different objects than the tag reaches"
+    );
+
+    h.finish().await
+}
+
+/// Run `git` in `repo` and hand back its output, for the assertions that
+/// compare a downloaded bundle with the repository it was built from.
+fn git_in(repo: &std::path::Path, args: &[&str]) -> Result<String> {
+    let out = std::process::Command::new("git")
+        .args(args)
+        .current_dir(repo)
+        .output()?;
+    anyhow::ensure!(
+        out.status.success(),
+        "git {args:?} in {} failed: {}",
+        repo.display(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    Ok(String::from_utf8(out.stdout)?)
+}
+
 /// The commit page's "(patch)" link has no route behind it: the click builds
 /// the patch in the page and hands the bytes straight to the browser as a blob.
 /// Nothing below this level can tell whether that actually reaches the disk —

@@ -4,5 +4,5 @@ expression: "render(\"webgit-main.tar.gz\", 4096, 12, \"\")"
 ---
 <div class="snapshot">
 <p class="snapshot-info">webgit-main.tar.gz — 12 files, 4 KB</p>
-<p class="msg error">This browser wouldn't hand over the archive to download.</p>
+<p class="msg error">This browser wouldn't hand over the file to download.</p>
 </div>

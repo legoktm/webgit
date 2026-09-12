@@ -15,7 +15,9 @@ default-members = [
     "crates/gib-archive",
     "crates/gib-attributes",
     "crates/gib-blame",
+    "crates/gib-bundle",
     "crates/gib-commitgraph",
+    "crates/gib-diff-delta",
     "crates/gib-diff",
     "crates/gib-fs",
     "crates/gib-hash",
@@ -44,7 +46,9 @@ gib = { path = "crates/gib" }
 gib-archive = { path = "crates/gib-archive" }
 gib-attributes = { path = "crates/gib-attributes" }
 gib-blame = { path = "crates/gib-blame" }
+gib-bundle = { path = "crates/gib-bundle" }
 gib-commitgraph = { path = "crates/gib-commitgraph" }
+gib-diff-delta = { path = "crates/gib-diff-delta" }
 gib-diff = { path = "crates/gib-diff" }
 gib-fs = { path = "crates/gib-fs" }
 gib-hash = { path = "crates/gib-hash" }
@@ -135,6 +139,7 @@ futures = { workspace = true, features = ["alloc", "async-await"] }
 gib.workspace = true
 gib-archive.workspace = true
 gib-blame.workspace = true
+gib-bundle.workspace = true
 gib-log.workspace = true
 gib-mailmap.workspace = true
 gib-patch.workspace = true

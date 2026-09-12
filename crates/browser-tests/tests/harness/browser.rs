@@ -67,7 +67,8 @@ impl Driver {
                     // that a headless session can never answer.
                     "browser.download.useDownloadDir": true,
                     "browser.helperApps.neverAsk.saveToDisk":
-                        "application/x-tar,application/gzip,application/octet-stream",
+                        "application/x-tar,application/gzip,application/octet-stream,\
+                         application/x-git-bundle",
                     // Keep a first-run profile from making requests of its own,
                     // which would otherwise show up in the resource timings the
                     // caching test measures.

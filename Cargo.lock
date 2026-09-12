@@ -577,6 +577,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "gib-bundle"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "futures",
+ "gib-diff-delta",
+ "gib-fs",
+ "gib-object",
+ "gib-odb",
+ "gib-testkit",
+ "miniz_oxide",
+ "sha1",
+ "tempfile",
+]
+
+[[package]]
 name = "gib-commitgraph"
 version = "0.0.0"
 dependencies = [
@@ -596,6 +612,13 @@ dependencies = [
  "gib-object",
  "gib-odb",
  "gib-testkit",
+]
+
+[[package]]
+name = "gib-diff-delta"
+version = "0.0.0"
+dependencies = [
+ "cc",
 ]
 
 [[package]]
@@ -2363,6 +2386,7 @@ dependencies = [
  "gib",
  "gib-archive",
  "gib-blame",
+ "gib-bundle",
  "gib-log",
  "gib-mailmap",
  "gib-patch",

@@ -1,19 +1,28 @@
-//! The snapshot view: the page you land on while a `.tar.gz` is being built,
+//! The snapshot view: the page you land on while a download is being built,
 //! and the download once it is.
 //!
-//! Building one is almost entirely object fetching, and on a large repository
-//! that is long enough to need saying out loud, so the view has a progress bar
-//! of its own: how many objects have been fetched out of how many the walk has
-//! asked for so far. It is not the chrome's persistent fetch line, which counts
-//! every request the page has ever made and can't say when this archive is
-//! done.
+//! Two things are built here, and the view is the same for both. A `.tar.gz` is
+//! one revision's tree; a `.bundle` is every object a ref reaches, in the file
+//! `git clone` clones from. They differ in what the two phases are doing — see
+//! [`stage_labels`] — and in what the finished file is counted in, files or
+//! objects.
+//!
+//! Building either is almost entirely object fetching, and on a large
+//! repository that is long enough to need saying out loud, so the view has a
+//! progress bar of its own: how many objects have been fetched out of how many
+//! the walk has asked for so far. It is not the chrome's persistent fetch line,
+//! which counts every request the page has ever made and can't say when this
+//! download is done.
 
 use crate::archive::stream_tar_gz;
+use crate::bundle::stream_bundle;
 use crate::cache::CachingRepo;
 use crate::render::{click_download, use_blob_url, yield_to_browser};
+use crate::route::SnapshotFormat;
 use crate::stats::format_bytes;
 use gib::object::{Commit, Tree};
 use gib_archive::{ArchiveEntry, EntryKind, collect_entries};
+use gib_bundle::{BundleRef, collect_objects};
 use std::cell::Cell;
 use web_sys::Blob;
 use yew::prelude::*;
@@ -21,9 +30,12 @@ use yew::prelude::*;
 /// A snapshot in progress, or one that is ready to download.
 #[derive(Properties, PartialEq, Clone)]
 pub(crate) struct SnapshotProps {
-    /// The archive's file name, e.g. `webgit-main.tar.gz`. Known before the
-    /// first object is fetched, so the page can say what it is building.
+    /// The file's name, e.g. `webgit-main.tar.gz`. Known before the first
+    /// object is fetched, so the page can say what it is building.
     pub name: String,
+    /// Which of the two things is being built, which is what the phase labels
+    /// and the finished summary read off.
+    pub format: SnapshotFormat,
     pub state: SnapshotState,
 }
 
@@ -33,23 +45,29 @@ pub(crate) enum SnapshotState {
     /// Still walking. `total` is how many objects have been requested so far,
     /// which grows as the walk uncovers more of the tree — see `archive`'s
     /// `Progress` for why there is no fixed denominator to show instead.
-    Building { fetched: usize, total: usize },
-    /// Fetched, now being written and gzipped. Unlike the walk this has a
-    /// denominator that was known before it started: every entry is in hand.
-    Compressing { written: usize, total: usize },
+    Building {
+        fetched: usize,
+        total: usize,
+    },
+    Writing {
+        written: usize,
+        total: usize,
+    },
     /// Built.
     Ready {
-        /// The gzipped tar, as the browser handed it back. A `Blob` is a handle
-        /// — the bytes live wherever the browser put them, which for a large
-        /// archive may be disk rather than memory — so the props clone on every
-        /// re-render costs nothing, and neither does keeping it around.
         archive: Blob,
-        /// The archive's size. Read off the blob once, here, rather than at
-        /// every render.
+        /// The file's size. Read off the blob once, here, rather than at every
+        /// render.
         size: usize,
-        /// How many files (not directories) went into it.
-        files: usize,
+        count: usize,
     },
+}
+
+fn stage_labels(format: SnapshotFormat) -> (&'static str, &'static str) {
+    match format {
+        SnapshotFormat::TarGz => ("fetching objects", "compressing"),
+        SnapshotFormat::Bundle => ("enumerating objects", "writing objects"),
+    }
 }
 
 /// How often, in milliseconds of wall time, to re-render the progress bar.
@@ -73,10 +91,12 @@ pub(crate) async fn build_snapshot(
     repo_name: &str,
     on_partial: &dyn Fn(SnapshotProps),
 ) -> anyhow::Result<SnapshotProps> {
+    let format = SnapshotFormat::TarGz;
     let stem = snapshot_stem(repo_name, ref_label);
-    let name = format!("{stem}.tar.gz");
+    let name = snapshot_file_name(repo_name, ref_label, format);
     let building = |fetched, total| SnapshotProps {
         name: name.clone(),
+        format,
         state: SnapshotState::Building { fetched, total },
     };
 
@@ -112,11 +132,12 @@ pub(crate) async fn build_snapshot(
     on_partial(building(fetched, total));
 
     let files = count_files(&entries);
-    let compressing = |written, total| SnapshotProps {
+    let writing = |written, total| SnapshotProps {
         name: name.clone(),
-        state: SnapshotState::Compressing { written, total },
+        format,
+        state: SnapshotState::Writing { written, total },
     };
-    on_partial(compressing(0, entries.len()));
+    on_partial(writing(0, entries.len()));
     // So the switch of phase is actually seen: everything below this point runs
     // off promise resolutions, which don't let the browser paint on their own.
     yield_to_browser().await;
@@ -130,16 +151,83 @@ pub(crate) async fn build_snapshot(
         commit.commit_date().timestamp().as_second().max(0) as u64,
         // Unthrottled, unlike the walk's: this one already reports on a
         // wall-clock budget, since it has to pace its repaints anyway.
-        &|written, total| on_partial(compressing(written, total)),
+        &|written, total| on_partial(writing(written, total)),
     )
     .await?;
 
     Ok(SnapshotProps {
         name,
+        format,
         state: SnapshotState::Ready {
             size: archive.size() as usize,
             archive,
-            files,
+            count: files,
+        },
+    })
+}
+
+/// Walk the history `refs` reaches, build the bundle, and describe it.
+pub(crate) async fn build_bundle(
+    repo: &CachingRepo,
+    refs: Vec<BundleRef>,
+    ref_label: &str,
+    repo_name: &str,
+    on_partial: &dyn Fn(SnapshotProps),
+) -> anyhow::Result<SnapshotProps> {
+    let format = SnapshotFormat::Bundle;
+    let name = snapshot_file_name(repo_name, ref_label, format);
+    let building = |fetched, total| SnapshotProps {
+        name: name.clone(),
+        format,
+        state: SnapshotState::Building { fetched, total },
+    };
+    on_partial(building(0, 0));
+
+    let seen = Cell::new((0usize, 0usize));
+    let last_emit = Cell::new(0.0f64);
+    let due = || {
+        let now = js_sys::Date::now();
+        let due = now - last_emit.get() >= PROGRESS_EMIT_INTERVAL_MS;
+        if due {
+            last_emit.set(now);
+        }
+        due
+    };
+
+    let tips: Vec<_> = refs.iter().map(|r| r.id).collect();
+    let ids = collect_objects(repo, &tips, &|fetched, total| {
+        seen.set((fetched, total));
+        if due() {
+            on_partial(building(fetched, total));
+        }
+    })
+    .await?;
+
+    let (fetched, total) = seen.get();
+    on_partial(building(fetched, total));
+
+    let count = ids.len();
+    let writing = |written, total| SnapshotProps {
+        name: name.clone(),
+        format,
+        state: SnapshotState::Writing { written, total },
+    };
+    on_partial(writing(0, count));
+    // So the switch of phase is actually seen; see `build_snapshot`.
+    yield_to_browser().await;
+
+    let bundle = stream_bundle(repo, &refs, ids, &|written, total| {
+        on_partial(writing(written, total))
+    })
+    .await?;
+
+    Ok(SnapshotProps {
+        name,
+        format,
+        state: SnapshotState::Ready {
+            size: bundle.size() as usize,
+            archive: bundle,
+            count,
         },
     })
 }
@@ -164,13 +252,13 @@ pub(crate) fn snapshot_stem(repo: &str, ref_label: &str) -> String {
     format!("{}-{}", flatten(repo), flatten(ref_label))
 }
 
-/// What the browser will save a snapshot of `ref_label` as.
+/// What the browser will save a download of `ref_label` as.
 ///
-/// Shared with the download links in the ref tables, which show the file name
-/// rather than a bare "tar.gz" — so what the link says and what lands in the
-/// downloads folder are the same string by construction.
-pub(crate) fn snapshot_file_name(repo: &str, ref_label: &str) -> String {
-    format!("{}.tar.gz", snapshot_stem(repo, ref_label))
+/// Shared with the download links in the ref tables and on the tag page, which
+/// show the file name rather than a bare "tar.gz" — so what the link says and
+/// what lands in the downloads folder are the same string by construction.
+pub(crate) fn snapshot_file_name(repo: &str, ref_label: &str, format: SnapshotFormat) -> String {
+    format!("{}.{}", snapshot_stem(repo, ref_label), format.extension())
 }
 
 fn flatten(s: &str) -> String {
@@ -189,29 +277,31 @@ fn flatten(s: &str) -> String {
 /// different child.
 #[function_component(SnapshotView)]
 pub(crate) fn snapshot_view_component(props: &SnapshotProps) -> Html {
+    let (walking, writing) = stage_labels(props.format);
     match &props.state {
         SnapshotState::Building { fetched, total } => {
-            progress_view(&props.name, "fetching objects", *fetched, *total)
+            progress_view(&props.name, walking, *fetched, *total)
         }
-        SnapshotState::Compressing { written, total } => {
-            progress_view(&props.name, "compressing", *written, *total)
+        SnapshotState::Writing { written, total } => {
+            progress_view(&props.name, writing, *written, *total)
         }
         SnapshotState::Ready {
             archive,
             size,
-            files,
+            count,
         } => html! {
             <ReadySnapshot
                 name={props.name.clone()}
+                format={props.format}
                 archive={archive.clone()}
                 size={*size}
-                files={*files}
+                count={*count}
             />
         },
     }
 }
 
-/// The archive being built: what stage it is at, and a bar that fills as the
+/// The download being built: what stage it is at, and a bar that fills as the
 /// work lands.
 ///
 /// A `<progress>` element rather than a `<div>` whose width is set on the tag,
@@ -237,13 +327,14 @@ fn progress_view(name: &str, stage: &str, done: usize, total: usize) -> Html {
     }
 }
 
-/// Props for [`ReadySnapshot`]: the finished archive.
+/// Props for [`ReadySnapshot`]: the finished file.
 #[derive(Properties, PartialEq, Clone)]
 struct ReadyProps {
     name: String,
+    format: SnapshotFormat,
     archive: Blob,
     size: usize,
-    files: usize,
+    count: usize,
 }
 
 /// The finished snapshot. Like [`crate::render::blob::BlobView`] it mints the
@@ -253,17 +344,21 @@ struct ReadyProps {
 fn ready_snapshot(props: &ReadyProps) -> Html {
     let url = use_blob_url(&props.archive);
     use_auto_download(&url, &props.name);
-    ready_view(&props.name, props.size, props.files, &url)
+    ready_view(&props.name, props.format, props.size, props.count, &url)
 }
 
-/// The markup for a built archive. `url` is an object URL over it, or empty if
+/// The markup for a built download. `url` is an object URL over it, or empty if
 /// one couldn't be made (under SSR, or if the browser refused), in which case
 /// the link is omitted rather than emitted pointing at the page.
-fn ready_view(name: &str, size: usize, files: usize, url: &str) -> Html {
+fn ready_view(name: &str, format: SnapshotFormat, size: usize, count: usize, url: &str) -> Html {
+    let noun = match format {
+        SnapshotFormat::TarGz => "file",
+        SnapshotFormat::Bundle => "object",
+    };
     let summary = format!(
-        "{} file{}, {}",
-        files,
-        if files == 1 { "" } else { "s" },
+        "{} {noun}{}, {}",
+        count,
+        if count == 1 { "" } else { "s" },
         format_bytes(size as u64)
     );
 
@@ -274,7 +369,7 @@ fn ready_view(name: &str, size: usize, files: usize, url: &str) -> Html {
             </p>
             if url.is_empty() {
                 <p class="msg error">
-                    { "This browser wouldn't hand over the archive to download." }
+                    { "This browser wouldn't hand over the file to download." }
                 </p>
             } else {
                 <p class="msg">
@@ -317,24 +412,40 @@ mod tests {
         assert_eq!(snapshot_stem("webgit", "release/2.0"), "webgit-release-2.0");
     }
 
-    /// The link text in the ref tables, and what the browser saves.
+    /// The link text in the ref tables and on the tag page, and what the
+    /// browser saves. The stem is the format's only shared part.
     #[test]
     fn test_snapshot_file_name() {
         assert_eq!(
-            snapshot_file_name("webgit", "v1.0.0"),
+            snapshot_file_name("webgit", "v1.0.0", SnapshotFormat::TarGz),
             "webgit-v1.0.0.tar.gz"
+        );
+        assert_eq!(
+            snapshot_file_name("webgit", "v1.0.0", SnapshotFormat::Bundle),
+            "webgit-v1.0.0.bundle"
         );
     }
 
     /// Render a finished snapshot's markup to a static HTML string via SSR. See
     /// the equivalent helper in `render::tag` for why we go through SSR.
     fn render(name: &str, bytes: usize, files: usize, url: &str) -> String {
+        render_ready(name, SnapshotFormat::TarGz, bytes, files, url)
+    }
+
+    fn render_ready(
+        name: &str,
+        format: SnapshotFormat,
+        bytes: usize,
+        count: usize,
+        url: &str,
+    ) -> String {
         let (name, url) = (name.to_string(), url.to_string());
         let html = futures::executor::block_on(
             yew::ServerRenderer::<SvHost>::with_props(move || SvHostProps {
                 name,
+                format,
                 size: bytes,
-                files,
+                count,
                 url,
             })
             .hydratable(false)
@@ -348,14 +459,15 @@ mod tests {
     #[derive(Properties, PartialEq, Clone)]
     struct SvHostProps {
         name: String,
+        format: SnapshotFormat,
         size: usize,
-        files: usize,
+        count: usize,
         url: String,
     }
 
     #[function_component(SvHost)]
     fn sv_host(p: &SvHostProps) -> Html {
-        ready_view(&p.name, p.size, p.files, &p.url)
+        ready_view(&p.name, p.format, p.size, p.count, &p.url)
     }
 
     /// The building state goes through the real component: it has no object
@@ -364,10 +476,16 @@ mod tests {
     /// `SnapshotState::Ready` holds a `Blob` and so the enum isn't `Send` — the
     /// same reason `render` above builds its props inside the closure. The
     /// in-progress states capture nothing but numbers.
-    fn render_state(state: impl FnOnce() -> SnapshotState + Send + 'static) -> String {
+    fn render_state(
+        name: &str,
+        format: SnapshotFormat,
+        state: impl FnOnce() -> SnapshotState + Send + 'static,
+    ) -> String {
+        let name = name.to_string();
         let html = futures::executor::block_on(
             yew::ServerRenderer::<SnapshotView>::with_props(move || SnapshotProps {
-                name: "webgit-main.tar.gz".to_string(),
+                name,
+                format,
                 state: state(),
             })
             .hydratable(false)
@@ -377,7 +495,9 @@ mod tests {
     }
 
     fn render_building(fetched: usize, total: usize) -> String {
-        render_state(move || SnapshotState::Building { fetched, total })
+        render_state("webgit-main.tar.gz", SnapshotFormat::TarGz, move || {
+            SnapshotState::Building { fetched, total }
+        })
     }
 
     #[test]
@@ -417,10 +537,67 @@ mod tests {
     /// fixed — the entries are all in hand before it starts.
     #[test]
     fn test_snapshot_html_compressing() {
-        insta::assert_snapshot!(render_state(|| SnapshotState::Compressing {
-            written: 4096,
-            total: 13658,
-        }));
+        insta::assert_snapshot!(render_state(
+            "webgit-main.tar.gz",
+            SnapshotFormat::TarGz,
+            || SnapshotState::Writing {
+                written: 4096,
+                total: 13658,
+            }
+        ));
+    }
+
+    /// A finished bundle: the same view, counted in the objects that went into
+    /// the pack rather than in files, since what comes out of one is a
+    /// repository.
+    #[test]
+    fn test_bundle_html() {
+        insta::assert_snapshot!(render_ready(
+            "webgit-v1.0.0.bundle",
+            SnapshotFormat::Bundle,
+            918_244,
+            13658,
+            "blob:fake"
+        ));
+    }
+
+    /// One object, and the noun in the summary line is singular.
+    #[test]
+    fn test_bundle_html_single_object() {
+        insta::assert_snapshot!(render_ready(
+            "webgit-v1.0.0.bundle",
+            SnapshotFormat::Bundle,
+            212,
+            1,
+            "blob:fake"
+        ));
+    }
+
+    /// A bundle's phases are its own work, not the archive's: it enumerates a
+    /// history where the archive fetches one tree.
+    #[test]
+    fn test_bundle_html_enumerating() {
+        insta::assert_snapshot!(render_state(
+            "webgit-v1.0.0.bundle",
+            SnapshotFormat::Bundle,
+            || SnapshotState::Building {
+                fetched: 37,
+                total: 120,
+            }
+        ));
+    }
+
+    /// And then writes every object it found into the pack.
+    #[test]
+    fn test_bundle_html_writing() {
+        insta::assert_snapshot!(render_state(
+            "webgit-v1.0.0.bundle",
+            SnapshotFormat::Bundle,
+            || SnapshotState::Writing {
+                written: 4096,
+                total: 13658,
+            }
+        ));
     }
 
     /// Directories and symlinks are archived, but the count the view reports is
