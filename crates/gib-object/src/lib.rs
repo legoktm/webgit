@@ -5,8 +5,6 @@
 //! `gib-odb`'s job, and peeling (which needs lookups) lives in the facade's
 //! extension traits.
 
-#![deny(clippy::all)]
-
 use gib_parse::{ParseError, ParseResult};
 use jiff::{
     Timestamp, Zoned,

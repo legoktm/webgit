@@ -64,8 +64,6 @@
 //!   `git diff` manages to be so fast, but I imagine it uses the packfile delta
 //!   encoding somehow to optimize diffing.
 
-#![deny(clippy::all)]
-
 pub mod commit_graph;
 pub mod diff;
 pub mod error;

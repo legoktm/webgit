@@ -17,3 +17,6 @@ miniz_oxide.workspace = true
 futures = { workspace = true, features = ["async-await", "executor"] }
 gib-testkit.workspace = true
 hex-literal.workspace = true
+
+[lints]
+workspace = true

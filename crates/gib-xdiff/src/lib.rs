@@ -26,8 +26,6 @@
 //! assert_eq!(changed[0].after, 1..2);
 //! ```
 
-#![deny(clippy::all)]
-
 mod shim;
 
 use std::ffi::{c_char, c_int, c_long, c_ulong, c_void};

@@ -17,3 +17,6 @@ gib-diff.workspace = true
 gib-fs.workspace = true
 gib-odb.workspace = true
 gib-testkit.workspace = true
+
+[lints]
+workspace = true

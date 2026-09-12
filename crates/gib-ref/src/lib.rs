@@ -7,8 +7,6 @@
 //! following symrefs and letting loose refs shadow packed ones, is the
 //! facade's job.
 
-#![deny(clippy::all)]
-
 use gib_hash::ObjectId;
 use gib_parse::ParseResult;
 use nom::{

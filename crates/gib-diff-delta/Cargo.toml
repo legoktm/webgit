@@ -12,3 +12,6 @@ links = "gib_diff_delta"
 
 [build-dependencies]
 cc.workspace = true
+
+[lints]
+workspace = true

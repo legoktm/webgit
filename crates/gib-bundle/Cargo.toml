@@ -19,3 +19,6 @@ gib-fs.workspace = true
 gib-odb.workspace = true
 gib-testkit.workspace = true
 tempfile.workspace = true
+
+[lints]
+workspace = true

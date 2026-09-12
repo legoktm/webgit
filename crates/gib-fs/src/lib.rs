@@ -50,8 +50,6 @@
 //! `gib` in a browser, you may want to use the [web filesystem
 //! API](https://developer.mozilla.org/en-US/docs/Web/API/File_System_API).
 
-#![deny(clippy::all)]
-
 mod page_read;
 
 pub use page_read::{CachingPageReader, PageCache, new_page_cache};

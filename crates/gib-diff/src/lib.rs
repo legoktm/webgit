@@ -23,8 +23,6 @@
 //! }
 //! ```
 
-#![deny(clippy::all)]
-
 use gib_fs::FileSystem;
 use gib_hash::ObjectId;
 use gib_object::{

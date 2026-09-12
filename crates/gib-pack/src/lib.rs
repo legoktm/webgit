@@ -5,8 +5,6 @@
 //! nothing about repository layout or pack discovery. Callers open the index
 //! and pack files and hand them over as an [`IndexedPackFile`].
 
-#![deny(clippy::all)]
-
 mod index;
 mod pack;
 

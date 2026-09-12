@@ -2,8 +2,6 @@
 //!
 //! See `ARCHITECTURE.md` for what belongs here.
 
-#![deny(clippy::all)]
-
 mod parsing;
 mod subslice_range;
 

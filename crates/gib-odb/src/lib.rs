@@ -5,8 +5,6 @@
 //! a loose fallback. It owns all the "where does an object live" policy;
 //! parsing what comes back is `gib-object`'s job and refs are the facade's.
 
-#![deny(clippy::all)]
-
 mod cache;
 mod loose;
 

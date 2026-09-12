@@ -2,8 +2,6 @@
 //!
 //! See `ARCHITECTURE.md` for what belongs here.
 
-#![deny(clippy::all)]
-
 mod directory;
 mod helpers;
 mod impls;

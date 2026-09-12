@@ -6,8 +6,6 @@
 //! downloading — undeltified, a bundle of this repository is about four times
 //! the size of the one `git bundle create` writes.
 
-#![deny(clippy::all)]
-
 mod shim;
 
 use std::ffi::{c_ulong, c_void};

@@ -26,8 +26,6 @@
 //! * **Case folding.** git folds when `core.ignoreCase` is set; see
 //!   `wildmatch.rs` for why there is nothing sensible to fold against here.
 
-#![deny(clippy::all)]
-
 #[cfg(test)]
 mod differential;
 mod wildmatch;

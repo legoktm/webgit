@@ -37,3 +37,6 @@ browser = [
 name = "browser"
 path = "tests/browser.rs"
 required-features = ["browser"]
+
+[lints]
+workspace = true

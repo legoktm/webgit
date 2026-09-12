@@ -24,8 +24,6 @@
 //! to `HEAD:.mailmap` in a bare repository — and a repository read over HTTP
 //! has only that last one.
 
-#![deny(clippy::all)]
-
 #[cfg(test)]
 mod differential;
 

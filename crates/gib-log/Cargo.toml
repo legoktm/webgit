@@ -16,3 +16,6 @@ futures = { workspace = true, features = ["async-await", "executor"] }
 gib-fs.workspace = true
 gib-odb.workspace = true
 gib-testkit.workspace = true
+
+[lints]
+workspace = true

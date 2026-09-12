@@ -23,8 +23,6 @@
 //! * binary files are reported as differing, never encoded into the patch —
 //!   the same choice cgit makes.
 
-#![deny(clippy::all)]
-
 mod diff;
 mod mail;
 mod stat;

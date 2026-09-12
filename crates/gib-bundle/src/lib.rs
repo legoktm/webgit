@@ -6,8 +6,6 @@
 //! the offline copy of a repository that a `.tar.gz` snapshot deliberately
 //! isn't — it has the history in it, not just a tree.
 
-#![deny(clippy::all)]
-
 use futures::FutureExt;
 use futures::future::LocalBoxFuture;
 use futures::stream::{FuturesUnordered, StreamExt};

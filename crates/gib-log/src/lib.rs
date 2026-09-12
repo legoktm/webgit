@@ -19,8 +19,6 @@
 //! Anything the graph cannot answer falls back to reading the commit object, so
 //! a repository without a commit-graph still walks, only slower.
 
-#![deny(clippy::all)]
-
 use futures::future::LocalBoxFuture;
 use gib_commitgraph::bloom::{BloomSettings, path_maybe_changed};
 use gib_object::{Commit, Object, ObjectId, Tree, TreeEntryType};

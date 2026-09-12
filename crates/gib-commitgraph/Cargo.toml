@@ -12,3 +12,6 @@ gib-hash.workspace = true
 [dev-dependencies]
 futures = { workspace = true, features = ["async-await", "executor"] }
 gib-testkit.workspace = true
+
+[lints]
+workspace = true

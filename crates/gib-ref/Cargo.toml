@@ -13,3 +13,6 @@ nom.workspace = true
 [dev-dependencies]
 gib-testkit.workspace = true
 hex-literal.workspace = true
+
+[lints]
+workspace = true

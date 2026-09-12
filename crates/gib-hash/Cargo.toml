@@ -9,3 +9,6 @@ license.workspace = true
 gib-parse.workspace = true
 hex.workspace = true
 nom.workspace = true
+
+[lints]
+workspace = true

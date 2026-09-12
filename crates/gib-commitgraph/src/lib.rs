@@ -16,7 +16,6 @@
 //!
 //! Reference: `gitformat-commit-graph(5)`.
 
-#![deny(clippy::all)]
 // Chunk ids (oidf/oidl/bidx/bdat) and parent slots (parent1/parent2/parents)
 // follow git's own names, which pedantic flags as too similar.
 #![allow(clippy::similar_names)]

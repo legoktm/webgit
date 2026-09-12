@@ -16,8 +16,6 @@
 //! for the caller to feed to whatever encoder it has — in webgit, the browser's
 //! own `CompressionStream`.
 
-#![deny(clippy::all)]
-
 use futures::FutureExt;
 use futures::future::{Either, LocalBoxFuture, select};
 use futures::stream::{FuturesUnordered, StreamExt};

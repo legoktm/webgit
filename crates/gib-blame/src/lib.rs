@@ -54,8 +54,6 @@
 //! IndexedDB-backed object store and over an on-disk one in the tests. Nothing
 //! is rendered here either — the result is a list of [`BlameGroup`]s.
 
-#![deny(clippy::all)]
-
 use gib_commitgraph::bloom::BloomSettings;
 use gib_log::{CommitSource, Frontier, MetaCache, bloom_says_unchanged};
 use gib_object::{Commit, ObjectId, TreeEntryType};

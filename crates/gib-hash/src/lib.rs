@@ -2,8 +2,6 @@
 //!
 //! See `ARCHITECTURE.md` for what belongs here.
 
-#![deny(clippy::all)]
-
 use gib_parse::ParseResult;
 use nom::{
     Parser, bytes::complete::take, character::complete::hex_digit0, combinator::all_consuming,
