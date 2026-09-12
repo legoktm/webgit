@@ -20,7 +20,10 @@
 //! not; a symlink, whose target is blob content; and a submodule, whose commit
 //! belongs to a repository we don't have and must not be packed.
 
-use crate::{BundleRef, BundleWriter, ObjectSource, collect_objects};
+use crate::test_support::MemoryStore;
+use crate::{
+    BundleRef, BundleSummary, BundleWriter, ObjectSource, collect_objects, read_bundle, read_header,
+};
 use futures::FutureExt;
 use futures::executor::block_on;
 use futures::future::LocalBoxFuture;
@@ -482,4 +485,175 @@ fn test_bundle_size_is_in_gits_league() {
         "our bundle is {} bytes against git's {theirs} ({ratio:.2}x)",
         ours.len()
     );
+}
+
+// ---------------------------------------------------------------------------
+// Reading bundles back
+// ---------------------------------------------------------------------------
+
+/// A bundle `git bundle create` wrote, over `args` (the rev arguments it takes
+/// after the file name).
+fn git_bundle(repo: &TestRepo, args: &[&str]) -> Vec<u8> {
+    let dir = tempfile::tempdir().expect("a directory");
+    let path = dir.path().join("git.bundle");
+    let mut full = vec!["bundle", "create", path.to_str().unwrap()];
+    full.extend_from_slice(args);
+    git(repo.location.path(), &full);
+    std::fs::read(&path).expect("the bundle git wrote")
+}
+
+/// Read a bundle into a fresh store, failing the test if it doesn't read.
+fn read_into(store: &MemoryStore, bundle: &[u8]) -> BundleSummary {
+    block_on(read_bundle(bundle, store, &|_, _| {})).expect("the bundle reads")
+}
+
+/// Every object in `store`, as the `<type> <oid>` lines `all_objects` reports
+/// a repository's objects as, so the two can be compared directly.
+fn stored_objects(store: &MemoryStore) -> BTreeSet<String> {
+    store
+        .ids()
+        .into_iter()
+        .map(|id| {
+            format!(
+                "{} {id}",
+                store.object_type(id).expect("a stored object").name()
+            )
+        })
+        .collect()
+}
+
+/// The real test of the reader: a bundle `git bundle create` wrote, which is
+/// deltified the way git deltifies — chains our own writer would never produce
+/// — read back object by object.
+///
+/// What it must produce is the repository: every object git says the refs reach,
+/// each with the bytes `git cat-file` gives for it. The ids are not taken from
+/// the bundle (nothing in a pack states them), they are computed from what was
+/// rebuilt, so an object landing under the right name *is* the claim that it
+/// was rebuilt correctly.
+#[test]
+fn test_reads_a_bundle_git_wrote() {
+    let repo = fixture();
+    let bundle = git_bundle(&repo, &["--all"]);
+
+    let store = MemoryStore::default();
+    let summary = read_into(&store, &bundle);
+
+    assert_eq!(summary.objects, store.len(), "an object was stored twice");
+    assert_eq!(stored_objects(&store), all_objects(repo.location.path()));
+    assert!(summary.header.prerequisites.is_empty());
+
+    // Spot-check the contents rather than only the names: a file's second
+    // revision is the object most likely to arrive as a delta.
+    let blob = rev_parse(&repo, "main:src/lib.rs");
+    assert_eq!(
+        store.body(blob).expect("the blob is there"),
+        b"fn one() {}\nfn two() {}\n"
+    );
+}
+
+/// The refs in the header are the ones git reads out of the same file —
+/// including the annotated tag, which names an object that isn't a commit, and
+/// `HEAD`, which `git bundle create --all` adds and no ref file holds.
+#[test]
+fn test_reads_the_refs_git_wrote_into_the_header() {
+    let repo = fixture();
+    let dir = tempfile::tempdir().expect("a directory");
+    let path = save(&dir, "git.bundle", &git_bundle(&repo, &["--all"]));
+
+    let header = read_header(&std::fs::read(&path).unwrap()).expect("a header");
+    let ours: BTreeSet<String> = header
+        .refs
+        .iter()
+        .map(|r| format!("{} {}", r.id, r.name))
+        .collect();
+    let theirs: BTreeSet<String> = git(
+        repo.location.path(),
+        &["bundle", "list-heads", path.to_str().unwrap()],
+    )
+    .lines()
+    .map(|line| line.trim().to_string())
+    .collect();
+
+    assert_eq!(ours, theirs);
+}
+
+/// A differential bundle: git writes its pack thin, so objects in it are deltas
+/// against objects the bundle deliberately doesn't carry. Those come back out
+/// of the store — which, in the browser, is the cache the import is filling.
+#[test]
+fn test_reads_a_differential_bundle_against_what_the_store_has() {
+    let repo = fixture();
+    // Everything up to the first commit, then a bundle of what came after it.
+    let base = git_bundle(&repo, &["main~2..main"]);
+    let header = read_header(&base).expect("a header");
+    assert!(
+        !header.prerequisites.is_empty(),
+        "git wrote no prerequisites for a range bundle"
+    );
+
+    // The objects the bundle expects the reader to have already, seeded from
+    // the repository the way an earlier import would have left them.
+    let store = MemoryStore::default();
+    for line in git(repo.location.path(), &["rev-list", "--objects", "main~2"]).lines() {
+        let id = line.split_whitespace().next().expect("an id");
+        let (object_type, body) = cat_file(&repo, id);
+        store.seed(object_type, body);
+    }
+    let seeded = store.len();
+
+    let summary = read_into(&store, &base);
+
+    assert_eq!(store.len(), seeded + summary.objects);
+    // The point of the exercise: some of what arrived was a delta against an
+    // object the bundle left out, and rebuilding it meant going back to the
+    // store for the base.
+    assert!(
+        store.reads() > 0,
+        "nothing in the thin pack was rebuilt from the store"
+    );
+    // The tip commit the range ends at is one of the objects that arrived.
+    let tip = rev_parse(&repo, "main");
+    assert!(store.body(tip).is_some(), "the bundle's tip did not arrive");
+}
+
+/// One object out of the repository: its type, and the bytes git stores for it.
+fn cat_file(repo: &TestRepo, id: &str) -> (gib_object::ObjectType, Vec<u8>) {
+    let object_type = git(repo.location.path(), &["cat-file", "-t", id]);
+    let body = Command::new("git")
+        .args(["cat-file", object_type.trim(), id])
+        .current_dir(repo.location.path())
+        .output()
+        .expect("git runs")
+        .stdout;
+    let object_type = match object_type.trim() {
+        "commit" => gib_object::ObjectType::Commit,
+        "tree" => gib_object::ObjectType::Tree,
+        "tag" => gib_object::ObjectType::Tag,
+        "blob" => gib_object::ObjectType::Blob,
+        other => panic!("git named an object type we don't know: {other}"),
+    };
+    (object_type, body)
+}
+
+/// Our own bundles read back too — the loop that matters most, since these are
+/// the ones a user downloads from the viewer and hands back to it.
+#[test]
+fn test_reads_the_bundle_we_wrote() {
+    let repo = fixture();
+    let odb = open_odb(&repo);
+    let bundle = our_bundle(&odb, &tag_refs(&repo));
+
+    let store = MemoryStore::default();
+    let summary = read_into(&store, &bundle);
+
+    assert_eq!(
+        store
+            .ids()
+            .into_iter()
+            .map(|id| id.to_string())
+            .collect::<BTreeSet<String>>(),
+        git_objects(&repo, &["v1.0.0"]),
+    );
+    assert_eq!(summary.objects, store.len());
 }

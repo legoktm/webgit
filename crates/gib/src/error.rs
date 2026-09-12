@@ -48,6 +48,8 @@ pub enum Error {
     RefNotFound(RefName),
     SymrefTooDeep(RefName),
     MalformedPackObject(ObjectId),
+    /// The delta chain that rebuilds a packed object does not describe one.
+    MalformedDelta(ObjectId),
     MalformedObject(ObjectId),
     ObjectParseError {
         #[expect(missing_docs)]
@@ -122,6 +124,7 @@ impl From<OdbError> for Error {
             OdbError::Pack(e) => e.into(),
             OdbError::MalformedInfoPacks => Self::MalformedInfoPacks,
             OdbError::MalformedPackObject(id) => Self::MalformedPackObject(id),
+            OdbError::MalformedDelta(id) => Self::MalformedDelta(id),
             OdbError::MalformedObject(id) => Self::MalformedObject(id),
             OdbError::ObjectTooLarge(id) => Self::ObjectTooLarge(id),
             OdbError::PackObjectDecompressError { id, status } => {

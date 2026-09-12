@@ -5,6 +5,7 @@ mod cache;
 mod error;
 mod fetch;
 mod fs;
+mod import;
 mod render;
 mod route;
 mod stats;

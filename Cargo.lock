@@ -586,6 +586,7 @@ dependencies = [
  "gib-fs",
  "gib-object",
  "gib-odb",
+ "gib-pack",
  "gib-testkit",
  "miniz_oxide",
  "sha1",

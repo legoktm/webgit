@@ -219,6 +219,29 @@ impl Harness {
         Ok(out)
     }
 
+    /// Wait until the element matching `css` says something containing
+    /// `needle`, and hand back what it says.
+    ///
+    /// For text that is written more than once as work goes on — a progress
+    /// line that ends up a summary — where waiting only for the element would
+    /// read whichever version happened to be on screen first.
+    pub async fn wait_for_text(&self, css: &str, needle: &str) -> Result<String> {
+        let deadline = std::time::Instant::now() + SETTLE;
+        let mut last = String::from("(never read)");
+        loop {
+            if let Ok(text) = self.text_of(css).await {
+                if text.contains(needle) {
+                    return Ok(text);
+                }
+                last = text;
+            }
+            if std::time::Instant::now() >= deadline {
+                bail!("`{css}` never said {needle:?} within {SETTLE:?}; last read: {last:?}");
+            }
+            tokio::time::sleep(STALE_RETRY_DELAY).await;
+        }
+    }
+
     /// The whole content area as text. Useful for "does this page mention X"
     /// assertions where the exact element is not the point.
     pub async fn content_text(&self) -> Result<String> {

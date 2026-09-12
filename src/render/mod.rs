@@ -31,7 +31,7 @@ mod time;
 pub(crate) mod fixtures;
 
 pub(crate) use browser::{
-    click_download, download_bytes, use_blob_url, use_object_url, yield_to_browser,
+    click_download, download_bytes, file_from_event, use_blob_url, use_object_url, yield_to_browser,
 };
 pub(crate) use commits_table::{CommitRow, ExpandMsg, commits_table, short_hash};
 pub(crate) use gib_patch::is_binary;

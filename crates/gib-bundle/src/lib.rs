@@ -1,4 +1,4 @@
-//! Building a `git bundle`, without a server to run it on.
+//! Building and reading a `git bundle`, without a server to run it on.
 //!
 //! A bundle is a clone in one file: a short text header naming the refs it
 //! carries, then a packfile holding every object those refs reach. `git clone`,
@@ -14,8 +14,12 @@ use std::collections::{BTreeSet, VecDeque};
 
 #[cfg(test)]
 mod differential;
+mod reader;
+#[cfg(test)]
+mod test_support;
 mod writer;
 
+pub use reader::{BundleHeader, BundleSummary, ObjectStore, read_bundle, read_header};
 pub use writer::{BundleRef, BundleWriter, MAX_BUNDLE_BYTES};
 
 /// How many object fetches the walk keeps in flight at once.

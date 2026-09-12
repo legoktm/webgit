@@ -36,6 +36,8 @@ pub enum OdbError {
     MalformedInfoPacks,
     /// A packed object's header names a type this library does not know.
     MalformedPackObject(ObjectId),
+    /// The delta chain that rebuilds a packed object does not describe one.
+    MalformedDelta(ObjectId),
     /// A loose object's header did not parse.
     MalformedObject(ObjectId),
     /// An object is larger than this platform's `usize` can address.
@@ -75,6 +77,7 @@ fn annotate(id: ObjectId) -> impl Fn(PackObjectError) -> OdbError {
         PackObjectError::Pack(error) => OdbError::Pack(error),
         PackObjectError::MalformedObject => OdbError::MalformedPackObject(id),
         PackObjectError::ObjectTooLarge => OdbError::ObjectTooLarge(id),
+        PackObjectError::MalformedDelta => OdbError::MalformedDelta(id),
         PackObjectError::Decompress(status) => OdbError::PackObjectDecompressError { id, status },
     }
 }

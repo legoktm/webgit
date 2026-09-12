@@ -1,0 +1,5 @@
+---
+source: src/render/about.rs
+expression: "render_status(ImportState::Done\n{ objects: 13658, refs: 7, cached: (13658, \"56.78\".to_string()), })"
+---
+<p class="import-status">imported 13658 objects from 7 refs.</p>

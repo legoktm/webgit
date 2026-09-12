@@ -925,8 +925,11 @@ a.ref-label:hover {
     white-space: nowrap;
 }
 
-/* The snapshot page itself: what was built, above the fallback link. */
-.snapshot-info {
+/* The snapshot page itself: what was built, above the fallback link. The
+   about page's import says the same kind of thing in the same voice, so it
+   reads off the same rule. */
+.snapshot-info,
+.import-status {
     font-size: 0.85rem;
     font-family: var(--mono);
     color: var(--text-dim);
@@ -937,14 +940,17 @@ a.ref-label:hover {
     color: var(--link);
 }
 
-/* The bar shown while the archive is still being fetched. The total it fills
-   towards climbs as the tree is walked, so it can jump backwards — it reports
-   the work found so far, not a countdown to a known end.
+/* The bar shown while the archive is still being fetched, and the one an
+   import of a bundle fills. The snapshot's total climbs as the tree is walked,
+   so it can jump backwards — it reports the work found so far, not a countdown
+   to a known end; an import's is fixed, since a pack says how many objects it
+   holds.
 
    `appearance: none` is what lets the two pseudo-elements below take over the
    fill colour; without it the browser's own bar shows through. Each engine
    names its own, and neither understands the other's, so both are set. */
-.snapshot-progress {
+.snapshot-progress,
+.import-progress {
     display: block;
     width: 100%;
     max-width: 36rem;
@@ -954,14 +960,26 @@ a.ref-label:hover {
     background: var(--bg-alt);
 }
 
-.snapshot-progress::-webkit-progress-bar {
+.snapshot-progress::-webkit-progress-bar,
+.import-progress::-webkit-progress-bar {
     background: var(--bg-alt);
 }
 
-.snapshot-progress::-webkit-progress-value {
+.snapshot-progress::-webkit-progress-value,
+.import-progress::-webkit-progress-value {
     background: var(--accent);
 }
 
-.snapshot-progress::-moz-progress-bar {
+.snapshot-progress::-moz-progress-bar,
+.import-progress::-moz-progress-bar {
     background: var(--accent);
+}
+
+/* The file picker on the about page. Browsers style the button inside it
+   themselves and there is no getting at it without vendor pseudo-elements, so
+   this only settles the text around it. */
+.import-input {
+    font-family: inherit;
+    font-size: 0.875rem;
+    color: var(--text);
 }

@@ -109,6 +109,18 @@ pub(crate) fn click_download(url: &str, name: &str) {
     }
 }
 
+/// The file an `<input type="file">` was just given, if it was given one.
+///
+/// The one place the render path reads something off the DOM rather than
+/// writing to it: a file picker hands its file over through the element, not
+/// through the event. Under SSR the handler never fires, so this is never
+/// reached there.
+pub(crate) fn file_from_event(event: &web_sys::Event) -> Option<web_sys::File> {
+    use wasm_bindgen::JsCast;
+    let input: web_sys::HtmlInputElement = event.target()?.dyn_into().ok()?;
+    input.files()?.get(0)
+}
+
 /// Save `data` as `name`, for bytes that exist only for the moment a link is
 /// clicked: mint an object URL, click it, and revoke it again.
 pub(crate) fn download_bytes(name: &str, mime: &str, data: &[u8]) {

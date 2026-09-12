@@ -14,7 +14,7 @@ mod keys;
 
 pub(crate) use global::GlobalCache;
 
-use codec::{object_type_to_u8, settings_tag, u8_to_object_type};
+use codec::{object_from_record, object_record, settings_tag};
 use global::{cached_object_stats, clear_cached_objects};
 use idb::{await_request, open_db};
 use keys::resolve_prefix_in_map;
@@ -102,6 +102,13 @@ impl CachingRepo {
     /// Whether IndexedDB-backed caching is active for this session.
     pub(crate) fn idb_available(&self) -> bool {
         self.db.is_some()
+    }
+
+    /// The host-wide object cache behind this repository's connection, for the
+    /// paths that write objects with no repository in mind — a bundle import
+    /// fills the same store every repo reads from.
+    pub(crate) fn global_cache(&self) -> GlobalCache {
+        GlobalCache::with_db(self.db.clone())
     }
 
     // --- Core cached lookup ---------------------------------------------------
@@ -261,17 +268,7 @@ impl CachingRepo {
         let store = tx.object_store(STORE_OBJECTS).ok()?;
         let req = store.get(&JsValue::from_str(&key)).ok()?;
         let result = await_request(&req).await.ok()?;
-        if result.is_undefined() || result.is_null() {
-            return None;
-        }
-        let type_n = js_sys::Reflect::get(&result, &"type".into())
-            .ok()?
-            .as_f64()? as u8;
-        let data = js_sys::Reflect::get(&result, &"data".into()).ok()?;
-        Some(RawObject {
-            object_type: u8_to_object_type(type_n)?,
-            body: js_sys::Uint8Array::new(&data).to_vec(),
-        })
+        object_from_record(&result)
     }
 
     /// Queue a write of `raw` into the object store without awaiting it.
@@ -290,20 +287,7 @@ impl CachingRepo {
         let Ok(store) = tx.object_store(STORE_OBJECTS) else {
             return;
         };
-
-        let record = js_sys::Object::new();
-        let key = id.to_string();
-        js_sys::Reflect::set(&record, &"id".into(), &JsValue::from_str(&key)).ok();
-        js_sys::Reflect::set(
-            &record,
-            &"type".into(),
-            &JsValue::from_f64(object_type_to_u8(raw.object_type) as f64),
-        )
-        .ok();
-        let buf = js_sys::Uint8Array::from(raw.body.as_slice()).buffer();
-        js_sys::Reflect::set(&record, &"data".into(), &buf).ok();
-
-        store.put(&record).ok();
+        store.put(&object_record(id, raw)).ok();
     }
 }
 

@@ -1274,10 +1274,11 @@ async fn repository_index_tabs_switch_between_listing_and_about() -> Result<()> 
     h.wait_for(".tag-table").await?;
     h.assert_no_error().await?;
 
+    // The viewer-wide sections, and no "repository" one above them.
     let headings = h.texts_of("#content .summary-heading").await?;
     assert_eq!(
         headings,
-        ["gib viewer"],
+        ["gib viewer", "import a bundle"],
         "the index's about page showed a repository section: {headings:?}"
     );
     let body = h.content_text().await?;
@@ -1415,6 +1416,126 @@ async fn snapshot_route_downloads_a_git_bundle() -> Result<()> {
         sorted(git_in(&clone, &["rev-list", "--objects", "--all"])?),
         sorted(git_in(&served, &["rev-list", "--objects", "v1.0.0"])?),
         "the clone holds different objects than the tag reaches"
+    );
+
+    h.finish().await
+}
+
+/// The other direction: a bundle built from a clone, handed back to the viewer
+/// on the about page, fills the object cache.
+///
+/// The claim is not that the page says it imported something — it is that the
+/// objects are then *there*, so a view that would have read them out of the
+/// repository's packfile doesn't. So the same route is loaded twice: once with
+/// a cold cache to see what it costs, and again after the cache has been
+/// emptied and refilled from nothing but the bundle.
+#[tokio::test]
+async fn about_page_imports_a_bundle_into_the_cache() -> Result<()> {
+    let h = Harness::start().await?;
+    let repo = &h.fixtures.packed;
+    let served = h.fixtures.webroot.join("repos").join(repo.name);
+    let path = repo.url_path();
+
+    // What the log view costs with nothing cached: every object it renders is
+    // a ranged read out of the packfile.
+    h.open_address(&format!("{path}log/"), &path, "#!/log")
+        .await?;
+    h.wait_for(".summary-table").await?;
+    h.assert_no_error().await?;
+    let cold = pack_reads(&h).await?;
+    assert!(
+        cold > 1,
+        "the cold load read the packfile {cold} times — the measurement is \
+         broken, not the import"
+    );
+
+    // The bundle a user would have made from their own clone.
+    let bundle = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("import.bundle");
+    if bundle.exists() {
+        std::fs::remove_file(&bundle)?;
+    }
+    git_in(
+        &served,
+        &["bundle", "create", bundle.to_str().unwrap(), "--all"],
+    )?;
+    let carried = git_in(&served, &["rev-list", "--objects", "--all"])?
+        .lines()
+        .count();
+
+    // Empty the cache the cold load filled, so that what is in it afterwards
+    // came from the bundle and from nowhere else.
+    h.open(repo, "#!/about").await?;
+    h.wait_for(".clear-btn").await?.click().await?;
+    h.wait_for(".import-input")
+        .await?
+        .send_keys(bundle.to_str().unwrap())
+        .await?;
+
+    // The status line is a progress report until it is a summary, so waiting
+    // for what it says at the end is also waiting for the import to finish.
+    let status = h.wait_for_text(".import-status", "imported").await?;
+    h.assert_no_error().await?;
+    assert!(
+        status.contains(&format!("imported {carried} objects")),
+        "the page did not import every object the bundle carried \
+         ({carried} of them): {status}"
+    );
+
+    // The same view again, as a fresh document — by its cgit-style path rather
+    // than a fragment change, so the timings are this page's alone.
+    h.open_address(&format!("{path}log/"), &path, "#!/log")
+        .await?;
+    h.wait_for(".summary-table").await?;
+    h.assert_no_error().await?;
+    let warm = pack_reads(&h).await?;
+    assert!(
+        warm < cold,
+        "the log view read the packfile {warm} times after the import against \
+         {cold} before it — the imported objects are not being used"
+    );
+    // One read is the header check every pack gets when the repository is
+    // opened; anything above that is an object that had to be fetched.
+    assert!(
+        warm <= 1,
+        "the log view still read {warm} objects out of the packfile after the \
+         import supplied every one of them"
+    );
+
+    h.finish().await
+}
+
+/// How many times the page read from a packfile — one timing entry per ranged
+/// read, so this counts object reads and not just the files touched.
+async fn pack_reads(h: &Harness) -> Result<usize> {
+    Ok(h.fetched_urls()
+        .await?
+        .into_iter()
+        .filter(|url| url.ends_with(".pack"))
+        .count())
+}
+
+/// A file that isn't a bundle is refused, and says so, rather than leaving the
+/// page looking like it is still working.
+#[tokio::test]
+async fn about_page_refuses_a_file_that_is_not_a_bundle() -> Result<()> {
+    let h = Harness::start().await?;
+    let repo = &h.fixtures.basic;
+
+    let not_a_bundle = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("not.bundle");
+    std::fs::write(&not_a_bundle, b"this is not a git bundle\n")?;
+
+    h.open(repo, "#!/about").await?;
+    h.wait_for(".import-input")
+        .await?
+        .send_keys(not_a_bundle.to_str().unwrap())
+        .await?;
+
+    let message = h
+        .wait_for_text("#content .msg.error", "didn't load")
+        .await?;
+    assert!(
+        message.contains("not a v2 or v3 git bundle"),
+        "the page did not say why the file was refused: {message}"
     );
 
     h.finish().await

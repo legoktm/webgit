@@ -34,3 +34,8 @@ expression: render(fixture(true))
 </tr>
 </tbody>
 </table>
+<h3 class="summary-heading">import a bundle</h3>
+<p>A <a href="https://git-scm.com/docs/git-bundle">bundle</a> contains Git objects. Loading one preloads objects into gib's storage, greatly speeding up performance. You can create one from a Git clone with: <code>git bundle create repo.bundle --all</code>, or download one from the branches and tags pages.</p>
+<p>
+<input type="file" accept=".bundle,application/x-git-bundle" class="import-input">
+</p>

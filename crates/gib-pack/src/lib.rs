@@ -12,7 +12,8 @@ pub use index::{
     FanoutTable, ShortOffsetTable, find_object_in_pack_index, find_prefix_in_pack_index,
 };
 pub use pack::{
-    PackObject, form_deltified_chain, reconstruct_deltified_object_from_chain,
+    MAX_OBJECT_HEADER_LEN, PackNegativeOffset, PackObject, PackObjectType, apply_delta,
+    form_deltified_chain, parse_object_header, reconstruct_deltified_object_from_chain,
     validate_packfile_version,
 };
 
@@ -60,6 +61,10 @@ pub enum PackObjectError {
     ObjectTooLarge,
     /// The object's compressed body did not inflate.
     Decompress(TINFLStatus),
+    /// A delta's instructions do not describe an object: they read past the
+    /// end of the delta or of its base, or rebuild something other than the
+    /// size the delta itself claims.
+    MalformedDelta,
 }
 
 impl From<PackError> for PackObjectError {

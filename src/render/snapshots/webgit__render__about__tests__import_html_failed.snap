@@ -1,0 +1,5 @@
+---
+source: src/render/about.rs
+expression: "render_status(ImportState::Failed(\"not a v2 or v3 git bundle: PK\\u{3}\\u{4}\".to_string()))"
+---
+<p class="msg error">That bundle didn't load: not a v2 or v3 git bundle: PK</p>

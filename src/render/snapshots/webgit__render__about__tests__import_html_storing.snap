@@ -1,0 +1,6 @@
+---
+source: src/render/about.rs
+expression: "render_status(ImportState::Storing { done: 4096, total: 13658, })"
+---
+<p class="import-status">storing objects… 4096/13658</p>
+<progress max="13658" value="4096" class="import-progress">4096/13658</progress>

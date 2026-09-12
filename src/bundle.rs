@@ -26,7 +26,6 @@ impl gib_bundle::ObjectSource for CachingRepo {
 pub(crate) const BUNDLE_MIME: &str = "application/x-git-bundle";
 
 /// How much bundle to accumulate before handing a piece to the browser.
-
 const FLUSH_BYTES: usize = 1024 * 1024;
 
 /// How many object fetches to keep in flight while writing.

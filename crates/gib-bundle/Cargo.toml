@@ -10,6 +10,7 @@ anyhow.workspace = true
 futures = { workspace = true, features = ["alloc", "async-await"] }
 gib-diff-delta.workspace = true
 gib-object.workspace = true
+gib-pack.workspace = true
 miniz_oxide.workspace = true
 sha1.workspace = true
 
