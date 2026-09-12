@@ -1,7 +1,5 @@
 //! The blob view's markup, and the browser effect around it: minting an object
-//! URL over the bytes. The line selection it shares with the blame view —
-//! scrolling to the selection and extending it by shift-click — lives in
-//! [`crate::render::lines`].
+//! URL over the bytes. The line selection lives in [`crate::render::lines`].
 
 use super::{BlobContent, BlobProps, MAX_BLOB_BYTES, MAX_BLOB_LINES};
 use crate::render::markdown::MarkdownFrame;

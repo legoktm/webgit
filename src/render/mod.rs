@@ -39,8 +39,9 @@ pub(crate) use commits_table::{CommitRow, ExpandMsg, commits_table, short_hash};
 pub(crate) use gib_patch::is_binary;
 pub(crate) use lines::{anchored, line_click_handler, use_selection_scroll};
 pub(crate) use query::{
-    apply_decorations, collect_refs, commit_for_entry, decoration_map, fetch_ref_rows,
-    fetch_ref_rows_each, head_branch_name, mapped_ident, recent_commits, walk_commits_streamed,
+    apply_decorations, collect_refs, commit_first_line, commit_for_entry, decoration_map,
+    fetch_ref_rows, fetch_ref_rows_each, head_branch_name, mapped_ident, recent_commits,
+    walk_commits_streamed,
 };
 pub(crate) use refs_table::{RefRow, branches_section, loading_dots, tags_section};
 pub(crate) use time::format_datetime;

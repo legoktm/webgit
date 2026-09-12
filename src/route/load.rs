@@ -6,7 +6,7 @@ use crate::RepoBundle;
 use crate::cache::CachingRepo;
 use crate::error::GitContext;
 use crate::render::about::{AboutProps, build_about};
-use crate::render::blame::{BlameProps, build_blame};
+use crate::render::blame::{BlameProps, BlameTarget, build_blame};
 use crate::render::blob::{BlobProps, build_blob_props};
 use crate::render::commit::{CommitProps, build_commit, resolve_sha};
 use crate::render::log::{LogProps, LogQuery, build_log};
@@ -348,7 +348,14 @@ pub(crate) async fn build_route(
             let Some((id, data)) = walk_to_blob(&tree, &path, repo).await else {
                 return Ok(LoadedView::NotFound(path));
             };
-            let props = build_blame(repo, commit, &path, head.as_deref(), id, data, |p| {
+            let target = BlameTarget {
+                commit,
+                path: &path,
+                head: head.as_deref(),
+                blob_id: id,
+                data,
+            };
+            let props = build_blame(repo, mailmap, target, |p| {
                 on_partial(LoadedView::Blame(Box::new(p)))
             })
             .await

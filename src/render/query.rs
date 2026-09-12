@@ -12,7 +12,7 @@ use gib_mailmap::Mailmap;
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 
-fn commit_first_line(message: &[u8]) -> String {
+pub(crate) fn commit_first_line(message: &[u8]) -> String {
     String::from_utf8_lossy(message)
         .trim_end()
         .lines()

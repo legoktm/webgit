@@ -1,11 +1,14 @@
 use crate::cache::CachingRepo;
 use crate::render::blob::{MAX_BLOB_BYTES, MAX_BLOB_LINES, count_lines, split_lines};
 use crate::render::{
-    anchored, is_binary, line_click_handler, short_hash, use_selection_scroll, yield_to_browser,
+    anchored, commit_first_line, format_datetime, is_binary, line_click_handler, mapped_ident,
+    short_hash, use_selection_scroll, yield_to_browser,
 };
 use crate::route::{LineRange, blame_url, tree_url};
 use gib::object::{Commit, ObjectId};
 use gib_blame::{BlameError, BlameGroup};
+use gib_mailmap::Mailmap;
+use std::collections::{BTreeMap, BTreeSet};
 use yew::prelude::*;
 
 /// One run of lines the walk has attributed, as the gutter shows it.
@@ -19,6 +22,9 @@ pub(crate) struct BlameRun {
     /// lines.
     pub start: usize,
     pub num_lines: usize,
+    /// The run's commit, kept in its 20-byte form rather than as hex: it is
+    /// what [`fill_details`] fetches and keys its results by.
+    pub commit: ObjectId,
     pub short_hash: String,
     /// The full hash, shown on hover — the gutter only has room for eight
     /// characters, and this is the one a reader copies out.
@@ -27,6 +33,9 @@ pub(crate) struct BlameRun {
     /// Blame the same file one revision further back, cgit's `^`. Absent on a
     /// root commit, which has no previous revision to look at.
     pub prev_url: Option<String>,
+    /// The gutter's tooltip, cgit's `emit_suspect_detail`. `None` until
+    /// [`fill_details`] reads the commit; until then the full hash shows.
+    pub detail: Option<String>,
 }
 
 /// What the blame view has to show for the file.
@@ -64,11 +73,23 @@ pub(crate) struct BlameProps {
     pub lines: Option<LineRange>,
 }
 
+pub(crate) struct BlameTarget<'a> {
+    /// The revision being blamed from: where the walk starts.
+    pub commit: &'a Commit,
+    /// The file's path within that revision's tree.
+    pub path: &'a str,
+    /// The `?h=` the file was reached by. Together with `path` it addresses
+    /// every link the gutter writes.
+    pub head: Option<&'a str>,
+    pub blob_id: ObjectId,
+    /// The file's bytes. Resolved by the caller rather than by the engine,
+    /// which is what lets the file paint before the walk starts.
+    pub data: Vec<u8>,
+}
+
 /// Build the blame view's props, streaming partial results through
-/// `on_partial` as the walk settles more of the file.
-///
-/// `commit` is the revision being blamed from and `head` the `?h=` it was
-/// reached by, which together address every link the gutter writes.
+/// `on_partial` as the walk settles more of the file and then as the hover
+/// details arrive behind it.
 ///
 /// The file's own bytes are rendered first and the gutter fills in behind
 /// them. Blame is the most object-hungry view in the app — every commit that
@@ -77,13 +98,17 @@ pub(crate) struct BlameProps {
 /// reader looking at nothing for as long as the file's history is deep.
 pub(crate) async fn build_blame(
     repo: &CachingRepo,
-    commit: &Commit,
-    path: &str,
-    head: Option<&str>,
-    blob_id: ObjectId,
-    data: Vec<u8>,
+    mailmap: &Mailmap,
+    target: BlameTarget<'_>,
     on_partial: impl Fn(BlameProps),
 ) -> Result<BlameProps, BlameError> {
+    let BlameTarget {
+        commit,
+        path,
+        head,
+        blob_id,
+        data,
+    } = target;
     let mut props = BlameProps {
         blob_id: blob_id.to_string(),
         content: blame_content(&data),
@@ -125,7 +150,71 @@ pub(crate) async fn build_blame(
 
     props.runs = runs(&blame.groups);
     props.pending = false;
+    on_partial(props.clone());
+
+    fill_details(repo, mailmap, &mut props, on_partial).await;
     Ok(props)
+}
+
+/// How many commit objects to read (concurrently) before showing the tooltips
+/// that have landed. Mirrors [`gib_log`]'s streamed walk, for the same reason.
+const DETAIL_BATCH: usize = 10;
+
+/// Fill in each run's hover detail, streaming partials as the batches land.
+async fn fill_details(
+    repo: &CachingRepo,
+    mailmap: &Mailmap,
+    props: &mut BlameProps,
+    on_partial: impl Fn(BlameProps),
+) {
+    let mut seen: BTreeSet<ObjectId> = BTreeSet::new();
+    let wanted: Vec<ObjectId> = props
+        .runs
+        .iter()
+        .map(|run| run.commit)
+        .filter(|&id| seen.insert(id))
+        .collect();
+
+    let mut details: BTreeMap<ObjectId, String> = BTreeMap::new();
+    for chunk in wanted.chunks(DETAIL_BATCH) {
+        let objects =
+            futures::future::join_all(chunk.iter().map(|&id| repo.lookup_object(id))).await;
+        for (&id, object) in chunk.iter().zip(objects) {
+            // A commit that can't be read leaves its runs on the hash-only
+            // tooltip; a partial repository shouldn't fail over a tooltip.
+            if let Some(commit) = object.ok().and_then(|object| object.commit().ok()) {
+                details.insert(id, detail(&commit, mailmap));
+            }
+        }
+        for run in &mut props.runs {
+            if run.detail.is_none()
+                && let Some(text) = details.get(&run.commit)
+            {
+                run.detail = Some(text.clone());
+            }
+        }
+        on_partial(props.clone());
+        // As in the walk above: cached objects resolve without handing the
+        // event loop back, so the tooltips would all land at once at the end.
+        yield_to_browser().await;
+    }
+}
+
+/// One commit's tooltip: cgit's `emit_suspect_detail`, kept behind the full
+/// hash because that is what this tooltip showed before.
+fn detail(commit: &Commit, mailmap: &Mailmap) -> String {
+    let (author_name, author_email) =
+        mapped_ident(commit.author_name(), commit.author_email(), mailmap);
+    let (committer_name, committer_email) =
+        mapped_ident(commit.committer_name(), commit.committer_email(), mailmap);
+    format!(
+        "{}\nauthor  {author_name} <{author_email}> {}\ncommitter  {committer_name} \
+         <{committer_email}> {}\n\n{}",
+        commit.id(),
+        format_datetime(commit.author_date()),
+        format_datetime(commit.commit_date()),
+        commit_first_line(commit.message()),
+    )
 }
 
 /// Classify the file the same way the blob view classifies one, minus the
@@ -153,6 +242,7 @@ fn runs(groups: &[BlameGroup]) -> Vec<BlameRun> {
         .map(|group| BlameRun {
             start: group.start,
             num_lines: group.num_lines,
+            commit: group.commit,
             short_hash: short_hash(group.commit),
             full_hash: group.commit.to_string(),
             commit_url: format!("#!/commit/{}", group.commit),
@@ -162,6 +252,7 @@ fn runs(groups: &[BlameGroup]) -> Vec<BlameRun> {
             prev_url: group
                 .parent
                 .map(|parent| blame_url(&group.path, Some(&parent.to_string()))),
+            detail: None,
         })
         .collect()
 }
@@ -327,7 +418,8 @@ fn blame_row(n: usize, line: &str, gutter: Gutter<'_>, link: BlameRowLink<'_>) -
             { match gutter {
                 Gutter::Start(run) => html! {
                     <td class="hashes" rowspan={run.num_lines.to_string()}>
-                        <a class="oid" href={run.commit_url.clone()} title={run.full_hash.clone()}>
+                        <a class="oid" href={run.commit_url.clone()}
+                           title={run.detail.clone().unwrap_or_else(|| run.full_hash.clone())}>
                             { run.short_hash.clone() }
                         </a>
                         if let Some(prev) = &run.prev_url {
@@ -368,10 +460,26 @@ mod tests {
         BlameRun {
             start,
             num_lines,
+            commit: ObjectId::from_hex(hash.as_bytes()).expect("test hash"),
             short_hash: hash[..8].to_string(),
             full_hash: hash.to_string(),
             commit_url: format!("#!/commit/{hash}"),
             prev_url: parent.map(|p| format!("#!/blame/src/lib.rs?h={p}")),
+            detail: None,
+        }
+    }
+
+    /// The same run once its commit object has been read — what the gutter
+    /// shows on hover after [`fill_details`] has been round.
+    fn detailed(run: BlameRun) -> BlameRun {
+        BlameRun {
+            detail: Some(format!(
+                "{}\nauthor  A U Thor <author@example.com> 2026-09-12 10:00:00 +00:00\n\
+                 committer  C O Mitter <committer@example.com> 2026-09-12 10:00:00 +00:00\n\
+                 \nFix the thing",
+                run.full_hash,
+            )),
+            ..run
         }
     }
 
@@ -494,6 +602,48 @@ mod tests {
         assert!(
             html.contains(r##"href="#!/blame/src/lib.rs#n2""##),
             "line link dropped the route: {html}"
+        );
+    }
+
+    /// Once the detail pass has been round, the gutter's tooltip is the
+    /// commit's author, committer, dates and subject rather than the bare hash.
+    #[test]
+    fn test_blame_html_hover_detail() {
+        insta::assert_snapshot!(render(props(
+            lines(3),
+            vec![detailed(run(0, 2, A, Some(B))), run(2, 1, B, None)],
+            false,
+        )));
+    }
+
+    /// A run whose commit object hasn't been read yet keeps the full hash as
+    /// its tooltip rather than losing one.
+    #[test]
+    fn test_blame_hover_detail_falls_back_to_the_hash() {
+        let html = render(props(lines(1), vec![run(0, 1, A, None)], false));
+        assert!(
+            html.contains(&format!(r#"title="{A}""#)),
+            "lost the hash tooltip: {html}"
+        );
+    }
+
+    /// Runs sharing a commit share its tooltip: the detail is built per
+    /// commit, not per run.
+    #[test]
+    fn test_blame_hover_detail_is_shared_between_a_commit_s_runs() {
+        let html = render(props(
+            lines(3),
+            vec![
+                detailed(run(0, 1, A, Some(B))),
+                run(1, 1, B, Some(ROOT)),
+                detailed(run(2, 1, A, Some(B))),
+            ],
+            false,
+        ));
+        assert_eq!(
+            html.matches("Fix the thing").count(),
+            2,
+            "both runs of the same commit should carry its detail: {html}"
         );
     }
 

@@ -1,0 +1,38 @@
+---
+source: src/render/blame.rs
+expression: "render(props(lines(3),\nvec![detailed(run(0, 2, A, Some(B))), run(2, 1, B, None)], false,))"
+---
+<div class="blob-info">blob: e69de29bb2d1d6434b8b29ae775ad8c2e48c5391 · <a href="#!/tree/src/lib.rs" class="blob-alt-view">source</a>
+</div>
+<table class="blame-table">
+<tbody>
+<tr id="n1" class="alt">
+<td rowspan="2" class="hashes">
+<a href="#!/commit/0123abcd0123abcd0123abcd0123abcd0123abcd" title="0123abcd0123abcd0123abcd0123abcd0123abcd
+author  A U Thor &lt;author@example.com&gt; 2026-09-12 10:00:00 +00:00
+committer  C O Mitter &lt;committer@example.com&gt; 2026-09-12 10:00:00 +00:00
+
+Fix the thing" class="oid">0123abcd</a> <a href="#!/blame/src/lib.rs?h=89abcdef89abcdef89abcdef89abcdef89abcdef" title="Blame the previous revision" class="blame-prev">^</a>
+</td>
+<td class="lno">
+<a href="#!/blame/src/lib.rs#n1" data-n="1">1</a>
+</td>
+<td class="code">line 1</td>
+</tr>
+<tr id="n2" class="alt">
+<td class="lno">
+<a href="#!/blame/src/lib.rs#n2" data-n="2">2</a>
+</td>
+<td class="code">line 2</td>
+</tr>
+<tr id="n3">
+<td rowspan="1" class="hashes">
+<a href="#!/commit/89abcdef89abcdef89abcdef89abcdef89abcdef" title="89abcdef89abcdef89abcdef89abcdef89abcdef" class="oid">89abcdef</a>
+</td>
+<td class="lno">
+<a href="#!/blame/src/lib.rs#n3" data-n="3">3</a>
+</td>
+<td class="code">line 3</td>
+</tr>
+</tbody>
+</table>
