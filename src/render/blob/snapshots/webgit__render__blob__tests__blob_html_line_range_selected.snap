@@ -1,8 +1,8 @@
 ---
-source: src/render/blob.rs
+source: src/render/blob/tests.rs
 expression: "render_selection(\"src/main.rs\", b\"one\\ntwo\\nthree\\nfour\\nfive\\n\", None, false,\nSome(LineRange { start: 2, end: 4 }),)"
 ---
-<div class="blob-info">blob: e69de29bb2d1d6434b8b29ae775ad8c2e48c5391 · <a href="#!/blame/src/main.rs" class="blame-link">blame</a>
+<div class="blob-info">blob: e69de29bb2d1d6434b8b29ae775ad8c2e48c5391 · <a href="#!/blame/src/main.rs#n2-n4" class="blame-link">blame</a>
 </div>
 <table class="blob-table">
 <tbody>

@@ -6,42 +6,42 @@ expression: "render(props(lines(5),\nvec![run(0, 2, A, Some(B)), run(2, 1, B, So
 </div>
 <table class="blame-table">
 <tbody>
-<tr class="alt">
+<tr id="n1" class="alt">
 <td rowspan="2" class="hashes">
 <a href="#!/commit/0123abcd0123abcd0123abcd0123abcd0123abcd" title="0123abcd0123abcd0123abcd0123abcd0123abcd" class="oid">0123abcd</a> <a href="#!/blame/src/lib.rs?h=89abcdef89abcdef89abcdef89abcdef89abcdef" title="Blame the previous revision" class="blame-prev">^</a>
 </td>
 <td class="lno">
-<a id="n1" href="#!/blame/src/lib.rs#n1">1</a>
+<a href="#!/blame/src/lib.rs#n1" data-n="1">1</a>
 </td>
 <td class="code">line 1</td>
 </tr>
-<tr class="alt">
+<tr id="n2" class="alt">
 <td class="lno">
-<a id="n2" href="#!/blame/src/lib.rs#n2">2</a>
+<a href="#!/blame/src/lib.rs#n2" data-n="2">2</a>
 </td>
 <td class="code">line 2</td>
 </tr>
-<tr>
+<tr id="n3">
 <td rowspan="1" class="hashes">
 <a href="#!/commit/89abcdef89abcdef89abcdef89abcdef89abcdef" title="89abcdef89abcdef89abcdef89abcdef89abcdef" class="oid">89abcdef</a> <a href="#!/blame/src/lib.rs?h=ffffffff11111111ffffffff11111111ffffffff" title="Blame the previous revision" class="blame-prev">^</a>
 </td>
 <td class="lno">
-<a id="n3" href="#!/blame/src/lib.rs#n3">3</a>
+<a href="#!/blame/src/lib.rs#n3" data-n="3">3</a>
 </td>
 <td class="code">line 3</td>
 </tr>
-<tr class="alt">
+<tr id="n4" class="alt">
 <td rowspan="2" class="hashes">
 <a href="#!/commit/ffffffff11111111ffffffff11111111ffffffff" title="ffffffff11111111ffffffff11111111ffffffff" class="oid">ffffffff</a>
 </td>
 <td class="lno">
-<a id="n4" href="#!/blame/src/lib.rs#n4">4</a>
+<a href="#!/blame/src/lib.rs#n4" data-n="4">4</a>
 </td>
 <td class="code">line 4</td>
 </tr>
-<tr class="alt">
+<tr id="n5" class="alt">
 <td class="lno">
-<a id="n5" href="#!/blame/src/lib.rs#n5">5</a>
+<a href="#!/blame/src/lib.rs#n5" data-n="5">5</a>
 </td>
 <td class="code">line 5</td>
 </tr>

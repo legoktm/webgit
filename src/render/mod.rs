@@ -2,8 +2,9 @@
 //!
 //! The blocks live here — [`refs_table`] and [`commits_table`] for the two
 //! table shapes every listing is made of, [`time`] for how a timestamp is
-//! shown, [`query`] for reading the repository into rows, and [`browser`] for
-//! the few places the render path touches the DOM directly.
+//! shown, [`query`] for reading the repository into rows, [`lines`] for the
+//! line selection the blob and blame views share, and [`browser`] for the few
+//! places the render path touches the DOM directly.
 
 pub(crate) mod about;
 pub(crate) mod blame;
@@ -23,6 +24,7 @@ pub(crate) mod tree;
 
 mod browser;
 mod commits_table;
+mod lines;
 mod query;
 mod refs_table;
 mod time;
@@ -35,6 +37,7 @@ pub(crate) use browser::{
 };
 pub(crate) use commits_table::{CommitRow, ExpandMsg, commits_table, short_hash};
 pub(crate) use gib_patch::is_binary;
+pub(crate) use lines::{anchored, line_click_handler, use_selection_scroll};
 pub(crate) use query::{
     apply_decorations, collect_refs, commit_for_entry, decoration_map, fetch_ref_rows,
     fetch_ref_rows_each, head_branch_name, mapped_ident, recent_commits, walk_commits_streamed,

@@ -505,7 +505,11 @@ fn render_loaded(view: &LoadedView, lines: Option<LineRange>) -> Html {
             p.lines = lines;
             html! { <BlobView ..p /> }
         }
-        LoadedView::Blame(p) => html! { <BlameView ..(**p).clone() /> },
+        LoadedView::Blame(p) => {
+            let mut p = (**p).clone();
+            p.lines = lines;
+            html! { <BlameView ..p /> }
+        }
         LoadedView::Snapshot(p) => html! { <SnapshotView ..p.clone() /> },
         LoadedView::NotFound(path) => html! {
             <p class="msg error">{ "Not found: " }<code>{ path.clone() }</code></p>

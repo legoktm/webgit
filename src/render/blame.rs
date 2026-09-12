@@ -1,7 +1,9 @@
 use crate::cache::CachingRepo;
 use crate::render::blob::{MAX_BLOB_BYTES, MAX_BLOB_LINES, count_lines, split_lines};
-use crate::render::{is_binary, short_hash, yield_to_browser};
-use crate::route::{blame_url, tree_url};
+use crate::render::{
+    anchored, is_binary, line_click_handler, short_hash, use_selection_scroll, yield_to_browser,
+};
+use crate::route::{LineRange, blame_url, tree_url};
 use gib::object::{Commit, ObjectId};
 use gib_blame::{BlameError, BlameGroup};
 use yew::prelude::*;
@@ -57,6 +59,9 @@ pub(crate) struct BlameProps {
     pub self_url: String,
     /// The plain blob view of the same file.
     pub source_url: String,
+    /// The lines the URL's `#n…` anchor selected, highlighted in the gutter and
+    /// scrolled to on arrival, exactly as in the blob view.
+    pub lines: Option<LineRange>,
 }
 
 /// Build the blame view's props, streaming partial results through
@@ -86,6 +91,7 @@ pub(crate) async fn build_blame(
         pending: false,
         self_url: blame_url(path, head),
         source_url: tree_url(path, head, false),
+        lines: None,
     };
     // A file with no lines to attribute — binary, or past the caps — is the
     // whole answer already; there is nothing for the walk to do.
@@ -163,6 +169,7 @@ fn runs(groups: &[BlameGroup]) -> Vec<BlameRun> {
 /// The Yew component used to mount the blame view into the DOM.
 #[function_component(BlameView)]
 pub(crate) fn blame_view_component(props: &BlameProps) -> Html {
+    use_selection_scroll(props.lines.map(|lines| lines.start));
     blame_view(props)
 }
 
@@ -183,20 +190,28 @@ pub(crate) fn blame_view(props: &BlameProps) -> Html {
         pending,
         self_url,
         source_url,
+        lines: selected,
     } = props;
+    let on_line_click = line_click_handler(self_url, *selected);
 
     html! {
         <>
             <div class="blob-info">
                 { "blob: " }{ blob_id }
                 { " · " }
-                <a class="blob-alt-view" href={source_url.clone()}>{ "source" }</a>
+                <a class="blob-alt-view" href={anchored(source_url, *selected)}>{ "source" }</a>
                 if *pending {
                     { " · " }<span class="blame-pending">{ "blaming\u{2026}" }</span>
                 }
             </div>
             { match content {
-                BlameContent::Lines(lines) => blame_table(lines, runs, self_url),
+                BlameContent::Lines(lines) => blame_table(BlameTable {
+                    lines,
+                    runs,
+                    self_url,
+                    selected: *selected,
+                    on_click: &on_line_click,
+                }),
                 BlameContent::Binary { bytes } => html! {
                     <p class="msg">{ format!("Binary file ({bytes} bytes).") }</p>
                 },
@@ -215,7 +230,25 @@ pub(crate) fn blame_view(props: &BlameProps) -> Html {
     }
 }
 
-fn blame_table(lines: &[String], runs: &[BlameRun], self_url: &str) -> Html {
+struct BlameTable<'a> {
+    lines: &'a [String],
+    runs: &'a [BlameRun],
+    /// The blame's own URL, which every line anchor is appended to.
+    self_url: &'a str,
+    /// The lines the URL selected, highlighted as they are in the blob view.
+    selected: Option<LineRange>,
+    /// The gutter's shared shift-click handler.
+    on_click: &'a Callback<MouseEvent>,
+}
+
+fn blame_table(table: BlameTable<'_>) -> Html {
+    let BlameTable {
+        lines,
+        runs,
+        self_url,
+        selected,
+        on_click,
+    } = table;
     // Runs arrive in file order and cover a prefix of it, so walking the two
     // together is a single pass: `next` is the run that may start here, and
     // `open` how many more lines the current one still covers.
@@ -239,7 +272,18 @@ fn blame_table(lines: &[String], runs: &[BlameRun], self_url: &str) -> Html {
         };
         let shaded = open > 0 && shade;
         open = open.saturating_sub(1);
-        rows.push(blame_row(i + 1, line, gutter, self_url, shaded));
+        let n = i + 1;
+        rows.push(blame_row(
+            n,
+            line,
+            gutter,
+            BlameRowLink {
+                selected: selected.is_some_and(|s| s.contains(n)),
+                shade: shaded,
+                self_url,
+                on_click,
+            },
+        ));
     }
     html! {
         <table class="blame-table">
@@ -256,13 +300,30 @@ enum Gutter<'a> {
     Unattributed,
 }
 
+struct BlameRowLink<'a> {
+    /// Whether this line falls inside the selected range.
+    selected: bool,
+    /// Whether this line belongs to a shaded run.
+    shade: bool,
+    /// The blame's own URL, which the line anchor is appended to.
+    self_url: &'a str,
+    /// The gutter's shared shift-click handler.
+    on_click: &'a Callback<MouseEvent>,
+}
+
 /// One line: its run's commit in the gutter (only on the run's first line,
 /// spanning the rest), its number, and its text.
-fn blame_row(n: usize, line: &str, gutter: Gutter<'_>, self_url: &str, shade: bool) -> Html {
-    let href = format!("{self_url}#n{n}");
+fn blame_row(n: usize, line: &str, gutter: Gutter<'_>, link: BlameRowLink<'_>) -> Html {
+    let BlameRowLink {
+        selected,
+        shade,
+        self_url,
+        on_click,
+    } = link;
+    let href = format!("{self_url}{}", LineRange::single(n).anchor());
     let id = format!("n{n}");
     html! {
-        <tr class={classes!(shade.then_some("alt"))}>
+        <tr id={id} class={classes!(shade.then_some("alt"), selected.then_some("hl"))}>
             { match gutter {
                 Gutter::Start(run) => html! {
                     <td class="hashes" rowspan={run.num_lines.to_string()}>
@@ -280,7 +341,7 @@ fn blame_row(n: usize, line: &str, gutter: Gutter<'_>, self_url: &str, shade: bo
                 Gutter::Unattributed => html! { <td class="hashes"></td> },
             } }
             <td class="lno">
-                <a id={id} href={href}>{ n }</a>
+                <a href={href} data-n={n.to_string()} onclick={on_click.clone()}>{ n }</a>
             </td>
             <td class="code">{ line }</td>
         </tr>
@@ -319,6 +380,15 @@ mod tests {
     const ROOT: &str = "ffffffff11111111ffffffff11111111ffffffff";
 
     fn props(content: BlameContent, runs: Vec<BlameRun>, pending: bool) -> BlameProps {
+        selected_props(content, runs, pending, None)
+    }
+
+    fn selected_props(
+        content: BlameContent,
+        runs: Vec<BlameRun>,
+        pending: bool,
+        lines: Option<LineRange>,
+    ) -> BlameProps {
         BlameProps {
             blob_id: "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391".to_string(),
             content,
@@ -326,6 +396,7 @@ mod tests {
             pending,
             self_url: "#!/blame/src/lib.rs".to_string(),
             source_url: "#!/tree/src/lib.rs".to_string(),
+            lines,
         }
     }
 
@@ -366,6 +437,64 @@ mod tests {
     #[test]
     fn test_blame_html_nothing_attributed_yet() {
         insta::assert_snapshot!(render(props(lines(2), Vec::new(), true)));
+    }
+
+    #[test]
+    fn test_blame_html_selection() {
+        insta::assert_snapshot!(render(selected_props(
+            lines(4),
+            vec![run(0, 2, A, Some(B)), run(2, 2, B, None)],
+            false,
+            Some(LineRange { start: 2, end: 3 }),
+        )));
+    }
+
+    /// The selection is what the URL named, not something clamped to the file:
+    /// a stale `#n900` on a short file highlights nothing rather than dragging
+    /// the mark onto an arbitrary row.
+    #[test]
+    fn test_blame_selection_past_end_of_file() {
+        let html = render(selected_props(
+            lines(3),
+            vec![run(0, 3, A, None)],
+            false,
+            Some(LineRange {
+                start: 900,
+                end: 902,
+            }),
+        ));
+        assert!(
+            !html.contains(r#"class="hl""#),
+            "selected a row that doesn't exist: {html}"
+        );
+    }
+
+    /// Crossing to the source view keeps the line being read: a reader who
+    /// followed "blame" from line 3 and goes back should land on line 3, not at
+    /// the top of the file.
+    #[test]
+    fn test_blame_source_link_carries_the_selection() {
+        let html = render(selected_props(
+            lines(3),
+            Vec::new(),
+            false,
+            Some(LineRange::single(3)),
+        ));
+        assert!(
+            html.contains(r##"href="#!/tree/src/lib.rs#n3""##),
+            "source link dropped the selection: {html}"
+        );
+    }
+
+    /// Every line's link carries the blame's whole route. A bare `#n2` would
+    /// name no route at all and land the reader on the summary page.
+    #[test]
+    fn test_blame_line_links_carry_the_route() {
+        let html = render(props(lines(2), Vec::new(), true));
+        assert!(
+            html.contains(r##"href="#!/blame/src/lib.rs#n2""##),
+            "line link dropped the route: {html}"
+        );
     }
 
     #[test]

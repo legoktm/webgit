@@ -6,19 +6,19 @@ expression: "render(props(lines(2), Vec::new(), true))"
 </div>
 <table class="blame-table">
 <tbody>
-<tr>
+<tr id="n1">
 <td class="hashes">
 </td>
 <td class="lno">
-<a id="n1" href="#!/blame/src/lib.rs#n1">1</a>
+<a href="#!/blame/src/lib.rs#n1" data-n="1">1</a>
 </td>
 <td class="code">line 1</td>
 </tr>
-<tr>
+<tr id="n2">
 <td class="hashes">
 </td>
 <td class="lno">
-<a id="n2" href="#!/blame/src/lib.rs#n2">2</a>
+<a href="#!/blame/src/lib.rs#n2" data-n="2">2</a>
 </td>
 <td class="code">line 2</td>
 </tr>

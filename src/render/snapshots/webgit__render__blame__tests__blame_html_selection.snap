@@ -1,8 +1,8 @@
 ---
 source: src/render/blame.rs
-expression: "render(props(lines(4), vec![run(0, 2, A, Some(B))], true,))"
+expression: "render(selected_props(lines(4),\nvec![run(0, 2, A, Some(B)), run(2, 2, B, None)], false,\nSome(LineRange { start: 2, end: 3 }),))"
 ---
-<div class="blob-info">blob: e69de29bb2d1d6434b8b29ae775ad8c2e48c5391 · <a href="#!/tree/src/lib.rs" class="blob-alt-view">source</a> · <span class="blame-pending">blaming…</span>
+<div class="blob-info">blob: e69de29bb2d1d6434b8b29ae775ad8c2e48c5391 · <a href="#!/tree/src/lib.rs#n2-n3" class="blob-alt-view">source</a>
 </div>
 <table class="blame-table">
 <tbody>
@@ -15,14 +15,15 @@ expression: "render(props(lines(4), vec![run(0, 2, A, Some(B))], true,))"
 </td>
 <td class="code">line 1</td>
 </tr>
-<tr id="n2" class="alt">
+<tr id="n2" class="alt hl">
 <td class="lno">
 <a href="#!/blame/src/lib.rs#n2" data-n="2">2</a>
 </td>
 <td class="code">line 2</td>
 </tr>
-<tr id="n3">
-<td class="hashes">
+<tr id="n3" class="hl">
+<td rowspan="2" class="hashes">
+<a href="#!/commit/89abcdef89abcdef89abcdef89abcdef89abcdef" title="89abcdef89abcdef89abcdef89abcdef89abcdef" class="oid">89abcdef</a>
 </td>
 <td class="lno">
 <a href="#!/blame/src/lib.rs#n3" data-n="3">3</a>
@@ -30,8 +31,6 @@ expression: "render(props(lines(4), vec![run(0, 2, A, Some(B))], true,))"
 <td class="code">line 3</td>
 </tr>
 <tr id="n4">
-<td class="hashes">
-</td>
 <td class="lno">
 <a href="#!/blame/src/lib.rs#n4" data-n="4">4</a>
 </td>

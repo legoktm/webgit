@@ -392,6 +392,13 @@ code {
     background: var(--bg-alt);
 }
 
+/* The selected lines */
+.blame-table tr.hl td,
+.blame-table tr.hl td.lno a {
+    background: var(--accent-soft);
+    color: var(--link);
+}
+
 /* While the walk is still running. */
 .blame-pending {
     color: var(--text-dim);

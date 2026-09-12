@@ -1,11 +1,12 @@
-//! The blob view's markup, and the two browser effects around it: minting an
-//! object URL over the bytes, and scrolling a line selection into view.
+//! The blob view's markup, and the browser effect around it: minting an object
+//! URL over the bytes. The line selection it shares with the blame view —
+//! scrolling to the selection and extending it by shift-click — lives in
+//! [`crate::render::lines`].
 
 use super::{BlobContent, BlobProps, MAX_BLOB_BYTES, MAX_BLOB_LINES};
 use crate::render::markdown::MarkdownFrame;
-use crate::render::use_object_url;
+use crate::render::{anchored, line_click_handler, use_object_url, use_selection_scroll};
 use crate::route::LineRange;
-use wasm_bindgen::JsCast;
 use yew::prelude::*;
 
 /// The Yew component used to mount the blob view into the DOM.
@@ -19,75 +20,6 @@ pub(crate) fn blob_view_component(props: &BlobProps) -> Html {
     let url = use_object_url(props.content.mime(), &props.data);
     use_selection_scroll(props.lines.map(|lines| lines.start));
     blob_view(props, &url)
-}
-
-/// Bring the selected lines into view once they are on screen.
-///
-/// The browser would do this itself for a real fragment, but a line anchor is a
-/// suffix inside the routing fragment rather than a fragment of its own, so no
-/// element's id ever matches `location.hash` and native navigation has nothing
-/// to act on. The rows also arrive after the route resolves, which is late
-/// enough that even a matching id would have been missed.
-///
-/// Only the range's first line is scrolled to, and only when *it* changes —
-/// which is also why the effect keys on the start rather than on the whole
-/// range. The start is the line the reader asked for, and a range taller than
-/// the viewport should be positioned by its top rather than centred on nothing
-/// in particular; keying on it means extending a selection downwards leaves the
-/// page where it is, since a shift-click grows the range without moving the end
-/// the reader anchored it to.
-#[hook]
-fn use_selection_scroll(start: Option<usize>) {
-    use_effect_with(start, |start| {
-        if let Some(start) = *start
-            && let Some(document) = web_sys::window().and_then(|window| window.document())
-            && let Some(target) = document.get_element_by_id(&format!("n{start}"))
-        {
-            target.scroll_into_view();
-        }
-        || ()
-    });
-}
-
-/// The click handler shared by every line number in the gutter.
-///
-/// One callback for the whole table rather than one per row: a blob may run to
-/// [`MAX_BLOB_LINES`] rows, and a closure per row would allocate 20 000 of them
-/// to serve the one click that ever fires. The line number comes back off the
-/// clicked element's `data-n` instead of being captured.
-///
-/// A plain click is left to the browser — the `href` already names the right
-/// URL. Only a shift-click is intercepted, to extend the current selection into
-/// a range the way every other code viewer does; with nothing selected yet it
-/// falls through to selecting the clicked line alone.
-fn line_click_handler(source_url: &str, lines: Option<LineRange>) -> Callback<MouseEvent> {
-    let source_url = source_url.to_string();
-    Callback::from(move |event: MouseEvent| {
-        if !event.shift_key() {
-            return;
-        }
-        let Some(n) = event
-            .target()
-            .and_then(|target| target.dyn_into::<web_sys::Element>().ok())
-            .and_then(|element| element.get_attribute("data-n"))
-            .and_then(|n| n.parse::<usize>().ok())
-        else {
-            return;
-        };
-        // Extend from the anchor the reader last set, not from whichever end of
-        // the range is nearer: shift-clicking twice should be able to shrink a
-        // range as well as grow it.
-        let range = match lines {
-            Some(lines) => LineRange::spanning(lines.start, n),
-            None => LineRange::single(n),
-        };
-        event.prevent_default();
-        if let Some(window) = web_sys::window() {
-            let _ = window
-                .location()
-                .set_hash(&format!("{source_url}{}", range.anchor()));
-        }
-    })
 }
 
 /// The blob view's markup. `url` is an object URL over `props.data`, or empty
@@ -123,7 +55,7 @@ pub(crate) fn blob_view(props: &BlobProps, url: &str) -> Html {
                 }
                 if let Some(blame) = blame_url {
                     { " · " }
-                    <a class="blame-link" href={blame.clone()}>{ "blame" }</a>
+                    <a class="blame-link" href={anchored(blame, *selected)}>{ "blame" }</a>
                 }
             </div>
             { match content {
