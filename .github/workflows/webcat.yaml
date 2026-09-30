@@ -156,6 +156,10 @@ jobs:
           cp webcat/enrollment.json webcat/manifest.json webcat/bundle.json \
             dist/.well-known/webcat/
 
+      - name: Write .htaccess with the WEBCAT version header
+        if: startsWith(github.ref, 'refs/tags/')
+        run: printf 'Header set X-Webcat-Version "%s"\n' "$VERSION" > dist/.htaccess
+
       - name: Create the release archive
         if: startsWith(github.ref, 'refs/tags/')
         run: tar -czf "webgit-${VERSION}.tar.gz" -C dist .
