@@ -1,4 +1,10 @@
-## 0.2.1 / 2026-10-29
+## 0.2.2 / 2026-09-29
+
+Internal/architecture:
+* Set X-Webcat-Version header via .htaccess
+* Bump Rust to 1.98.1
+
+## 0.2.1 / 2026-09-29
 
 * Support downloading snapshots in Git bundle format
 * Allow importing bundles to prefill IndexedDB
