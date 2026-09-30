@@ -1,3 +1,18 @@
+## 0.2.1 / 2026-10-29
+
+* Support downloading snapshots in Git bundle format
+* Allow importing bundles to prefill IndexedDB
+* Set max-width on rendered text
+* Re-enable SRI now that webcat 3.0.0 has been released
+
+Blame view:
+* Support selecting lines
+* Load commit details
+
+Compatibility:
+* Support parsing many Forgejo URLs
+* Support parsing many cgit URLs
+
 ## 0.2.0 / 2026-08-24
 
 * Make README the default view; render markdown files
