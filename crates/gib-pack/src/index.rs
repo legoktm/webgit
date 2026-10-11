@@ -98,28 +98,76 @@ async fn find_object_idx<F: File>(
     id: ObjectId,
 ) -> PackResult<Option<u32>> {
     let (lower_bound, upper_bound) = fanout_bucket(fanout, id.bytes()[0]);
+    let obj_idx =
+        partition_bucket(idx_file, lower_bound, upper_bound, &id, |entry| entry < &id).await?;
+    // The partition point is the entry the search last found not to sort
+    // before `id`, so its page is already cached and this read is free.
+    if obj_idx < upper_bound && read_object_id(idx_file, obj_idx).await? == id {
+        Ok(Some(obj_idx))
+    } else {
+        Ok(None)
+    }
+}
 
-    let mut buf = [0u8; 20];
-    let mut lower_idx = lower_bound; // inclusive
-    let mut upper_idx = upper_bound; // exclusive
-    let mut obj_idx: Option<u32> = None;
-    while obj_idx.is_none() && lower_idx < upper_idx {
-        let mid_idx: u32 = u32::midpoint(lower_idx, upper_idx);
-        let mid_offset: Offset = IDS_OFFSET + u64::from(mid_idx) * 20;
-        idx_file.read_segment(mid_offset, &mut buf).await?;
-        match buf.cmp(id.bytes()) {
-            Ordering::Equal => {
-                obj_idx = Some(mid_idx);
-            }
-            Ordering::Less => {
-                lower_idx = mid_idx + 1;
-            }
-            Ordering::Greater => {
-                upper_idx = mid_idx;
-            }
+/// How many probes of a search guess the target's position from its value
+/// before falling back to halving the range.
+///
+/// Object IDs are hashes, so they are spread evenly across their fanout bucket
+/// and an entry's position is close to proportional to its value. Two guesses
+/// almost always land on the 4 KiB page holding the target, where halving
+/// takes one probe — one network round trip, when the index is fetched over
+/// HTTP — per halving until the range fits in a page: around eight for a
+/// bucket of a ten-million-object pack. The cap keeps a badly skewed bucket
+/// (only a crafted pack could have one) to a binary search's worst case plus
+/// a few probes.
+const INTERPOLATED_PROBES: u32 = 4;
+
+/// The 64 bits of an ID after its first byte, which is the same for every
+/// entry in a fanout bucket, as the position the search interpolates on.
+fn position_key(id: &ObjectId) -> u128 {
+    u128::from(u64::from_be_bytes(id.bytes()[1..9].try_into().unwrap()))
+}
+
+/// The first entry in `[lower, upper)` that `before` is false for, given that
+/// it is true for a run of entries and then false for the rest.
+///
+/// `target` is where that change happens, for guessing which entry to read
+/// next: git's `oid_pos` takes the same guess, though only for its first
+/// probe, since its table is in memory and the rest of the search is free.
+/// Here every probe that misses the page cache is a fetch, so the search keeps
+/// guessing, from the two closest entries it has read so far.
+async fn partition_bucket<F: File>(
+    idx_file: &mut F,
+    lower: u32,
+    upper: u32,
+    target: &ObjectId,
+    before: impl Fn(&ObjectId) -> bool,
+) -> PackResult<u32> {
+    let target_key = position_key(target);
+    let (mut lower_idx, mut upper_idx) = (lower, upper);
+    // The keys just outside the range still unsearched: the edges of the
+    // bucket's key space until an entry is read to narrow them.
+    let (mut lower_key, mut upper_key) = (0u128, 1u128 << 64);
+    let mut probes = 0;
+    while lower_idx < upper_idx {
+        let mid_idx = if probes < INTERPOLATED_PROBES && lower_key < upper_key {
+            let span = u128::from(upper_idx - lower_idx);
+            let guess = span * target_key.saturating_sub(lower_key) / (upper_key - lower_key);
+            lower_idx + u32::try_from(guess.min(span - 1)).unwrap()
+        } else {
+            u32::midpoint(lower_idx, upper_idx)
+        };
+        probes += 1;
+        let entry = read_object_id(idx_file, mid_idx).await?;
+        if before(&entry) {
+            lower_idx = mid_idx + 1;
+            lower_key = position_key(&entry);
+        } else {
+            upper_idx = mid_idx;
+            upper_key = position_key(&entry);
         }
     }
-    Ok(obj_idx)
+    Ok(lower_idx)
 }
 
 /// The `[lower, upper)` range of index entries whose object ID starts with
@@ -144,12 +192,11 @@ async fn read_object_id<F: File>(idx_file: &mut F, obj_idx: u32) -> PackResult<O
 
 /// Expand an abbreviated object ID against one pack's index.
 ///
-/// This is the same binary search as [`find_object_idx`], except that the
-/// comparison only looks at the abbreviation's nibbles (so a whole run of IDs
-/// compares equal) and the search deliberately never stops early: it converges
-/// on the *first* ID that could match. Two more reads settle the outcome — the
-/// candidate itself, and its successor, which matching too means the
-/// abbreviation names more than one object.
+/// This is the same search as [`find_object_idx`], except that the comparison
+/// only looks at the abbreviation's nibbles (so a whole run of IDs compares
+/// equal): it converges on the *first* ID that could match. Two more reads
+/// settle the outcome — the candidate itself, and its successor, which
+/// matching too means the abbreviation names more than one object.
 ///
 /// Only the fanout bucket for the abbreviation's first byte is searched, which
 /// is sound because an abbreviation is at least four characters long, so every
@@ -162,16 +209,14 @@ pub async fn find_prefix_in_pack_index<F: File>(
     let (lower_bound, upper_bound) = fanout_bucket(fanout, prefix.first_byte());
 
     // Partition point: the first entry that does not sort before the prefix.
-    let mut lower_idx = lower_bound;
-    let mut upper_idx = upper_bound;
-    while lower_idx < upper_idx {
-        let mid_idx = u32::midpoint(lower_idx, upper_idx);
-        if prefix.compare(&read_object_id(idx_file, mid_idx).await?) == Ordering::Less {
-            lower_idx = mid_idx + 1;
-        } else {
-            upper_idx = mid_idx;
-        }
-    }
+    let lower_idx = partition_bucket(
+        idx_file,
+        lower_bound,
+        upper_bound,
+        &prefix.first(),
+        |entry| prefix.compare(entry) == Ordering::Less,
+    )
+    .await?;
 
     if lower_idx >= upper_bound {
         return Ok(PrefixResolution::NotFound);
@@ -325,7 +370,7 @@ mod tests {
     fn make_idx(ids: &[ObjectId]) -> MemIdx {
         let mut data = vec![0xff, b't', b'O', b'c', 0, 0, 0, 2];
         for bucket in 0..=255u8 {
-            let cumulative = ids.iter().filter(|id| id.bytes()[0] <= bucket).count();
+            let cumulative = ids.partition_point(|id| id.bytes()[0] <= bucket);
             data.extend_from_slice(&u32::try_from(cumulative).unwrap().to_be_bytes());
         }
         for id in ids {
@@ -488,5 +533,147 @@ mod tests {
         ))
         .unwrap();
         assert!(pack_offset.0 >= 0x8000_0000);
+    }
+
+    /// `n` random object IDs, sorted as an index stores them.
+    fn random_ids(n: usize, seed: u64) -> Vec<ObjectId> {
+        let mut rng = Pcg32::seed_from_u64(seed);
+        let mut ids: Vec<ObjectId> = (0..n)
+            .map(|_| {
+                let mut bytes = [0u8; 20];
+                rng.fill_bytes(&mut bytes);
+                ObjectId::from_bytes(bytes)
+            })
+            .collect();
+        ids.sort();
+        ids
+    }
+
+    /// An ID that is (almost certainly) not in `ids` but sorts among them.
+    fn absent_near(id: &ObjectId) -> ObjectId {
+        let mut bytes = *id.bytes();
+        bytes[19] ^= 0x01;
+        ObjectId::from_bytes(bytes)
+    }
+
+    #[test]
+    fn find_object_idx_agrees_with_a_sorted_search() {
+        let ids = random_ids(20_000, 1);
+        let mut idx = make_idx(&ids);
+        let fanout = block_on(FanoutTable::load(&mut idx)).unwrap();
+        for (i, id) in ids.iter().enumerate().step_by(37) {
+            let found = block_on(find_object_idx(&fanout, &mut idx, *id)).unwrap();
+            assert_eq!(found, Some(u32::try_from(i).unwrap()), "{id}");
+            let absent = absent_near(id);
+            if ids.binary_search(&absent).is_err() {
+                let found = block_on(find_object_idx(&fanout, &mut idx, absent)).unwrap();
+                assert_eq!(found, None, "{absent}");
+            }
+        }
+        // The very ends of the key space, which interpolation clamps toward.
+        for id in [
+            ObjectId::from_bytes([0; 20]),
+            ObjectId::from_bytes([0xff; 20]),
+        ] {
+            let expected = ids
+                .binary_search(&id)
+                .ok()
+                .map(|i| u32::try_from(i).unwrap());
+            assert_eq!(
+                block_on(find_object_idx(&fanout, &mut idx, id)).unwrap(),
+                expected
+            );
+        }
+    }
+
+    /// A badly skewed bucket, where every ID crowds into one end of the key
+    /// space, still finds everything: interpolation guesses wrong, and the
+    /// search falls back to halving.
+    #[test]
+    fn find_object_idx_survives_a_skewed_bucket() {
+        let mut ids: Vec<ObjectId> = (0..5_000u32)
+            .map(|i| {
+                let mut bytes = [0u8; 20];
+                bytes[0] = 0x42;
+                bytes[16..20].copy_from_slice(&i.to_be_bytes());
+                ObjectId::from_bytes(bytes)
+            })
+            .collect();
+        ids.push(ObjectId::from_bytes([0x42; 20]));
+        let mut idx = make_idx(&ids);
+        let fanout = block_on(FanoutTable::load(&mut idx)).unwrap();
+        for (i, id) in ids.iter().enumerate().step_by(11) {
+            let found = block_on(find_object_idx(&fanout, &mut idx, *id)).unwrap();
+            assert_eq!(found, Some(u32::try_from(i).unwrap()), "{id}");
+        }
+    }
+
+    /// Counts the reads a [`CachingPageReader`] passes through, which is the
+    /// number of requests a cold lookup would cost over HTTP.
+    struct CountingIdx<'a> {
+        idx: &'a mut MemIdx,
+        reads: &'a std::cell::Cell<usize>,
+    }
+
+    impl File for CountingIdx<'_> {
+        async fn read_all(&mut self) -> Result<Vec<u8>, gib_fs::FileSystemError> {
+            self.idx.read_all().await
+        }
+
+        async fn read_segment(
+            &mut self,
+            offset: Offset,
+            dest: &mut [u8],
+        ) -> Result<usize, gib_fs::FileSystemError> {
+            self.reads.set(self.reads.get() + 1);
+            self.idx.read_segment(offset, dest).await
+        }
+    }
+
+    /// The distinct 4 KiB pages a plain binary search over the bucket touches,
+    /// as the reads the old search cost.
+    fn binary_search_pages(fanout: &FanoutTable, ids: &[ObjectId], id: &ObjectId) -> usize {
+        let (mut lo, mut hi) = fanout_bucket(fanout, id.bytes()[0]);
+        let mut pages = std::collections::BTreeSet::new();
+        while lo < hi {
+            let mid = u32::midpoint(lo, hi);
+            pages.insert((IDS_OFFSET + u64::from(mid) * 20).0 / 4096);
+            match ids[mid as usize].cmp(id) {
+                Ordering::Equal => break,
+                Ordering::Less => lo = mid + 1,
+                Ordering::Greater => hi = mid,
+            }
+        }
+        pages.len()
+    }
+
+    /// The point of interpolating: on a large index, a cold lookup costs one
+    /// or two fetches rather than one per halving.
+    #[test]
+    fn a_cold_lookup_in_a_large_index_reads_few_pages() {
+        let ids = random_ids(1_000_000, 2);
+        let mut idx = make_idx(&ids);
+        let fanout = block_on(FanoutTable::load(&mut idx)).unwrap();
+        let (mut interpolated, mut halved, mut lookups) = (0, 0, 0);
+        for id in ids.iter().step_by(4_999) {
+            let reads = std::cell::Cell::new(0);
+            let mut reader = gib_fs::CachingPageReader::new(CountingIdx {
+                idx: &mut idx,
+                reads: &reads,
+            });
+            let found = block_on(find_object_idx(&fanout, &mut reader, *id)).unwrap();
+            assert!(found.is_some());
+            interpolated += reads.get();
+            halved += binary_search_pages(&fanout, &ids, id);
+            lookups += 1;
+        }
+        let (interpolated, halved) = (
+            interpolated as f64 / f64::from(lookups),
+            halved as f64 / f64::from(lookups),
+        );
+        assert!(
+            interpolated <= 2.0 && interpolated * 2.0 < halved,
+            "{interpolated} reads per lookup interpolating, {halved} halving"
+        );
     }
 }
