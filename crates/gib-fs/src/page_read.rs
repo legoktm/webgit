@@ -1,10 +1,8 @@
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::cmp::{max, min};
-use std::future::Future;
-use std::pin::Pin;
 use std::rc::Rc;
-use std::task::{Context, Poll, Waker};
 
+use crate::completion::Completion;
 use crate::lru::ByteLru;
 use crate::{File, FileSystemError, Offset};
 
@@ -33,7 +31,7 @@ struct PageCacheState {
 struct InFlight {
     start: Offset,
     end: Offset,
-    done: Rc<FetchDone>,
+    done: Completion,
 }
 
 impl PageCache {
@@ -56,34 +54,12 @@ pub fn new_page_cache() -> PageCache {
     PageCache::with_pages(ByteLru::unbounded())
 }
 
-/// Set once the fetch it belongs to has finished, successfully or not, and
-/// wakes everyone who waited on it.
-#[derive(Default)]
-struct FetchDone {
-    done: Cell<bool>,
-    wakers: RefCell<Vec<Waker>>,
-}
-
-struct WaitForFetch(Rc<FetchDone>);
-
-impl Future for WaitForFetch {
-    type Output = ();
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-        if self.0.done.get() {
-            return Poll::Ready(());
-        }
-        self.0.wakers.borrow_mut().push(cx.waker().clone());
-        Poll::Pending
-    }
-}
-
 /// Unregisters a fetch and wakes its waiters when dropped, which covers the
 /// fetch finishing, failing, and being cancelled alike: a waiter just looks in
 /// the cache again and fetches whatever is still missing itself.
 struct InFlightGuard {
     cache: PageCache,
-    done: Rc<FetchDone>,
+    done: Completion,
 }
 
 impl Drop for InFlightGuard {
@@ -92,11 +68,8 @@ impl Drop for InFlightGuard {
             .0
             .borrow_mut()
             .in_flight
-            .retain(|f| !Rc::ptr_eq(&f.done, &self.done));
-        self.done.done.set(true);
-        for waker in self.done.wakers.take() {
-            waker.wake();
-        }
+            .retain(|f| !f.done.ptr_eq(&self.done));
+        self.done.complete();
     }
 }
 
@@ -104,7 +77,7 @@ impl Drop for InFlightGuard {
 /// missing page.
 enum NextStep {
     Done,
-    Wait(Rc<FetchDone>),
+    Wait(Completion),
     Fetch {
         start: Offset,
         end: Offset,
@@ -200,7 +173,7 @@ impl<F: File> CachingPageReader<F> {
         {
             end = end + PAGE_SIZE_U64;
         }
-        let done = Rc::new(FetchDone::default());
+        let done = Completion::new();
         state.in_flight.push(InFlight {
             start,
             end,
@@ -232,7 +205,7 @@ impl<F: File> CachingPageReader<F> {
         loop {
             match self.next_step(cursor, last_page) {
                 NextStep::Done => return Ok(()),
-                NextStep::Wait(done) => WaitForFetch(done).await,
+                NextStep::Wait(done) => done.wait().await,
                 NextStep::Fetch { start, end, guard } => {
                     let span_len = usize::try_from(end.0 - start.0).unwrap();
                     let mut buf = vec![0u8; span_len];
@@ -300,7 +273,10 @@ mod tests {
     use futures::executor::block_on;
 
     use super::*;
+    use std::future::Future;
     use std::io::{Cursor, Read, Seek, SeekFrom};
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
 
     impl<T: AsRef<[u8]>> File for Cursor<T> {
         async fn read_all(&mut self) -> Result<Vec<u8>, FileSystemError> {

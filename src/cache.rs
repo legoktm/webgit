@@ -27,6 +27,7 @@ use gib::Repo;
 use gib::commit_graph::bloom::BloomSettings;
 use gib::diff::TreeDiff;
 use gib::error::{Error as GitError, GResult};
+use gib::file_system::{ByteLru, Completion};
 use gib::notes::{default_notes_ref, lookup_note};
 use gib::object::{Commit, Object, ObjectId, ObjectIdPrefix, PrefixResolution, RawObject, Tree};
 use gib::prelude::*;
@@ -47,6 +48,9 @@ const STORE_TAG_REFS: &str = "tag_refs";
 /// regenerating its commit-graph (only genuinely new commits are ever missing).
 const STORE_GRAPH: &str = "graph";
 
+/// The most parsed objects, by body size, kept in memory for the session.
+const MEMORY_CACHE_MAX: usize = 16 * 1024 * 1024;
+
 // ---------------------------------------------------------------------------
 // CachingRepo
 // ---------------------------------------------------------------------------
@@ -54,6 +58,13 @@ const STORE_GRAPH: &str = "graph";
 pub(crate) struct CachingRepo {
     inner: Repo<HttpFilesystem>,
     db: Option<IdbDatabase>,
+    /// Objects already read this session, in front of IndexedDB. History and
+    /// blame walks re-read the same trees for commit after commit; from here
+    /// that costs a copy rather than a transaction and a parse.
+    memory: RefCell<ByteLru<ObjectId, Object>>,
+    /// Lookups under way, so a concurrent lookup of the same object waits for
+    /// that one rather than reading it a second time.
+    in_flight: RefCell<BTreeMap<ObjectId, Completion>>,
     repo_url: String,
     /// Refs resolved once per session; navigation reuses the same snapshot.
     all_refs: RefCell<Option<Rc<BTreeMap<RefName, RefEntry>>>>,
@@ -89,6 +100,8 @@ impl CachingRepo {
         Self {
             inner,
             db,
+            memory: RefCell::new(ByteLru::new(MEMORY_CACHE_MAX)),
+            in_flight: RefCell::new(BTreeMap::new()),
             repo_url,
             all_refs: RefCell::new(None),
             graph_settings,
@@ -114,6 +127,29 @@ impl CachingRepo {
     // --- Core cached lookup ---------------------------------------------------
 
     pub(crate) async fn lookup_object(&self, id: ObjectId) -> GResult<Object> {
+        loop {
+            if let Some(object) = self.memory.borrow_mut().get(&id) {
+                crate::fetch::record_cache_hit(object_size(object) as u64);
+                return Ok(object.clone());
+            }
+            // Bind first: the borrow must end before the await below.
+            let pending = self.in_flight.borrow().get(&id).cloned();
+            let Some(pending) = pending else { break };
+            // If that lookup failed, or kept nothing, this one finds the
+            // memory cache still empty and goes on to read the object itself.
+            pending.wait().await;
+        }
+        let _in_flight = InFlightLookup::start(&self.in_flight, id);
+        let object = self.read_object(id).await?;
+        self.memory
+            .borrow_mut()
+            .insert(id, object.clone(), object_size(&object));
+        Ok(object)
+    }
+
+    /// Read an object from IndexedDB, or else the network, caching what the
+    /// network returns.
+    async fn read_object(&self, id: ObjectId) -> GResult<Object> {
         if let Some(raw) = self.idb_get(id).await {
             crate::fetch::record_cache_hit(raw.body.len() as u64);
             return Ok(Object::from_raw(id, raw)?);
@@ -244,6 +280,7 @@ impl CachingRepo {
     /// per-repo object cache to clear selectively.
     pub(crate) async fn clear_cache(&self) {
         clear_cached_objects(self.db.as_ref()).await;
+        *self.memory.borrow_mut() = ByteLru::new(MEMORY_CACHE_MAX);
         // Drop the in-memory graph so the next walk re-seeds from the (now empty)
         // store, bulk-loading the file again.
         self.graph.borrow_mut().clear();
@@ -288,6 +325,44 @@ impl CachingRepo {
             return;
         };
         store.put(&object_record(id, raw)).ok();
+    }
+}
+
+/// What an object costs the memory cache: the size of its body, which is
+/// what a hit reports to the fetch stats too.
+fn object_size(object: &Object) -> usize {
+    match object {
+        Object::Commit(c) => c.body().len(),
+        Object::Tree(t) => t.body().len(),
+        Object::Tag(t) => t.body().len(),
+        Object::Blob(b) => b.data().len(),
+    }
+}
+
+/// Registers a lookup as under way for as long as it lives, then wakes
+/// whoever waited on it: whether it finished, failed, or was dropped part-way.
+struct InFlightLookup<'a> {
+    in_flight: &'a RefCell<BTreeMap<ObjectId, Completion>>,
+    id: ObjectId,
+    done: Completion,
+}
+
+impl<'a> InFlightLookup<'a> {
+    fn start(in_flight: &'a RefCell<BTreeMap<ObjectId, Completion>>, id: ObjectId) -> Self {
+        let done = Completion::new();
+        in_flight.borrow_mut().insert(id, done.clone());
+        Self {
+            in_flight,
+            id,
+            done,
+        }
+    }
+}
+
+impl Drop for InFlightLookup<'_> {
+    fn drop(&mut self) {
+        self.in_flight.borrow_mut().remove(&self.id);
+        self.done.complete();
     }
 }
 

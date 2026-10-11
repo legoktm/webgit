@@ -5,6 +5,8 @@
 //! definitions live in the `gib-fs` crate and are re-exported here; see its
 //! documentation for how to implement them.
 
-pub use gib_fs::{DirEntry, Directory, File, FileSystem, FileSystemError, Offset};
+pub use gib_fs::{
+    ByteLru, Completion, DirEntry, Directory, File, FileSystem, FileSystemError, Offset,
+};
 
 pub(crate) use gib_fs::{read_file_if_exists, search_for_files};
