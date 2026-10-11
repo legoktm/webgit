@@ -12,9 +12,9 @@ pub use index::{
     FanoutTable, ShortOffsetTable, find_object_in_pack_index, find_prefix_in_pack_index,
 };
 pub use pack::{
-    MAX_OBJECT_HEADER_LEN, PackNegativeOffset, PackObject, PackObjectType, apply_delta,
-    form_deltified_chain, parse_object_header, reconstruct_deltified_object_from_chain,
-    validate_packfile_version,
+    ChainBase, DeltaBaseCache, MAX_OBJECT_HEADER_LEN, PackDeltaBases, PackNegativeOffset,
+    PackObject, PackObjectType, apply_delta, form_deltified_chain, parse_object_header,
+    reconstruct_deltified_object_from_chain, validate_packfile_version,
 };
 
 use gib_fs::{CachingPageReader, FileSystemError};
@@ -85,7 +85,7 @@ type ObjectResult<T> = Result<T, PackObjectError>;
 /// A pack and its index, both open and ready to read.
 ///
 /// The tables are borrowed because a caller typically keeps them cached across
-/// lookups, while the page readers are per-lookup.
+/// lookups; the page readers can share caches that outlive the lookup too.
 pub struct IndexedPackFile<'f, F> {
     /// A reader over the `.idx` file.
     pub index: CachingPageReader<F>,
@@ -95,6 +95,8 @@ pub struct IndexedPackFile<'f, F> {
     pub offsets: Option<&'f ShortOffsetTable>,
     /// A reader over the `.pack` file.
     pub pack: CachingPageReader<F>,
+    /// Where rebuilt delta bases are kept between lookups, if anywhere.
+    pub delta_bases: Option<PackDeltaBases<'f>>,
 }
 
 #[cfg(test)]

@@ -2,15 +2,19 @@ use crate::{OdbResult, PackName};
 use gib_fs::{Directory, File, PageCache, new_page_cache};
 use gib_pack::{FanoutTable, ShortOffsetTable, validate_packfile_version};
 
-/// A single pack's index metadata, plus a page cache for its `.idx` file that
-/// persists across object lookups so the binary-search reads are not re-fetched
-/// every time.
+/// The most of one pack's `.pack` file kept in memory between lookups.
+const PACK_PAGE_CACHE_MAX: usize = 8 * 1024 * 1024;
+
+/// A single pack's index metadata, plus page caches for its `.idx` and `.pack`
+/// files that persist across object lookups, so neither the binary-search
+/// reads nor objects packed next to ones already read are re-fetched.
 #[derive(Clone)]
 pub(crate) struct PackIndex {
     pub name: PackName,
     pub fanout: FanoutTable,
     pub offsets: Option<ShortOffsetTable>,
     pub idx_pages: PageCache,
+    pub pack_pages: PageCache,
 }
 
 #[derive(Clone)]
@@ -45,6 +49,7 @@ impl IndexCache {
                 fanout,
                 offsets: offset_table,
                 idx_pages: new_page_cache(),
+                pack_pages: PageCache::bounded(PACK_PAGE_CACHE_MAX),
             });
         }
         Ok(Self { indexes })

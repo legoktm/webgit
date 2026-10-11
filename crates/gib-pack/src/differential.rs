@@ -6,8 +6,8 @@
 //! object reconstructed and byte-compared with `git cat-file`.
 
 use crate::{
-    IndexedPackFile, find_object_in_pack_index, find_prefix_in_pack_index, form_deltified_chain,
-    reconstruct_deltified_object_from_chain,
+    ChainBase, DeltaBaseCache, IndexedPackFile, PackDeltaBases, find_object_in_pack_index,
+    find_prefix_in_pack_index, form_deltified_chain, reconstruct_deltified_object_from_chain,
     test_support::{OpenPack, open_pack},
 };
 use futures::executor::block_on;
@@ -179,17 +179,12 @@ fn reconstructed_objects_match_cat_file() {
         offsets: Some(&offsets),
         index,
         pack,
+        delta_bases: None,
     };
     for (id, entry) in &expected {
-        let type_name = match entry.object_type {
-            ObjectType::Commit => "commit",
-            ObjectType::Tree => "tree",
-            ObjectType::Blob => "blob",
-            ObjectType::Tag => "tag",
-        };
-        let (chain, object_type, final_object) =
+        let (chain, base) =
             block_on(form_deltified_chain(&mut indexed, Offset(entry.offset))).unwrap();
-        // The chain length is git's reported delta depth.
+        // Without a cache, the chain length is git's reported delta depth.
         assert_eq!(
             u32::try_from(chain.len()).unwrap(),
             entry.depth,
@@ -198,18 +193,79 @@ fn reconstructed_objects_match_cat_file() {
         let body = block_on(reconstruct_deltified_object_from_chain(
             &mut indexed,
             &chain,
-            &final_object,
+            &base,
         ))
         .unwrap();
-        assert_eq!(object_type, entry.object_type, "type for {id}");
+        assert_eq!(base.object_type(), entry.object_type, "type for {id}");
         assert_eq!(
             body,
-            test_repo
-                .run_git(["cat-file", type_name, &id.to_string()])
-                .unwrap(),
+            cat_file(&test_repo, *id, entry.object_type),
             "body for {id}"
         );
     }
+}
+
+/// The same, with every lookup going through one delta base cache, small
+/// enough to evict: chains then stop part-way at whatever an earlier lookup
+/// left behind, and must still rebuild exactly what git stored. Both orders
+/// matter, since which bases are cached depends on what was asked for first.
+#[test]
+fn reconstructed_objects_match_cat_file_through_delta_base_cache() {
+    let test_repo = packed_repo();
+    let expected = verify_pack(&test_repo);
+    let OpenPack {
+        fanout,
+        offsets,
+        index,
+        pack,
+    } = open_pack(&test_repo);
+    let cache = DeltaBaseCache::new(16 * 1024);
+    let mut indexed = IndexedPackFile {
+        fanout: &fanout,
+        offsets: Some(&offsets),
+        index,
+        pack,
+        delta_bases: Some(PackDeltaBases {
+            cache: &cache,
+            pack: 0,
+        }),
+    };
+    let mut cache_hits = 0;
+    for (id, entry) in expected.iter().chain(expected.iter().rev()) {
+        let (chain, base) =
+            block_on(form_deltified_chain(&mut indexed, Offset(entry.offset))).unwrap();
+        if matches!(base, ChainBase::Cached { .. }) {
+            cache_hits += 1;
+        }
+        let body = block_on(reconstruct_deltified_object_from_chain(
+            &mut indexed,
+            &chain,
+            &base,
+        ))
+        .unwrap();
+        assert_eq!(base.object_type(), entry.object_type, "type for {id}");
+        assert_eq!(
+            body,
+            cat_file(&test_repo, *id, entry.object_type),
+            "body for {id}"
+        );
+    }
+    assert!(
+        cache_hits > 0,
+        "expected some chains to stop at a cached base"
+    );
+}
+
+fn cat_file(test_repo: &TestRepo, id: ObjectId, object_type: ObjectType) -> Vec<u8> {
+    let type_name = match object_type {
+        ObjectType::Commit => "commit",
+        ObjectType::Tree => "tree",
+        ObjectType::Blob => "blob",
+        ObjectType::Tag => "tag",
+    };
+    test_repo
+        .run_git(["cat-file", type_name, &id.to_string()])
+        .unwrap()
 }
 
 #[test]

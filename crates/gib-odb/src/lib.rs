@@ -16,8 +16,9 @@ use gib_fs::{
 use gib_hash::{ObjectId, ObjectIdPrefix, PrefixResolution};
 use gib_object::RawObject;
 use gib_pack::{
-    IndexedPackFile, PackError, PackObjectError, find_object_in_pack_index,
-    find_prefix_in_pack_index, form_deltified_chain, reconstruct_deltified_object_from_chain,
+    DeltaBaseCache, IndexedPackFile, PackDeltaBases, PackError, PackObjectError,
+    find_object_in_pack_index, find_prefix_in_pack_index, form_deltified_chain,
+    reconstruct_deltified_object_from_chain,
 };
 use miniz_oxide::inflate::TINFLStatus;
 
@@ -115,11 +116,20 @@ impl PackName {
     }
 }
 
+/// The most rebuilt delta bases kept in memory, across every pack: a third
+/// of git's default `core.deltaBaseCacheLimit`, since this runs in a browser
+/// tab.
+const DELTA_BASE_CACHE_MAX: usize = 32 * 1024 * 1024;
+
+/// How far past a read of a `.pack` file to fetch.
+const PACK_READAHEAD: usize = 32 * 1024;
+
 /// A repository's object store.
 pub struct ObjectDb<F: FileSystem> {
     objects_dir: F::Directory,
     pack_dir: F::Directory,
     index_cache: IndexCache,
+    delta_bases: DeltaBaseCache,
 }
 
 impl<F: FileSystem> ObjectDb<F> {
@@ -136,6 +146,7 @@ impl<F: FileSystem> ObjectDb<F> {
             objects_dir,
             pack_dir,
             index_cache,
+            delta_bases: DeltaBaseCache::new(DELTA_BASE_CACHE_MAX),
         })
     }
 
@@ -201,15 +212,16 @@ impl<F: FileSystem> ObjectDb<F> {
         // git objects are content-addressed a packed copy is byte-identical to
         // any loose copy, so the order does not affect correctness.
         if let Some((mut indexed_pack, offset)) = self.find_packed_object(id).await? {
-            let (chain, object_type, final_object) =
-                form_deltified_chain(&mut indexed_pack, offset)
-                    .await
-                    .map_err(annotate(id))?;
-            let body =
-                reconstruct_deltified_object_from_chain(&mut indexed_pack, &chain, &final_object)
-                    .await
-                    .map_err(annotate(id))?;
-            return Ok(Some(RawObject { object_type, body }));
+            let (chain, base) = form_deltified_chain(&mut indexed_pack, offset)
+                .await
+                .map_err(annotate(id))?;
+            let body = reconstruct_deltified_object_from_chain(&mut indexed_pack, &chain, &base)
+                .await
+                .map_err(annotate(id))?;
+            return Ok(Some(RawObject {
+                object_type: base.object_type(),
+                body,
+            }));
         }
         loose::read_loose_object::<F>(&self.objects_dir, id).await
     }
@@ -243,11 +255,10 @@ impl<F: FileSystem> ObjectDb<F> {
         &self,
         id: ObjectId,
     ) -> OdbResult<Option<(IndexedPackFile<'_, F::File>, Offset)>> {
-        for pack in &self.index_cache.indexes {
+        for (pack_number, pack) in self.index_cache.indexes.iter().enumerate() {
             let idx_file = self.pack_dir.open_file(&pack.name.index_filename).await?;
-            // Reuse the pack's persistent index page cache so binary-search
-            // reads are shared across lookups; the pack body reader stays
-            // per-lookup since body pages have little cross-lookup reuse.
+            // Reuse the pack's persistent page caches, so binary-search reads
+            // and pack pages are shared across lookups.
             let mut idx_file = CachingPageReader::with_cache(idx_file, pack.idx_pages.clone());
             if let Some(offset) =
                 find_object_in_pack_index(&pack.fanout, pack.offsets.as_ref(), &mut idx_file, id)
@@ -259,7 +270,12 @@ impl<F: FileSystem> ObjectDb<F> {
                         fanout: &pack.fanout,
                         offsets: pack.offsets.as_ref(),
                         index: idx_file,
-                        pack: CachingPageReader::new(pack_file),
+                        pack: CachingPageReader::with_cache(pack_file, pack.pack_pages.clone())
+                            .with_readahead(PACK_READAHEAD),
+                        delta_bases: Some(PackDeltaBases {
+                            cache: &self.delta_bases,
+                            pack: pack_number,
+                        }),
                     },
                     offset,
                 )));

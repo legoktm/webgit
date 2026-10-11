@@ -2,7 +2,7 @@ use crate::{
     IndexedPackFile, ObjectResult, PackError, PackObjectError, PackResult,
     index::find_object_in_pack_index,
 };
-use gib_fs::{File, Offset};
+use gib_fs::{ByteLru, File, Offset};
 use gib_hash::ObjectId;
 use gib_object::{ObjectSize, ObjectType};
 use miniz_oxide::inflate::{
@@ -15,6 +15,8 @@ use miniz_oxide::inflate::{
         },
     },
 };
+use std::cell::RefCell;
+use std::rc::Rc;
 
 /// How far back in the pack a delta's base sits, counted from the delta's own
 /// header: the only way an `OFS_DELTA` names its base.
@@ -42,6 +44,9 @@ pub enum PackObjectType {
 /// One object's location and decompressed size within a packfile.
 #[derive(Debug)]
 pub struct PackObject {
+    /// Where the object's header starts: the offset the index and deltas
+    /// name it by.
+    pub offset: Offset,
     pub body_offset: Offset,
     pub size: ObjectSize,
     // pub body_initial: Vec<u8>,
@@ -209,6 +214,7 @@ async fn read_pack_object_header<F: File>(
     Ok((
         object_type,
         PackObject {
+            offset,
             body_offset: Offset(offset.0 + (pos as u64)),
             size: obj_size,
         },
@@ -265,18 +271,84 @@ async fn read_pack_object_body<F: File>(
     Ok(body)
 }
 
+/// Objects already rebuilt from a pack, kept because they are likely to be
+/// the base of the next delta asked for: git's `delta_base_cache`.
+#[derive(Clone)]
+pub struct DeltaBaseCache(Rc<RefCell<ByteLru<(usize, Offset), CachedBase>>>);
+
+/// A rebuilt object, by the pack number and offset it was rebuilt from.
+type CachedBase = (ObjectType, Rc<Vec<u8>>);
+
+impl DeltaBaseCache {
+    /// An empty cache holding at most `limit` bytes of objects.
+    pub fn new(limit: usize) -> Self {
+        Self(Rc::new(RefCell::new(ByteLru::new(limit))))
+    }
+}
+
+/// One pack's share of a [`DeltaBaseCache`]. `pack` tells apart packs sharing
+/// the cache, since an offset only means something within its own pack.
+#[derive(Clone, Copy)]
+pub struct PackDeltaBases<'f> {
+    pub cache: &'f DeltaBaseCache,
+    pub pack: usize,
+}
+
+impl PackDeltaBases<'_> {
+    fn get(&self, offset: Offset) -> Option<CachedBase> {
+        self.cache.0.borrow_mut().get(&(self.pack, offset)).cloned()
+    }
+
+    fn insert(&self, offset: Offset, object_type: ObjectType, body: Rc<Vec<u8>>) {
+        let bytes = body.len();
+        self.cache
+            .0
+            .borrow_mut()
+            .insert((self.pack, offset), (object_type, body), bytes);
+    }
+}
+
+/// Where a delta chain bottoms out.
+pub enum ChainBase {
+    /// A whole object stored in the pack, still to be read and inflated.
+    Stored {
+        object_type: ObjectType,
+        object: PackObject,
+    },
+    /// An object already rebuilt and held in the [`DeltaBaseCache`].
+    Cached {
+        object_type: ObjectType,
+        body: Rc<Vec<u8>>,
+    },
+}
+
+impl ChainBase {
+    /// The type of the base, which every delta on top of it shares.
+    pub fn object_type(&self) -> ObjectType {
+        match self {
+            Self::Stored { object_type, .. } | Self::Cached { object_type, .. } => *object_type,
+        }
+    }
+}
+
 /// Walk the delta chain from `start_offset` down to the base object it
-/// ultimately derives from, collecting the deltas on the way.
+/// ultimately derives from, collecting the deltas on the way. With a
+/// [`DeltaBaseCache`], the walk stops at the first object the cache already
+/// holds, which may be the one at `start_offset` itself.
 pub async fn form_deltified_chain<F: File>(
     indexed_pack: &mut IndexedPackFile<'_, F>,
     start_offset: Offset,
-) -> ObjectResult<(Vec<PackObject>, ObjectType, PackObject)> {
+) -> ObjectResult<(Vec<PackObject>, ChainBase)> {
     let mut chain = Vec::new();
-    let mut final_object: Option<(ObjectType, PackObject)> = None;
     let mut offset = start_offset;
-    while final_object.is_none() {
+    loop {
+        if let Some(bases) = indexed_pack.delta_bases
+            && let Some((object_type, body)) = bases.get(offset)
+        {
+            return Ok((chain, ChainBase::Cached { object_type, body }));
+        }
         let (object_type, object) = read_pack_object_header(&mut indexed_pack.pack, offset).await?;
-        match &object_type {
+        match object_type {
             PackObjectType::OffsetDelta { base_offset_neg } => {
                 offset.0 -= base_offset_neg.0;
                 chain.push(object);
@@ -286,20 +358,24 @@ pub async fn form_deltified_chain<F: File>(
                     indexed_pack.fanout,
                     indexed_pack.offsets,
                     &mut indexed_pack.index,
-                    *base_id,
+                    base_id,
                 )
                 .await?;
                 offset = base_offset
                     .ok_or_else(|| PackObjectError::from(PackError::UnexpectedThinPack))?;
                 chain.push(object);
             }
-            PackObjectType::Base(base_type) => {
-                final_object = Some((*base_type, object));
+            PackObjectType::Base(object_type) => {
+                return Ok((
+                    chain,
+                    ChainBase::Stored {
+                        object_type,
+                        object,
+                    },
+                ));
             }
         }
     }
-    let (final_type, final_object) = final_object.unwrap();
-    Ok((chain, final_type, final_object))
 }
 
 /// Rebuild an object from a delta and the object that delta was written
@@ -375,20 +451,35 @@ pub fn apply_delta(deltified: &[u8], base: &[u8]) -> ObjectResult<Vec<u8>> {
 }
 
 /// Apply a chain from [`form_deltified_chain`] to its base object, yielding
-/// the requested object's decompressed body.
+/// the requested object's decompressed body. Every base the chain passes
+/// through goes into the pack's [`DeltaBaseCache`], if it has one.
 pub async fn reconstruct_deltified_object_from_chain<F: File>(
     indexed_pack: &mut IndexedPackFile<'_, F>,
     chain: &[PackObject],
-    final_object: &PackObject,
+    base: &ChainBase,
 ) -> ObjectResult<Vec<u8>> {
-    let chain_iter = chain.iter().rev();
-    let mut reconstructed_body =
-        read_pack_object_body(&mut indexed_pack.pack, final_object).await?;
-    for pack_object in chain_iter {
+    let object_type = base.object_type();
+    // Where the object in `body` sits, if it still needs caching once it has
+    // served as a base: one that came out of the cache is already there.
+    let (mut body_offset, mut body) = match base {
+        ChainBase::Stored { object, .. } => (
+            Some(object.offset),
+            Rc::new(read_pack_object_body(&mut indexed_pack.pack, object).await?),
+        ),
+        ChainBase::Cached { body, .. } => (None, body.clone()),
+    };
+    for pack_object in chain.iter().rev() {
         let pack_object_body = read_pack_object_body(&mut indexed_pack.pack, pack_object).await?;
-        reconstructed_body = apply_delta(&pack_object_body, &reconstructed_body)?;
+        let rebuilt = Rc::new(apply_delta(&pack_object_body, &body)?);
+        if let (Some(bases), Some(offset)) = (indexed_pack.delta_bases, body_offset) {
+            bases.insert(offset, object_type, body);
+        }
+        body = rebuilt;
+        body_offset = Some(pack_object.offset);
     }
-    Ok(reconstructed_body)
+    // Unshared unless the object came straight out of the cache, so this only
+    // copies in that case.
+    Ok(Rc::unwrap_or_clone(body))
 }
 
 #[cfg(test)]
@@ -415,6 +506,7 @@ mod tests {
             offsets: Some(&offsets),
             index,
             pack,
+            delta_bases: None,
         };
         let id = ObjectId::from_hex(b"7ee3a2eb0ff69340e8a1c962a5b573de1cb9b1f6").unwrap();
         let offset = block_on(find_object_in_pack_index(
@@ -453,6 +545,7 @@ mod tests {
             offsets: Some(&offsets),
             index,
             pack,
+            delta_bases: None,
         };
         let id = ObjectId::from_hex(b"9cded1c631096bb2caf71e1f2e0765bf6420d040").unwrap();
         let offset = block_on(find_object_in_pack_index(
@@ -463,7 +556,7 @@ mod tests {
         ))
         .unwrap()
         .unwrap();
-        let (chain, _, _) = block_on(form_deltified_chain(&mut indexed, offset)).unwrap();
+        let (chain, _) = block_on(form_deltified_chain(&mut indexed, offset)).unwrap();
         assert_eq!(chain.len(), 2);
     }
 
