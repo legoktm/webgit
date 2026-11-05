@@ -12,6 +12,7 @@
  * block in styles.css.
  */
 
+/* All colors should be defined here as variables */
 :root {
     --bg-header: #dce6f8;
     --border: #b0c4e8;
