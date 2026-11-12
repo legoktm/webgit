@@ -51,6 +51,15 @@ fn current_hash() -> String {
         .unwrap_or_default()
 }
 
+/// Whether the WEBCAT browser extension is present. It exposes itself as
+/// `window.hasWebcat`; anything else (missing, `false`, `0`, `""`) counts as
+/// absent.
+fn has_webcat() -> bool {
+    web_sys::window()
+        .and_then(|w| js_sys::Reflect::get(w.as_ref(), &JsValue::from_str("hasWebcat")).ok())
+        .is_some_and(|value| value.is_truthy())
+}
+
 // ---------------------------------------------------------------------------
 // Initial repo load
 // ---------------------------------------------------------------------------
@@ -324,9 +333,21 @@ fn app() -> Html {
         });
     }
     let idb_unavailable = matches!(&*content, Content::Repo(b) if !b.repo.idb_available());
+    let webcat_missing = !has_webcat();
 
     html! {
         <>
+            if webcat_missing {
+                <div id="webcat-banner">
+                    <span class="webcat-logo" aria-hidden="true"></span>
+                    { "This site supports WEBCAT, which verifies the server has not tampered with the code. " }
+                    <a href="https://webcat.tech/" target="_blank" rel="noopener noreferrer">
+                        { "Install WEBCAT" }
+                    </a>
+                    { " to enable it." }
+                </div>
+            }
+
             <div id="idb-warning" class={classes!((!idb_unavailable).then_some("hide"))}>
                 { "IndexedDB is unavailable, so object caching is disabled. \
                    Pages will load more slowly and re-fetch data on every navigation." }
