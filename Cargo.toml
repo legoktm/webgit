@@ -64,6 +64,7 @@ gib-parse = { path = "crates/gib-parse" }
 gib-patch = { path = "crates/gib-patch" }
 gib-ref = { path = "crates/gib-ref" }
 gib-xdiff = { path = "crates/gib-xdiff" }
+giallo = { git = "https://github.com/legoktm/giallo", branch = "webgit-render_lines", features = ["dump"] }
 gib-testkit = { path = "crates/gib-testkit" }
 git-version = "0.3.9"
 hex = { version = "0.4.3", default-features = false, features = [] }
@@ -163,12 +164,19 @@ serde_json.workspace = true
 yew = { workspace = true, features = ["csr"] }
 git-version.workspace = true
 comrak.workspace = true
+giallo.workspace = true
 jiff.workspace = true
 
 [dev-dependencies]
 insta.workspace = true
 futures = { workspace = true, features = ["async-await", "executor"] }
 yew = { workspace = true, features = ["ssr"] }
+
+[build-dependencies]
+camino = "1.2.6"
+cargo_metadata = "0.23.1"
+giallo.workspace = true
+glob = "0.3.4"
 
 # optimize for download bundle size
 [profile.release]

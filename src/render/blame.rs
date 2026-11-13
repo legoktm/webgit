@@ -58,6 +58,10 @@ pub(crate) enum BlameContent {
 pub(crate) struct BlameProps {
     pub blob_id: String,
     pub content: BlameContent,
+    /// Per-line HTML fragments from giallo, when the file's language was
+    /// recognised. `None` means the view shows the plain lines in
+    /// [`BlameContent::Lines`] unmodified.
+    pub highlighted: Option<Vec<String>>,
     /// The runs settled so far, in file order. Grows as the walk reports more;
     /// a line no run covers yet renders with an empty gutter rather than
     /// waiting, which is what lets the file itself paint immediately.
@@ -112,12 +116,17 @@ pub(crate) async fn build_blame(
     let mut props = BlameProps {
         blob_id: blob_id.to_string(),
         content: blame_content(&data),
+        highlighted: None,
         runs: Vec::new(),
         pending: false,
         self_url: blame_url(path, head),
         source_url: tree_url(path, head, false),
         lines: None,
     };
+    if let BlameContent::Lines(lines) = &props.content {
+        let filename = path.rsplit('/').next().unwrap_or(path);
+        props.highlighted = crate::render::highlight_lines(filename, lines);
+    }
     // A file with no lines to attribute — binary, or past the caps — is the
     // whole answer already; there is nothing for the walk to do.
     if !matches!(props.content, BlameContent::Lines(_)) {
@@ -277,6 +286,7 @@ pub(crate) fn blame_view(props: &BlameProps) -> Html {
     let BlameProps {
         blob_id,
         content,
+        highlighted,
         runs,
         pending,
         self_url,
@@ -298,6 +308,7 @@ pub(crate) fn blame_view(props: &BlameProps) -> Html {
             { match content {
                 BlameContent::Lines(lines) => blame_table(BlameTable {
                     lines,
+                    highlighted: highlighted.as_deref(),
                     runs,
                     self_url,
                     selected: *selected,
@@ -323,6 +334,7 @@ pub(crate) fn blame_view(props: &BlameProps) -> Html {
 
 struct BlameTable<'a> {
     lines: &'a [String],
+    highlighted: Option<&'a [String]>,
     runs: &'a [BlameRun],
     /// The blame's own URL, which every line anchor is appended to.
     self_url: &'a str,
@@ -335,6 +347,7 @@ struct BlameTable<'a> {
 fn blame_table(table: BlameTable<'_>) -> Html {
     let BlameTable {
         lines,
+        highlighted,
         runs,
         self_url,
         selected,
@@ -367,6 +380,7 @@ fn blame_table(table: BlameTable<'_>) -> Html {
         rows.push(blame_row(
             n,
             line,
+            highlighted.and_then(|h| h.get(i)),
             gutter,
             BlameRowLink {
                 selected: selected.is_some_and(|s| s.contains(n)),
@@ -404,7 +418,13 @@ struct BlameRowLink<'a> {
 
 /// One line: its run's commit in the gutter (only on the run's first line,
 /// spanning the rest), its number, and its text.
-fn blame_row(n: usize, line: &str, gutter: Gutter<'_>, link: BlameRowLink<'_>) -> Html {
+fn blame_row(
+    n: usize,
+    line: &str,
+    highlighted: Option<&String>,
+    gutter: Gutter<'_>,
+    link: BlameRowLink<'_>,
+) -> Html {
     let BlameRowLink {
         selected,
         shade,
@@ -435,8 +455,19 @@ fn blame_row(n: usize, line: &str, gutter: Gutter<'_>, link: BlameRowLink<'_>) -
             <td class="lno">
                 <a href={href} data-n={n.to_string()} onclick={on_click.clone()}>{ n }</a>
             </td>
-            <td class="code">{ line }</td>
+            <td class={classes!("code", highlighted.is_some().then_some("g-code"))}>
+                { code_html(line, highlighted) }
+            </td>
         </tr>
+    }
+}
+
+/// A line's contents: giallo's HTML when it was highlighted, otherwise the
+/// plain text, which Yew escapes.
+fn code_html(line: &str, highlighted: Option<&String>) -> Html {
+    match highlighted {
+        Some(html) => Html::from_html_unchecked(AttrValue::from(html.clone())),
+        None => Html::from(line.to_string()),
     }
 }
 
@@ -500,6 +531,7 @@ mod tests {
         BlameProps {
             blob_id: "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391".to_string(),
             content,
+            highlighted: None,
             runs,
             pending,
             self_url: "#!/blame/src/lib.rs".to_string(),

@@ -1,5 +1,5 @@
 ---
-source: src/render/blob.rs
+source: src/render/blob/tests.rs
 expression: "render_path(\"docs/setup.md\", b\"# Setup\\n\\nRun it.\\n\")"
 ---
 <div class="blob-info">blob: e69de29bb2d1d6434b8b29ae775ad8c2e48c5391 · <a href="#!/tree/docs/setup.md?render=1" class="blob-alt-view">rendered</a> · <a href="#!/blame/docs/setup.md" class="blame-link">blame</a>
@@ -10,20 +10,30 @@ expression: "render_path(\"docs/setup.md\", b\"# Setup\\n\\nRun it.\\n\")"
 <td class="lno">
 <a href="#!/tree/docs/setup.md#n1" data-n="1">1</a>
 </td>
-<td class="code"># Setup</td>
+<td class="code g-code">
+<span class="giallo-l">
+<span class="g-1 g-b"># Setup</span>
+</span>
+</td>
 </tr>
 <tr id="n2">
 <td class="lno">
 <a href="#!/tree/docs/setup.md#n2" data-n="2">2</a>
 </td>
-<td class="code">
+<td class="code g-code">
+<span class="giallo-l">
+</span>
 </td>
 </tr>
 <tr id="n3">
 <td class="lno">
 <a href="#!/tree/docs/setup.md#n3" data-n="3">3</a>
 </td>
-<td class="code">Run it.</td>
+<td class="code g-code">
+<span class="giallo-l">
+<span>Run it.</span>
+</span>
+</td>
 </tr>
 </tbody>
 </table>

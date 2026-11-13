@@ -111,6 +111,10 @@ pub(crate) struct BlobProps {
     /// file.
     pub data: Rc<Vec<u8>>,
     pub content: BlobContent,
+    /// Per-line HTML fragments from giallo, when the file's language was
+    /// recognised. `None` means the view should show the plain lines in
+    /// [`BlobContent::Text`] unmodified.
+    pub highlighted: Option<Vec<String>>,
     /// The link to the blob's other view, for a markdown or SVG blob that has
     /// one.
     pub alt_view: Option<AltView>,
@@ -174,6 +178,10 @@ pub(crate) fn build_blob_props(
     };
     let source_url = tree_url(path, head, false);
     let content = blob_content(filename, &data, render.then_some(&base));
+    let highlighted = match &content {
+        BlobContent::Text(lines) => crate::render::highlight_lines(filename, lines),
+        _ => None,
+    };
     let alt_view = match &content {
         // Back to the source, from either of the two rendered forms. A raster
         // image has no source view to go back to and doesn't match here.
@@ -205,6 +213,7 @@ pub(crate) fn build_blob_props(
         name: filename.to_string(),
         blame_url: matches!(content, BlobContent::Text(_)).then(|| blame_url(path, head)),
         content,
+        highlighted,
         alt_view,
         source_url,
         lines: None,

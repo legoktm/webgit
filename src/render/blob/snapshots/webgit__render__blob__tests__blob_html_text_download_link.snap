@@ -1,5 +1,5 @@
 ---
-source: src/render/blob.rs
+source: src/render/blob/tests.rs
 expression: "render_with_url(\"src/main.rs\", b\"fn main() {}\\n\", \"blob:fake\")"
 ---
 <div class="blob-info">blob: e69de29bb2d1d6434b8b29ae775ad8c2e48c5391 · <a href="blob:fake" download="main.rs" class="blob-download">download</a> · <a href="#!/blame/src/main.rs" class="blame-link">blame</a>
@@ -10,7 +10,13 @@ expression: "render_with_url(\"src/main.rs\", b\"fn main() {}\\n\", \"blob:fake\
 <td class="lno">
 <a href="#!/tree/src/main.rs#n1" data-n="1">1</a>
 </td>
-<td class="code">fn main() {}</td>
+<td class="code g-code">
+<span class="giallo-l">
+<span class="g-9">fn</span>
+<span class="g-5"> main</span>
+<span>() {}</span>
+</span>
+</td>
 </tr>
 </tbody>
 </table>

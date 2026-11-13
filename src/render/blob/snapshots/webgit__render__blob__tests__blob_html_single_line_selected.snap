@@ -10,19 +10,31 @@ expression: "render_selection(\"src/main.rs\", b\"one\\ntwo\\nthree\\n\", None, 
 <td class="lno">
 <a href="#!/tree/src/main.rs#n1" data-n="1">1</a>
 </td>
-<td class="code">one</td>
+<td class="code g-code">
+<span class="giallo-l">
+<span>one</span>
+</span>
+</td>
 </tr>
 <tr id="n2" class="hl">
 <td class="lno">
 <a href="#!/tree/src/main.rs#n2" data-n="2">2</a>
 </td>
-<td class="code">two</td>
+<td class="code g-code">
+<span class="giallo-l">
+<span>two</span>
+</span>
+</td>
 </tr>
 <tr id="n3">
 <td class="lno">
 <a href="#!/tree/src/main.rs#n3" data-n="3">3</a>
 </td>
-<td class="code">three</td>
+<td class="code g-code">
+<span class="giallo-l">
+<span>three</span>
+</span>
+</td>
 </tr>
 </tbody>
 </table>

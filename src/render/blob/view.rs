@@ -29,6 +29,7 @@ pub(crate) fn blob_view(props: &BlobProps, url: &str) -> Html {
         blob_id,
         name,
         content,
+        highlighted,
         alt_view,
         blame_url,
         source_url,
@@ -62,7 +63,7 @@ pub(crate) fn blob_view(props: &BlobProps, url: &str) -> Html {
                         <tbody>
                             { for lines.iter().enumerate().map(|(i, line)| {
                                 let n = i + 1;
-                                blob_row(n, line, BlobRowLink {
+                                blob_row(n, line, highlighted.as_ref().and_then(|h| h.get(i)), BlobRowLink {
                                     selected: selected.is_some_and(|s| s.contains(n)),
                                     source_url,
                                     on_click: &on_line_click,
@@ -114,7 +115,7 @@ struct BlobRowLink<'a> {
 /// app routes on the fragment, so a bare one would parse as no known route and
 /// drop the reader on the summary page. `data-n` is what the shared click
 /// handler reads the line number back out of.
-fn blob_row(n: usize, line: &str, link: BlobRowLink<'_>) -> Html {
+fn blob_row(n: usize, line: &str, highlighted: Option<&String>, link: BlobRowLink<'_>) -> Html {
     let BlobRowLink {
         selected,
         source_url,
@@ -127,7 +128,18 @@ fn blob_row(n: usize, line: &str, link: BlobRowLink<'_>) -> Html {
             <td class="lno">
                 <a href={href} data-n={n.to_string()} onclick={on_click.clone()}>{ n }</a>
             </td>
-            <td class="code">{ line }</td>
+            <td class={classes!("code", highlighted.is_some().then_some("g-code"))}>
+                { code_html(line, highlighted) }
+            </td>
         </tr>
+    }
+}
+
+/// A line's contents: giallo's HTML when it was highlighted, otherwise the
+/// plain text, which Yew escapes.
+fn code_html(line: &str, highlighted: Option<&String>) -> Html {
+    match highlighted {
+        Some(html) => Html::from_html_unchecked(AttrValue::from(html.clone())),
+        None => Html::from(line.to_string()),
     }
 }

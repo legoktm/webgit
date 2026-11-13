@@ -24,6 +24,7 @@ pub(crate) mod tree;
 
 mod browser;
 mod commits_table;
+mod highlight;
 mod lines;
 mod query;
 mod refs_table;
@@ -37,6 +38,7 @@ pub(crate) use browser::{
 };
 pub(crate) use commits_table::{CommitRow, ExpandMsg, commits_table, short_hash};
 pub(crate) use gib_patch::is_binary;
+pub(crate) use highlight::highlight_lines;
 pub(crate) use lines::{anchored, line_click_handler, use_selection_scroll};
 pub(crate) use query::{
     apply_decorations, collect_refs, commit_first_line, commit_for_entry, decoration_map,
