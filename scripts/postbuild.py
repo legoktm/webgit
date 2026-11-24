@@ -103,7 +103,7 @@ index.write_text(html)
 # as a CSS asset because it resolves those before Cargo runs build.rs.
 target_dir = Path(os.environ.get("CARGO_TARGET_DIR", "target"))
 generated = sorted(
-    target_dir.rglob("build/webgit-*/out/giallo.css"),
+    target_dir.glob("**/build/webgit/*/out/giallo.css"),
     key=lambda path: path.stat().st_mtime,
 )
 if not generated:
